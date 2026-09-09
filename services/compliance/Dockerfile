@@ -7,22 +7,19 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /build
 COPY libs/llm_provider ./libs/llm_provider
+COPY services/compliance ./services/compliance
 
 WORKDIR /build/services/compliance
-COPY services/compliance/pyproject.toml ./
 RUN uv sync --no-install-project --no-dev
-
-COPY services/compliance/app ./app
 RUN uv sync --no-dev
 
 FROM python:3.12-slim AS runtime
 
 RUN useradd --create-home --uid 1000 appuser
-WORKDIR /app
+WORKDIR /build/services/compliance
 
-COPY --from=builder --chown=appuser:appuser /build/services/compliance /app
-COPY --from=builder --chown=appuser:appuser /build/libs/llm_provider /build/libs/llm_provider
-ENV PATH="/app/.venv/bin:$PATH"
+COPY --from=builder --chown=appuser:appuser /build /build
+ENV PATH="/build/services/compliance/.venv/bin:$PATH"
 
 USER appuser
 

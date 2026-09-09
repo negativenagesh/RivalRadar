@@ -18,7 +18,7 @@ Selected via `LLM_PROVIDER` (default `gemini`). Currently ships one adapter, `Ge
 - `LLM_PROVIDER` (default `gemini`)
 - `GEMINI_API_KEY` (required for the gemini provider)
 - `GEMINI_BASE_URL` (default `https://generativelanguage.googleapis.com/v1beta/openai/`)
-- `GEMINI_TEXT_MODEL` (default `gemini-2.5-flash`)
+- `GEMINI_TEXT_MODEL` (default `gemini-3.6-flash`)
 
 ## Tests
 
