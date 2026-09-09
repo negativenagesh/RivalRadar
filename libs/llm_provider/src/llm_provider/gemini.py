@@ -33,7 +33,9 @@ class GeminiOpenAICompatProvider:
         *,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        reasoning_effort: str | None = None,
     ) -> str:
+        extra_body = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=cast(
@@ -42,6 +44,7 @@ class GeminiOpenAICompatProvider:
             ),
             temperature=temperature,
             max_tokens=max_tokens,
+            extra_body=extra_body,
         )
         return response.choices[0].message.content or ""
 
