@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    name: lint-test (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - libs/llm_provider
+          - services/ingestion
+          - services/intelligence
+          - services/generation
+          - services/compliance
+          - services/gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        working-directory: ${{ matrix.service }}
+        run: uv sync --all-extras
+
+      - name: Ruff lint
+        working-directory: ${{ matrix.service }}
+        run: uv run ruff check .
+
+      - name: Type check
+        working-directory: ${{ matrix.service }}
+        run: uv run mypy .
+
+      - name: Run tests
+        working-directory: ${{ matrix.service }}
+        run: uv run pytest
+
+  docker-build:
+    name: docker-build (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ingestion, intelligence, generation, compliance, gateway]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.service }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: false
+          tags: rivalradar-${{ matrix.service }}:ci
