@@ -1,0 +1,133 @@
+name: rivalradar
+
+x-env: &common-env
+  LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+  GEMINI_API_KEY: ${GEMINI_API_KEY}
+  GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+  GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-2.5-flash}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rivalradar
+      POSTGRES_PASSWORD: rivalradar
+      POSTGRES_DB: rivalradar
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rivalradar"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      DATABASE_URL: postgresql+asyncpg://rivalradar:rivalradar@postgres:5432/rivalradar
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - object_store:/data/objects
+
+  intelligence:
+    build:
+      context: .
+      dockerfile: services/intelligence/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      DATABASE_URL: postgresql+asyncpg://rivalradar:rivalradar@postgres:5432/rivalradar
+      INGESTION_SERVICE_URL: http://ingestion:8000
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingestion:
+        condition: service_started
+
+  generation:
+    build:
+      context: .
+      dockerfile: services/generation/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+    ports:
+      - "8003:8000"
+
+  compliance:
+    build:
+      context: .
+      dockerfile: services/compliance/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+    ports:
+      - "8004:8000"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      DATABASE_URL: postgresql+asyncpg://rivalradar:rivalradar@postgres:5432/rivalradar
+      REDIS_URL: redis://redis:6379/0
+      INTELLIGENCE_SERVICE_URL: http://intelligence:8000
+      GENERATION_SERVICE_URL: http://generation:8000
+      COMPLIANCE_SERVICE_URL: http://compliance:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      intelligence:
+        condition: service_started
+      generation:
+        condition: service_started
+      compliance:
+        condition: service_started
+    volumes:
+      - object_store:/data/objects
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
+
+volumes:
+  postgres_data:
+  object_store:
