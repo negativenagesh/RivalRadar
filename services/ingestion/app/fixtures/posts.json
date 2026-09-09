@@ -1,0 +1,122 @@
+[
+  {
+    "account_handle": "@nova.wear",
+    "external_post_id": "nova-001",
+    "format": "meme",
+    "theme_tags": ["monday-mood", "relatable", "humor"],
+    "caption": "when the new drop sells out in 4 minutes but you were still in the waiting room 😭",
+    "image_url": "https://fixtures.local/nova-001.jpg",
+    "likes": 8420,
+    "comments": 312,
+    "shares": 190,
+    "posted_at": "2026-08-25T14:00:00Z"
+  },
+  {
+    "account_handle": "@nova.wear",
+    "external_post_id": "nova-002",
+    "format": "product_launch_carousel",
+    "theme_tags": ["new-drop", "sustainability", "product"],
+    "caption": "Introducing the Recycled Shell Jacket — 3 colorways, made from 80% post-consumer plastic. Swipe for the full lookbook.",
+    "image_url": "https://fixtures.local/nova-002.jpg",
+    "likes": 5210,
+    "comments": 140,
+    "shares": 95,
+    "posted_at": "2026-08-27T09:30:00Z"
+  },
+  {
+    "account_handle": "@nova.wear",
+    "external_post_id": "nova-003",
+    "format": "founder_post",
+    "theme_tags": ["behind-the-scenes", "sustainability", "founder"],
+    "caption": "3 years ago I was sewing samples in my apartment. Today we shipped our 100,000th jacket. Thank you for believing in slow fashion.",
+    "image_url": "https://fixtures.local/nova-003.jpg",
+    "likes": 12500,
+    "comments": 680,
+    "shares": 410,
+    "posted_at": "2026-08-29T18:00:00Z"
+  },
+  {
+    "account_handle": "@nova.wear",
+    "external_post_id": "nova-004",
+    "format": "ugc_repost",
+    "theme_tags": ["community", "styling", "ugc"],
+    "caption": "obsessed with how @mia.styles wears the shell jacket 🤍 styled 3 ways, all fire",
+    "image_url": "https://fixtures.local/nova-004.jpg",
+    "likes": 3100,
+    "comments": 88,
+    "shares": 44,
+    "posted_at": "2026-08-30T12:00:00Z"
+  },
+  {
+    "account_handle": "@brewbros",
+    "external_post_id": "brew-001",
+    "format": "meme",
+    "theme_tags": ["monday-mood", "relatable", "humor", "coffee"],
+    "caption": "me explaining to my barista that I NEED the oat milk extra hot or the day is cancelled",
+    "image_url": "https://fixtures.local/brew-001.jpg",
+    "likes": 6100,
+    "comments": 240,
+    "shares": 130,
+    "posted_at": "2026-08-24T08:00:00Z"
+  },
+  {
+    "account_handle": "@brewbros",
+    "external_post_id": "brew-002",
+    "format": "product_launch_carousel",
+    "theme_tags": ["new-drop", "product", "seasonal"],
+    "caption": "Pumpkin Cascara Cold Brew is BACK. Limited batch, swipe to see the tasting notes.",
+    "image_url": "https://fixtures.local/brew-002.jpg",
+    "likes": 4300,
+    "comments": 95,
+    "shares": 60,
+    "posted_at": "2026-08-26T10:00:00Z"
+  },
+  {
+    "account_handle": "@brewbros",
+    "external_post_id": "brew-003",
+    "format": "founder_post",
+    "theme_tags": ["behind-the-scenes", "founder", "sourcing"],
+    "caption": "Just got back from our farm partner in Huila, Colombia. Watching them hand-sort beans reminded me why we started this.",
+    "image_url": "https://fixtures.local/brew-003.jpg",
+    "likes": 5400,
+    "comments": 210,
+    "shares": 150,
+    "posted_at": "2026-08-28T16:00:00Z"
+  },
+  {
+    "account_handle": "@fitkit.co",
+    "external_post_id": "fit-001",
+    "format": "meme",
+    "theme_tags": ["monday-mood", "humor", "gym"],
+    "caption": "leg day meme #4762, no context needed, we all know",
+    "image_url": "https://fixtures.local/fit-001.jpg",
+    "likes": 15200,
+    "comments": 540,
+    "shares": 720,
+    "posted_at": "2026-08-25T07:00:00Z"
+  },
+  {
+    "account_handle": "@fitkit.co",
+    "external_post_id": "fit-002",
+    "format": "ugc_repost",
+    "theme_tags": ["community", "transformation", "ugc"],
+    "caption": "12-week transformation from @jayden.lifts using the FitKit program 💪 this is why we do this",
+    "image_url": "https://fixtures.local/fit-002.jpg",
+    "likes": 9800,
+    "comments": 410,
+    "shares": 300,
+    "posted_at": "2026-08-29T11:00:00Z"
+  },
+  {
+    "account_handle": "@fitkit.co",
+    "external_post_id": "fit-003",
+    "format": "product_launch_carousel",
+    "theme_tags": ["new-drop", "product"],
+    "caption": "The Adjustable Kettlebell Set is finally here. 5 weights, one compact design. Link in bio.",
+    "image_url": "https://fixtures.local/fit-003.jpg",
+    "likes": 4100,
+    "comments": 88,
+    "shares": 52,
+    "posted_at": "2026-08-30T09:00:00Z"
+  }
+]

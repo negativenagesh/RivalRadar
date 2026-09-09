@@ -1,6 +1,20 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
-app = FastAPI(title="RivalRadar Ingestion Service")
+from app.db import init_models
+from app.routes import router
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+    await init_models()
+    yield
+
+
+app = FastAPI(title="RivalRadar Ingestion Service", lifespan=lifespan)
+app.include_router(router)
 
 
 @app.get("/health")
