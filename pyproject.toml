@@ -5,7 +5,10 @@ extend-exclude = ["frontend"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
-ignore = ["E501"]
+ignore = [
+    "E501",
+    "B008",  # FastAPI's Depends()-as-default is the documented idiom, not a bug
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["llm_provider"]

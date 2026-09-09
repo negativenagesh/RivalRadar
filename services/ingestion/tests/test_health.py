@@ -1,9 +1,7 @@
-from app.main import app
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 
-def test_health() -> None:
-    with TestClient(app) as client:
-        response = client.get("/health")
+async def test_health(client: AsyncClient) -> None:
+    response = await client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "ingestion"}

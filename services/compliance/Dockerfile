@@ -2,16 +2,18 @@ FROM python:3.12-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
 
-WORKDIR /build
-
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
+WORKDIR /build
 COPY libs/llm_provider ./libs/llm_provider
-COPY services/compliance ./services/compliance
 
 WORKDIR /build/services/compliance
-RUN uv sync --frozen --no-dev || uv sync --no-dev
+COPY services/compliance/pyproject.toml ./
+RUN uv sync --no-install-project --no-dev
+
+COPY services/compliance/app ./app
+RUN uv sync --no-dev
 
 FROM python:3.12-slim AS runtime
 
@@ -19,7 +21,7 @@ RUN useradd --create-home --uid 1000 appuser
 WORKDIR /app
 
 COPY --from=builder --chown=appuser:appuser /build/services/compliance /app
-COPY --from=builder --chown=appuser:appuser /build/libs/llm_provider /libs/llm_provider
+COPY --from=builder --chown=appuser:appuser /build/libs/llm_provider /build/libs/llm_provider
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER appuser
