@@ -4,11 +4,9 @@ from llm_provider import Message
 class FakeLLMProvider:
     """Deterministic stand-in for LLMProvider so tests never hit a real API."""
 
-    def __init__(self, completion: str = "a fake caption", image_concept: str = "a fake concept") -> None:
+    def __init__(self, completion: str = '{"safe": true, "reason": ""}') -> None:
         self.completion = completion
-        self.image_concept_text = image_concept
         self.last_messages: list[Message] | None = None
-        self.last_image_brief: str | None = None
 
     async def complete(
         self,
@@ -27,5 +25,4 @@ class FakeLLMProvider:
         *,
         style_hints: list[str] | None = None,
     ) -> str:
-        self.last_image_brief = brief
-        return self.image_concept_text
+        raise NotImplementedError("compliance service does not generate image concepts")
