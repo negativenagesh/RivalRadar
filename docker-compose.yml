@@ -4,7 +4,7 @@ x-env: &common-env
   LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
   GEMINI_API_KEY: ${GEMINI_API_KEY}
   GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
-  GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-2.5-flash}
+  GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.6-flash}
 
 services:
   postgres:

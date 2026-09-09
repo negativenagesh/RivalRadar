@@ -21,6 +21,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+artifacts = ["app/voice/*.json"]
 
 [dependency-groups]
 dev = [

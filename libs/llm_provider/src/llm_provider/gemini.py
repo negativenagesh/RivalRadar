@@ -7,7 +7,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from llm_provider.base import Message
 
-DEFAULT_TEXT_MODEL = "gemini-2.5-flash"
+DEFAULT_TEXT_MODEL = "gemini-3.6-flash"
 
 
 class GeminiOpenAICompatProvider:

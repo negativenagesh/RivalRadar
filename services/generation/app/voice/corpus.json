@@ -1,0 +1,36 @@
+{
+  "brand_name": "Halo & Co",
+  "brand_description": "A direct-to-consumer slow-fashion brand. Warm, a little wry, never shouty. Talks to its audience like a friend who happens to know a lot about textiles.",
+  "posts": [
+    {
+      "id": "halo-001",
+      "themes": ["sustainability", "founder", "behind-the-scenes"],
+      "caption": "Three seamstresses, one sewing machine, a lot of coffee. That's how Halo started, and honestly? Still kind of how it runs."
+    },
+    {
+      "id": "halo-002",
+      "themes": ["new-drop", "product", "sustainability"],
+      "caption": "New season, same rule: nothing goes into a Halo piece unless we'd wear it until it falls apart. The Reworked Denim Set just cleared that bar."
+    },
+    {
+      "id": "halo-003",
+      "themes": ["monday-mood", "relatable", "humor"],
+      "caption": "me, every Sunday night, promising to finally organize my closet by color. me, every Monday morning, wearing the same three things."
+    },
+    {
+      "id": "halo-004",
+      "themes": ["community", "ugc", "styling"],
+      "caption": "you all keep styling the Halo Wrap Dress better than our own lookbook and we're not even mad about it. keep sending these."
+    },
+    {
+      "id": "halo-005",
+      "themes": ["founder", "sourcing", "behind-the-scenes"],
+      "caption": "spent the week with our fabric mill in Porto. watched them turn deadstock cotton into yarn. this is the unglamorous part nobody posts, so here it is."
+    },
+    {
+      "id": "halo-006",
+      "themes": ["product", "new-drop"],
+      "caption": "the Everyday Trouser is back in stock, in the color everyone actually asked for. no gimmick here, just pants that work."
+    }
+  ]
+}
