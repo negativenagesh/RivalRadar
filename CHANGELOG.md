@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- Intelligence service: rule/tag-based clustering (`app/clustering.py`) grouping posts by format + dominant theme, engagement scoring, trending/gap-theme detection, a `Digest` model, and REST endpoints (`POST /digests/generate`, `GET /digests/latest`, `GET /digests`). Verified end-to-end against the real ingestion service via `docker compose`.
 - Ingestion service: `CompetitorAccount`/`CompetitorPost` SQLAlchemy async models, a `Connector` protocol with a fixture-backed implementation (10 sample posts across 4 formats: meme, product-launch carousel, founder post, UGC repost), an idempotent `run_ingestion` pipeline, and REST endpoints (`POST /ingest/run`, `GET /accounts`, `GET /posts`) with full test coverage.
 
 ### Fixed
