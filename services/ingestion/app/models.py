@@ -2,10 +2,17 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+
+class RunStatus(enum.StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
 
 
 class PostFormat(enum.StrEnum):
@@ -52,3 +59,16 @@ class CompetitorPost(Base):
     @property
     def themes(self) -> list[str]:
         return [t.strip() for t in self.theme_tags.split(",") if t.strip()]
+
+
+class IngestionRun(Base):
+    __tablename__ = "ingestion_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    connector_type: Mapped[str] = mapped_column(String(50))
+    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.PENDING)
+    record: Mapped[bool] = mapped_column(default=False)
+    recording_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))

@@ -9,9 +9,14 @@ from app.schemas import IngestionRunResult
 
 
 async def run_ingestion(session: AsyncSession, connector: Connector) -> IngestionRunResult:
-    accounts_ingested = await _upsert_accounts(session, connector)
-    posts_ingested, posts_skipped = await _upsert_posts(session, connector)
-    await session.commit()
+    try:
+        accounts_ingested = await _upsert_accounts(session, connector)
+        posts_ingested, posts_skipped = await _upsert_posts(session, connector)
+        await session.commit()
+    finally:
+        aclose = getattr(connector, "aclose", None)
+        if aclose is not None:
+            await aclose()
     return IngestionRunResult(
         accounts_ingested=accounts_ingested,
         posts_ingested=posts_ingested,

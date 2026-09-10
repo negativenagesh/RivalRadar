@@ -2,24 +2,30 @@ FROM python:3.12-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
 
-WORKDIR /app
-
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-COPY services/ingestion/pyproject.toml ./
-RUN uv sync --no-install-project --no-dev
+WORKDIR /build
+COPY libs/agent_events ./libs/agent_events
+COPY services/ingestion ./services/ingestion
 
-COPY services/ingestion/app ./app
+WORKDIR /build/services/ingestion
+RUN uv sync --no-install-project --no-dev
 RUN uv sync --no-dev
 
 FROM python:3.12-slim AS runtime
 
 RUN useradd --create-home --uid 1000 appuser
-WORKDIR /app
+WORKDIR /build/services/ingestion
 
-COPY --from=builder --chown=appuser:appuser /app /app
-ENV PATH="/app/.venv/bin:$PATH"
+COPY --from=builder --chown=appuser:appuser /build /build
+ENV PATH="/build/services/ingestion/.venv/bin:$PATH" \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+RUN playwright install --with-deps chromium && \
+    chmod -R a+rX /opt/ms-playwright
+
+RUN mkdir -p /data/objects && chown appuser:appuser /data/objects
 
 USER appuser
 
