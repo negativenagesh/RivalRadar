@@ -73,9 +73,18 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+      - name: Generate route types
+        working-directory: frontend
+        # LayoutProps / PageProps live in .next/types; bare tsc needs them first.
+        run: npx next typegen
+
       - name: Type check
         working-directory: frontend
         run: npx tsc --noEmit
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
 
       - name: Build
         working-directory: frontend

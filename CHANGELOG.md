@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- Phase 8 final docs/CI pass: filled [PORTFOLIO_NOTES.md](PORTFOLIO_NOTES.md) with interview-ready hard-parts / improvements / scale limits; README status updated to reflect an end-to-end runnable pipeline; frontend CI runs `next typegen` before `tsc` plus unit tests (`npm test`); CONTRIBUTING covers frontend test/typegen workflow.
 - Frontend (Next.js App Router, TypeScript, Tailwind, shadcn/ui, Motion): `/` landing page, `/digest` (clusters, trending/gap themes, digest + draft-generation triggers with pipeline-run polling), `/review` (draft queue with Approve/Edit/Reject). Dark-mode-first "warm/electric dark" visual direction — near-black background, one electric-lime accent, a coral accent for compliance-flag/destructive states, bold Geist Sans display type, Motion entrance/hover animation. Dockerized with Next's `output: standalone` mode. Verified live against the real gateway API (including real digest data and manually-seeded drafts covering both compliance-passed and compliance-flagged states) and screenshotted for visual QA.
 - Gateway/BFF service: Postgres `Draft` schema with review-state lifecycle (`pending` → `edited`/`rejected`/`ready_to_publish`), orchestration of `intelligence` → `generation` → `compliance` per digest cluster, and the REST API the frontend will consume — `GET/POST /digest/*`, `POST /drafts/generate` (background `PipelineRun`, returns `run_id` immediately), `GET /pipeline-runs/{id}` + a live WebSocket tail via the new `libs/agent_events` bus, `GET /drafts`, and `POST /drafts/{id}/{approve,edit,reject}`. Every draft is persisted regardless of its compliance verdict so a human reviewer sees the flag and can consciously override it — only `approve` gates `ready_to_publish`, per spec.
 - `libs/agent_events`: a shared Redis-Streams-backed event bus (`nav`/`action`/`screenshot`/`log`/`status` step types) so any service can publish step-by-step progress for a long-running run, with backlog replay for late-connecting clients. Used by both ingestion's browser agent and the gateway's draft-generation pipeline.
@@ -35,4 +36,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 - `README.md`, `ARCHITECTURE.md`, root `.env.example` and per-service `.env.example` files.
 
 ## [0.1.0] - Unreleased
-Initial scaffold — nothing publicly runnable end-to-end yet. Will be tagged once the full pipeline (ingestion → digest → generation → compliance → review UI) works via `docker compose up`.
+Scaffold complete and the pipeline is end-to-end (ingestion → digest → generation → compliance → review UI via `docker compose up`). Will be tagged `0.1.0` when this lands on `main`.

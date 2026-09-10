@@ -55,4 +55,4 @@ docker compose up --build
 
 ## Status
 
-Actively being built in public phases — see [CHANGELOG.md](CHANGELOG.md) for what's actually implemented today versus scaffolded.
+The full pipeline is runnable via `docker compose up --build`: ingestion → digest → draft generation → compliance → review UI (frontend at :3000, gateway at :8000). See [CHANGELOG.md](CHANGELOG.md) for what landed in each phase, and [PORTFOLIO_NOTES.md](PORTFOLIO_NOTES.md) for an honest write-up of what was hard, what I'd improve, and what breaks at scale.

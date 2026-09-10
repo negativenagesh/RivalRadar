@@ -30,11 +30,23 @@ docker compose up --build
 
 ## Running tests
 
+Python (per service or shared lib):
+
 ```bash
-cd services/<name>
+cd services/<name>   # or libs/llm_provider, libs/agent_events
 uv run pytest
 uv run ruff check .
 uv run mypy .
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm test
+npx next typegen   # generates LayoutProps / PageProps under .next/types
+npx tsc --noEmit   # typecheck outside of `next build`; needs typegen first
+npm run lint
 ```
 
 ## Commit conventions
