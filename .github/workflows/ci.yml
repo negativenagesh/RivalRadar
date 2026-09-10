@@ -52,20 +52,49 @@ jobs:
         working-directory: ${{ matrix.service }}
         run: uv run pytest
 
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
   docker-build:
     name: docker-build (${{ matrix.service }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        service: [ingestion, intelligence, generation, compliance, gateway]
+        service: [ingestion, intelligence, generation, compliance, gateway, frontend]
     steps:
       - uses: actions/checkout@v4
 
       - name: Build ${{ matrix.service }} image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: services/${{ matrix.service }}/Dockerfile
+          context: ${{ matrix.service == 'frontend' && 'frontend' || '.' }}
+          file: ${{ matrix.service == 'frontend' && 'frontend/Dockerfile' || format('services/{0}/Dockerfile', matrix.service) }}
           push: false
           tags: rivalradar-${{ matrix.service }}:ci
