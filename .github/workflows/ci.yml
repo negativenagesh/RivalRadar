@@ -13,6 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         service:
+          - libs/agent_events
           - libs/llm_provider
           - services/ingestion
           - services/intelligence

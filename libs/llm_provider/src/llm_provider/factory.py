@@ -4,7 +4,11 @@ import os
 from functools import lru_cache
 
 from llm_provider.base import LLMProvider
-from llm_provider.gemini import DEFAULT_TEXT_MODEL, GeminiOpenAICompatProvider
+from llm_provider.gemini import (
+    DEFAULT_IMAGE_MODEL,
+    DEFAULT_TEXT_MODEL,
+    GeminiOpenAICompatProvider,
+)
 
 
 @lru_cache(maxsize=1)
@@ -24,6 +28,9 @@ def get_llm_provider() -> LLMProvider:
             "https://generativelanguage.googleapis.com/v1beta/openai/",
         )
         model = os.environ.get("GEMINI_TEXT_MODEL", DEFAULT_TEXT_MODEL)
-        return GeminiOpenAICompatProvider(api_key=api_key, base_url=base_url, model=model)
+        image_model = os.environ.get("GEMINI_IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
+        return GeminiOpenAICompatProvider(
+            api_key=api_key, base_url=base_url, model=model, image_model=image_model
+        )
 
     raise ValueError(f"Unknown LLM_PROVIDER: {provider_name}")

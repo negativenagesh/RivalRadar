@@ -1,8 +1,13 @@
+import base64
+import logging
+
 from app.config import settings
 from app.schemas import DraftRequest, DraftResponse
 from app.voice.prompt import build_caption_prompt, build_image_concept_brief
 from app.voice.retrieval import VoiceCorpus, select_examples
 from llm_provider import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 
 async def draft_response(
@@ -31,13 +36,22 @@ async def draft_response(
         cluster_theme=request.cluster_theme,
         caption=caption,
     )
-    image_concept = await provider.generate_image_concept(
-        image_brief,
-        style_hints=[corpus.brand_name, "on-brand, not competitor-mimicking"],
-    )
+    style_hints = [corpus.brand_name, "on-brand, not competitor-mimicking"]
+    image_concept = await provider.generate_image_concept(image_brief, style_hints=style_hints)
+
+    image_mime_type: str | None = None
+    image_data_base64: str | None = None
+    try:
+        image = await provider.generate_image(image_brief, style_hints=style_hints)
+        image_mime_type = image.mime_type
+        image_data_base64 = base64.b64encode(image.data).decode("ascii")
+    except Exception:
+        logger.warning("generate_image failed; falling back to text-only concept", exc_info=True)
 
     return DraftResponse(
         caption=caption,
         image_concept=image_concept.strip(),
         voice_examples_used=[ex.id for ex in examples],
+        image_mime_type=image_mime_type,
+        image_data_base64=image_data_base64,
     )

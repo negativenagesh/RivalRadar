@@ -22,3 +22,5 @@ async def test_generate_draft_endpoint(client: AsyncClient) -> None:
     assert body["caption"] == "a generated caption"
     assert body["image_concept"] == "a generated image concept"
     assert len(body["voice_examples_used"]) == 3
+    assert body["image_mime_type"] == "image/png"
+    assert body["image_data_base64"]

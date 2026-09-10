@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import cast
+import base64
+from typing import Any, cast
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
-from llm_provider.base import Message
+from llm_provider.base import ImageResult, Message
 
 DEFAULT_TEXT_MODEL = "gemini-3.6-flash"
+DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
 
 
 class GeminiOpenAICompatProvider:
@@ -23,9 +25,11 @@ class GeminiOpenAICompatProvider:
         base_url: str,
         *,
         model: str = DEFAULT_TEXT_MODEL,
+        image_model: str = DEFAULT_IMAGE_MODEL,
     ) -> None:
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
+        self._image_model = image_model
 
     async def complete(
         self,
@@ -68,3 +72,29 @@ class GeminiOpenAICompatProvider:
             temperature=0.8,
             max_tokens=512,
         )
+
+    async def generate_image(
+        self,
+        brief: str,
+        *,
+        style_hints: list[str] | None = None,
+    ) -> ImageResult:
+        hints = ", ".join(style_hints) if style_hints else "none"
+        prompt = (
+            "Generate a single image for the following content brief. "
+            f"Style hints to honor: {hints}.\n\nContent brief:\n{brief}"
+        )
+        response = await self._client.chat.completions.create(
+            model=self._image_model,
+            messages=[{"role": "user", "content": prompt}],
+            extra_body={"modalities": ["image", "text"]},
+        )
+        message: Any = response.choices[0].message
+        images = getattr(message, "images", None) or []
+        if not images:
+            raise ValueError(
+                f"Gemini image model '{self._image_model}' returned no image data"
+            )
+        image_url: str = images[0]["image_url"]["url"]
+        mime_type, _, encoded = image_url.removeprefix("data:").partition(";base64,")
+        return ImageResult(mime_type=mime_type, data=base64.b64decode(encoded))

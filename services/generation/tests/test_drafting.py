@@ -1,3 +1,5 @@
+import base64
+
 from app.drafting import draft_response
 from app.schemas import DraftRequest
 from app.voice.retrieval import load_corpus
@@ -46,3 +48,30 @@ async def test_draft_response_passes_theme_matched_examples_to_provider() -> Non
 
     assert "halo-001" in result.voice_examples_used or "halo-002" in result.voice_examples_used
     assert provider.last_messages is not None
+
+
+async def test_draft_response_includes_generated_image_bytes() -> None:
+    corpus = load_corpus()
+    provider = FakeLLMProvider(image_bytes=b"pngdata", image_mime_type="image/png")
+    request = DraftRequest(
+        cluster_format="meme", cluster_theme="monday-mood", competitor_caption="mondays, am I right"
+    )
+
+    result = await draft_response(request, corpus, provider)
+
+    assert result.image_mime_type == "image/png"
+    assert result.image_data_base64 == base64.b64encode(b"pngdata").decode("ascii")
+
+
+async def test_draft_response_falls_back_gracefully_when_image_generation_fails() -> None:
+    corpus = load_corpus()
+    provider = FakeLLMProvider(raise_on_generate_image=True)
+    request = DraftRequest(
+        cluster_format="meme", cluster_theme="monday-mood", competitor_caption="mondays, am I right"
+    )
+
+    result = await draft_response(request, corpus, provider)
+
+    assert result.image_mime_type is None
+    assert result.image_data_base64 is None
+    assert result.image_concept
