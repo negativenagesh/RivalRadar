@@ -42,6 +42,11 @@ jobs:
         working-directory: ${{ matrix.service }}
         run: uv run mypy .
 
+      - name: Install Playwright browsers
+        if: matrix.service == 'services/ingestion'
+        working-directory: ${{ matrix.service }}
+        run: uv run playwright install --with-deps chromium
+
       - name: Run tests
         working-directory: ${{ matrix.service }}
         run: uv run pytest
