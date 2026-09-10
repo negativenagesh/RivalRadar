@@ -10,6 +10,11 @@ class Message(BaseModel):
     content: str
 
 
+class ImageResult(BaseModel):
+    mime_type: str
+    data: bytes
+
+
 class LLMProvider(Protocol):
     """Adapter interface every model backend must implement.
 
@@ -45,9 +50,17 @@ class LLMProvider(Protocol):
     ) -> str:
         """Return a detailed text description of an image to be created.
 
-        v1 returns a structured text prompt (no pixels generated). The
-        signature is deliberately image-model-shaped so a future
-        `generate_image(...) -> bytes` adapter method is a drop-in
-        extension rather than a redesign.
+        A cheap text-only preview step -- useful for showing a concept
+        before committing to a paid generate_image call. Kept alongside
+        generate_image, which returns real pixels.
         """
+        ...
+
+    async def generate_image(
+        self,
+        brief: str,
+        *,
+        style_hints: list[str] | None = None,
+    ) -> ImageResult:
+        """Return actual generated image bytes for the given brief."""
         ...

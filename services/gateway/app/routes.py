@@ -1,0 +1,123 @@
+import asyncio
+
+from agent_events import AgentEventBus
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.websockets import WebSocketState
+
+from app.agent_events_bus import get_event_bus
+from app.clients import (
+    fetch_ingestion_run,
+    fetch_latest_digest,
+    trigger_digest_generation,
+    trigger_ingestion_run,
+)
+from app.db import get_session
+from app.models import Draft, PipelineRun, ReviewState
+from app.runs import create_pipeline_run, execute_pipeline_run
+from app.schemas import DraftRead, EditRequest, PipelineRunCreated, PipelineRunRead
+
+router = APIRouter()
+
+
+@router.get("/digest/latest")
+async def get_latest_digest() -> dict[str, object]:
+    return await fetch_latest_digest()
+
+
+@router.post("/digest/generate")
+async def generate_digest() -> dict[str, object]:
+    return await trigger_digest_generation()
+
+
+@router.post("/drafts/generate", response_model=PipelineRunCreated, status_code=202)
+async def generate_drafts(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    event_bus: AgentEventBus = Depends(get_event_bus),
+) -> PipelineRunCreated:
+    run = await create_pipeline_run(session)
+    session_factory = getattr(request.app.state, "session_factory", None)
+    asyncio.create_task(execute_pipeline_run(run.id, event_bus, session_factory=session_factory))
+    return PipelineRunCreated(run_id=run.id, status=run.status)
+
+
+@router.get("/pipeline-runs/{run_id}", response_model=PipelineRunRead)
+async def get_pipeline_run(run_id: str, session: AsyncSession = Depends(get_session)) -> PipelineRun:
+    run = await session.get(PipelineRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@router.websocket("/pipeline-runs/{run_id}/live")
+async def pipeline_run_live_feed(websocket: WebSocket, run_id: str) -> None:
+    await websocket.accept()
+    event_bus = get_event_bus()
+    try:
+        async for event in event_bus.subscribe(run_id):
+            await websocket.send_text(event.model_dump_json())
+    except WebSocketDisconnect:
+        return
+    finally:
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close()
+
+
+@router.post("/ingestion/runs")
+async def start_ingestion_run(body: dict[str, object] | None = None) -> dict[str, object]:
+    return await trigger_ingestion_run(body or {})
+
+
+@router.get("/ingestion/runs/{run_id}")
+async def get_ingestion_run(run_id: str) -> dict[str, object]:
+    return await fetch_ingestion_run(run_id)
+
+
+@router.get("/drafts", response_model=list[DraftRead])
+async def list_drafts(session: AsyncSession = Depends(get_session)) -> list[Draft]:
+    result = await session.scalars(select(Draft).order_by(Draft.created_at.desc()))
+    return list(result.all())
+
+
+async def _get_draft_or_404(session: AsyncSession, draft_id: str) -> Draft:
+    draft = await session.get(Draft, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return draft
+
+
+@router.post("/drafts/{draft_id}/approve", response_model=DraftRead)
+async def approve_draft(draft_id: str, session: AsyncSession = Depends(get_session)) -> Draft:
+    """Mark a draft ready-to-publish. A compliance failure doesn't block this
+    endpoint -- the reviewer sees `compliance_passed`/`compliance_llm_reason`
+    and can consciously override it; only human approval gates publishing,
+    per spec.
+    """
+    draft = await _get_draft_or_404(session, draft_id)
+    draft.review_state = ReviewState.READY_TO_PUBLISH
+    await session.commit()
+    await session.refresh(draft)
+    return draft
+
+
+@router.post("/drafts/{draft_id}/edit", response_model=DraftRead)
+async def edit_draft(
+    draft_id: str, request: EditRequest, session: AsyncSession = Depends(get_session)
+) -> Draft:
+    draft = await _get_draft_or_404(session, draft_id)
+    draft.edited_caption = request.caption
+    draft.review_state = ReviewState.EDITED
+    await session.commit()
+    await session.refresh(draft)
+    return draft
+
+
+@router.post("/drafts/{draft_id}/reject", response_model=DraftRead)
+async def reject_draft(draft_id: str, session: AsyncSession = Depends(get_session)) -> Draft:
+    draft = await _get_draft_or_404(session, draft_id)
+    draft.review_state = ReviewState.REJECTED
+    await session.commit()
+    await session.refresh(draft)
+    return draft
