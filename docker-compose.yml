@@ -43,10 +43,14 @@ services:
     environment:
       <<: *common-env
       DATABASE_URL: postgresql+asyncpg://rivalradar:rivalradar@postgres:5432/rivalradar
+      REDIS_URL: redis://redis:6379/0
+      OBJECT_STORE_ROOT: /data/objects
     ports:
       - "8001:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - object_store:/data/objects
