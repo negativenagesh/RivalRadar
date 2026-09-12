@@ -28,7 +28,7 @@ _POST_HREF: dict[str, re.Pattern[str]] = {
 }
 
 _COUNT_RE = re.compile(
-    r"(?P<num>[\d,.]+)\s*(?P<suffix>[KkMmBb])?\s*(?P<label>likes?|comments?|views?|shares?|reposts?|reactions?)",
+    r"(?P<num>[\d,.]+)\s*(?P<suffix>[KkMmBb])?\s*(?P<label>likes?|comments?|views?|shares?|reposts?|reactions?|retweets?|replies)",
     re.I,
 )
 
@@ -46,18 +46,52 @@ def parse_count(raw: str | None) -> int:
     if not raw:
         return 0
     text = raw.strip().replace(",", "").replace(" ", "")
+    if not text or not any(ch.isdigit() for ch in text):
+        return 0
     m = re.match(r"^([\d.]+)([KkMmBb])?$", text)
     if not m:
         digits = re.sub(r"[^\d]", "", raw)
         return int(digits) if digits else 0
-    value = float(m.group(1))
+    num = m.group(1).strip(".")
+    if not num:
+        return 0
+    try:
+        value = float(num)
+    except ValueError:
+        return 0
     suffix = (m.group(2) or "").upper()
     mult = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}.get(suffix, 1)
     return int(value * mult)
 
 
+def canonicalize_post_url(platform: str, url: str) -> str:
+    """Collapse photo/analytics/query variants to the canonical post URL."""
+    platform = normalize_platform(platform)
+    parsed = urlparse(url.split("?")[0].split("#")[0])
+    path = parsed.path or ""
+    if platform in {"x", "twitter"}:
+        m = re.search(r"/status/(\d+)", path)
+        if m:
+            user = "i"
+            um = re.match(r"/([^/]+)/status/", path)
+            if um and um.group(1) not in {"i", "intent"}:
+                user = um.group(1)
+            return f"https://x.com/{user}/status/{m.group(1)}"
+    if platform == "instagram":
+        m = re.search(r"/(p|reel|tv)/([A-Za-z0-9_-]+)", path)
+        if m:
+            return f"https://www.instagram.com/{m.group(1)}/{m.group(2)}/"
+    scheme = parsed.scheme or "https"
+    netloc = parsed.netloc
+    if netloc:
+        return f"{scheme}://{netloc}{path.rstrip('/')}"
+    return url.split("?")[0].split("#")[0]
+
+
 def absolutize(base: str, href: str) -> str:
-    return urljoin(base if base.endswith("/") else base + "/", href)
+    if href.startswith("http://") or href.startswith("https://"):
+        return href
+    return urljoin(base, href)
 
 
 def _is_nav_destroy(exc: BaseException) -> bool:
@@ -162,7 +196,7 @@ async def collect_post_urls(
         hrefs = await _collect_hrefs(page)
         for href in hrefs:
             clean = href.split("?")[0].split("#")[0]
-            abs_url = absolutize(base, clean)
+            abs_url = canonicalize_post_url(platform, absolutize(base, clean))
             path = urlparse(abs_url).path
             if pattern and not pattern.search(path) and not pattern.search(abs_url):
                 continue
@@ -219,6 +253,9 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
                 .map(e => e.getAttribute('aria-label'))
                 .filter(Boolean)
                 .slice(0, 80);
+              const likeBtn = document.querySelector('[data-testid="like"], [data-testid="unlike"]');
+              const replyBtn = document.querySelector('[data-testid="reply"]');
+              const rtBtn = document.querySelector('[data-testid="retweet"]');
               return {
                 ogTitle: meta('og:title'),
                 ogDesc: meta('og:description'),
@@ -230,6 +267,9 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
                 imgCandidates,
                 videoSrc,
                 aria,
+                likeAria: likeBtn ? likeBtn.getAttribute('aria-label') : null,
+                replyAria: replyBtn ? replyBtn.getAttribute('aria-label') : null,
+                rtAria: rtBtn ? rtBtn.getAttribute('aria-label') : null,
                 title: document.title || '',
               };
             }""",
@@ -253,10 +293,15 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
             comments = max(comments, n)
         elif label.startswith("view"):
             views = max(views, n)
-        elif label.startswith("share") or label.startswith("repost"):
+        elif label.startswith("share") or label.startswith("repost") or label.startswith("retweet"):
             shares = max(shares, n)
 
-    for label in data.get("aria") or []:
+    extra_labels = list(data.get("aria") or [])
+    for key in ("likeAria", "replyAria", "rtAria"):
+        val = data.get(key)
+        if isinstance(val, str):
+            extra_labels.append(val)
+    for label in extra_labels:
         if not isinstance(label, str):
             continue
         for match in _COUNT_RE.finditer(label):
@@ -264,14 +309,27 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
             kind = match.group("label").lower()
             if kind.startswith("like") or kind.startswith("reaction"):
                 likes = max(likes, n)
-            elif kind.startswith("comment"):
+            elif kind.startswith("comment") or kind.startswith("repl"):
                 comments = max(comments, n)
             elif kind.startswith("view"):
                 views = max(views, n)
+            elif kind.startswith("share") or kind.startswith("repost") or kind.startswith("retweet"):
+                shares = max(shares, n)
 
-    caption = (data.get("ogDesc") or data.get("ogTitle") or data.get("title") or "").strip()
+    caption = (data.get("ogDesc") or data.get("ogTitle") or "").strip()
+    title = str(data.get("title") or "").strip()
+    if not caption:
+        caption = title
     if platform == "instagram" and " on Instagram:" in caption:
         caption = caption.split(" on Instagram:", 1)[-1].strip().strip("“\"'")
+    low = caption.lower()
+    if (
+        "sign up" in low
+        and "linkedin" in low
+        or low.endswith("instagram photos and videos")
+        or low in {"linkedin", "x", "instagram"}
+    ):
+        caption = ""
 
     media_url = data.get("ogImage") or data.get("videoSrc") or data.get("ogVideo")
     imgs = data.get("imgCandidates") or []

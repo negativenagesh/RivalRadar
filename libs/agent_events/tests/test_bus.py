@@ -32,3 +32,12 @@ async def test_subscribe_stops_on_error_status(bus: AgentEventBus) -> None:
     events = [event async for event in bus.subscribe(run_id)]
 
     assert events[-1].payload == {"status": "error", "detail": "boom"}
+
+
+async def test_subscribe_stops_on_cancelled_status(bus: AgentEventBus) -> None:
+    run_id = "run-3"
+    await bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+
+    events = [event async for event in bus.subscribe(run_id)]
+
+    assert events[-1].payload == {"status": "cancelled", "detail": "cancelled by operator"}

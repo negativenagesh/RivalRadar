@@ -1,6 +1,7 @@
+from app.connectors.base import RawAccount, RawPost
 from app.connectors.fixture import FixtureConnector
-from app.ingest import run_ingestion
-from app.models import CompetitorAccount, CompetitorPost
+from app.ingest import persist_raw_buffers, run_ingestion
+from app.models import CompetitorAccount, CompetitorPost, PostFormat
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,3 +39,41 @@ async def test_post_engagement_score_weights_shares_and_comments(session: AsyncS
 
     assert post.engagement_score == 8420 + 312 * 3 + 190 * 5
     assert post.themes == ["monday-mood", "relatable", "humor"]
+
+
+class _BufferConnector:
+    def __init__(self) -> None:
+        self._accounts = [
+            RawAccount(handle="@pixisai", display_name="Pixis", platform="linkedin"),
+        ]
+        self._posts = [
+            RawPost(
+                account_handle="@pixisai",
+                external_post_id="linkedin:urn-li-activity-1",
+                format="reel",
+                theme_tags=["linkedin", "source:oss"],
+                caption="A post",
+                image_url="https://example.com/" + ("x" * 600),
+                likes=1,
+                comments=0,
+                shares=0,
+                posted_at="2026-09-12T12:00:00Z",
+                views=10,
+                media_urls=[],
+                media_keys=["media/run/post.jpg"],
+            )
+        ]
+
+
+async def test_persist_raw_buffers_without_fetch(session: AsyncSession) -> None:
+    created = await persist_raw_buffers(session, _BufferConnector())
+    assert created == 1
+    post = (
+        await session.scalars(
+            select(CompetitorPost).where(CompetitorPost.external_post_id == "linkedin:urn-li-activity-1")
+        )
+    ).one()
+    assert post.format == PostFormat.FOUNDER_POST
+    assert post.image_url is not None and len(post.image_url) <= 500
+    assert post.media_keys == ["media/run/post.jpg"]
+

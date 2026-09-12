@@ -68,5 +68,6 @@ class AgentEventBus:
                     if event.step_type == "status" and event.payload.get("status") in (
                         "done",
                         "error",
+                        "cancelled",
                     ):
                         return

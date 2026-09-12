@@ -8,9 +8,12 @@ budget so cookie/browser tools do not contend with each other.
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
 import logging
 import random
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,7 +23,7 @@ from agent_events import AgentEvent, AgentEventBus
 from agent_events.schema import StepType
 
 from app.connectors.base import RawAccount, RawPost
-from app.connectors.media_download import download_media_to_store, store_bytes
+from app.connectors.media_download import download_media_to_store, download_via_page
 from app.connectors.oss.instagram import InstaloaderError, fetch_instagram_instaloader
 from app.connectors.oss.linkedin import LinkedInScraperError, fetch_linkedin_company_posts
 from app.connectors.oss.x_gallery import GalleryDlError, fetch_x_gallery_dl
@@ -41,8 +44,11 @@ logger = logging.getLogger(__name__)
 _AGENT_ID = "ingestion.socialfeed"
 _SERVICE = "ingestion"
 _MAX_POSTS = 25
-_PLATFORM_BUDGET_S = 180
-_COLLECT_BUDGET_S = 35
+_PLATFORM_BUDGET_S = 75
+_OSS_BUDGET_S = 22
+_GOTO_MS = 20_000
+_HEARTBEAT_S = 3
+_COLLECT_BUDGET_S = 25
 _SKIP_PLATFORMS = {"tiktok"}
 
 
@@ -64,9 +70,7 @@ class SocialFeedConnector:
         self._targets = [
             t for t in targets if normalize_platform(t.platform or "") not in _SKIP_PLATFORMS
         ]
-        skipped = [
-            t for t in targets if normalize_platform(t.platform or "") in _SKIP_PLATFORMS
-        ]
+        skipped = [t for t in targets if normalize_platform(t.platform or "") in _SKIP_PLATFORMS]
         self._skipped = skipped
         self._window = window
         self._headless = headless
@@ -84,6 +88,10 @@ class SocialFeedConnector:
         self._loaded = False
         self._sources_used: list[str] = []
         self._video_path: Path | None = None
+        self._checkpoint: Callable[[], Awaitable[None]] | None = None
+
+    def set_checkpoint(self, fn: Callable[[], Awaitable[None]] | None) -> None:
+        self._checkpoint = fn
 
     @property
     def recorded_video_path(self) -> Path | None:
@@ -116,11 +124,11 @@ class SocialFeedConnector:
         for t in self._skipped:
             await self._emit(
                 "action",
-                {"detail": f"skip_platform platform={normalize_platform(t.platform)} reason=disabled"},
+                {
+                    "detail": f"skip_platform platform={normalize_platform(t.platform)} reason=disabled"
+                },
             )
-        platforms = sorted(
-            {normalize_platform(t.platform) for t in self._targets if t.platform}
-        )
+        platforms = sorted({normalize_platform(t.platform) for t in self._targets if t.platform})
         all_cookies = cookies_from_sessions(self._platform_sessions, platforms=set(platforms))
         all_state = storage_state_from_sessions(self._platform_sessions, platforms=set(platforms))
         if all_cookies or all_state:
@@ -159,15 +167,14 @@ class SocialFeedConnector:
                 },
             )
             try:
-                await self._scout_target_isolated(
-                    target, record=(i == 0 and self._record)
-                )
+                await self._scout_target_isolated(target, record=(i == 0 and self._record))
             except Exception as exc:  # noqa: BLE001
                 await self._emit(
                     "error",
                     {"detail": f"scout_target failed {platform}: {exc}"},
                 )
                 logger.exception("scout_target failed for %s", target.handle)
+            await self._flush_checkpoint()
 
         self._loaded = True
         if not self._sources_used:
@@ -193,63 +200,85 @@ class SocialFeedConnector:
 
     async def _scout_with_oss_then_browser(self, target: ProfileTarget, *, record: bool) -> None:
         platform = normalize_platform(target.platform or "web")
+        if platform == "linkedin":
+            await self._scout_linkedin(target, record=record)
+            return
+
         url = _profile_entry_url(target, platform)
         handle = _handle_for(target, url)
 
-        # --- OSS first ---
+        # --- OSS first (bounded) ---
         try:
             await self._emit(
                 "action",
-                {"detail": f"oss_try platform={platform} window={self._window.date_from}→{self._window.date_to}"},
-            )
-            account, posts = await self._oss_fetch(platform, handle=handle, url=url)
-            if not posts:
-                raise RuntimeError("oss returned 0 posts in date window")
-            async with self._lock:
-                self._accounts.append(account)
-                self._posts.extend(posts)
-                source = {
-                    "instagram": "instaloader",
-                    "x": "gallery_dl",
-                    "linkedin": "linkedin_scraper",
-                }.get(platform, "oss")
-                if source not in self._sources_used:
-                    self._sources_used.append(source)
-            await self._emit(
-                "action",
-                {"detail": f"found_posts count={len(posts)} platform={platform} source=oss"},
-            )
-            await self._emit(
-                "action",
                 {
-                    "detail": (
-                        f"ingested_posts count={len(posts)} platform={platform} "
-                        f"window={self._window.date_from}→{self._window.date_to} source=oss"
-                    )
+                    "detail": f"oss_try platform={platform} window={self._window.date_from}→{self._window.date_to}"
                 },
             )
-            for p in posts[:8]:
-                await self._emit(
-                    "action",
-                    {
-                        "detail": "parsed_post",
-                        "platform": platform,
-                        "id": p["external_post_id"],
-                        "likes": p["likes"],
-                        "comments": p["comments"],
-                        "views": p.get("views", 0),
-                        "has_media": bool(p.get("media_keys") or p.get("media_urls")),
-                    },
-                )
+            account, posts = await self._oss_fetch_bounded(platform, handle=handle, url=url)
+            if not posts:
+                raise RuntimeError("oss returned 0 posts in date window")
+            await self._commit_oss_posts(account, posts, platform=platform)
             return
-        except (InstaloaderError, GalleryDlError, LinkedInScraperError, RuntimeError) as exc:
+        except (
+            InstaloaderError,
+            GalleryDlError,
+            LinkedInScraperError,
+            RuntimeError,
+            TimeoutError,
+        ) as exc:
             await self._emit(
                 "action",
                 {"detail": f"oss_fallback platform={platform} reason={exc}"},
             )
             logger.info("OSS fallback for %s: %s", platform, exc)
 
-        # --- Playwright fallback ---
+        await self._browser_fallback(target, record=record)
+
+    async def _commit_oss_posts(
+        self, account: RawAccount, posts: list[RawPost], *, platform: str
+    ) -> None:
+        async with self._lock:
+            self._accounts.append(account)
+            self._posts.extend(posts)
+            source = {
+                "instagram": "instaloader",
+                "x": "gallery_dl",
+                "linkedin": "linkedin_scraper",
+            }.get(platform, "oss")
+            if source not in self._sources_used:
+                self._sources_used.append(source)
+        await self._emit(
+            "action",
+            {"detail": f"found_posts count={len(posts)} platform={platform} source=oss"},
+        )
+        await self._emit(
+            "action",
+            {
+                "detail": (
+                    f"ingested_posts count={len(posts)} platform={platform} "
+                    f"window={self._window.date_from}→{self._window.date_to} source=oss"
+                )
+            },
+        )
+        for p in posts[:8]:
+            await self._emit(
+                "action",
+                {
+                    "detail": "parsed_post",
+                    "platform": platform,
+                    "id": p["external_post_id"],
+                    "likes": p["likes"],
+                    "comments": p["comments"],
+                    "views": p.get("views", 0),
+                    "has_media": bool(p.get("media_keys") or p.get("media_urls")),
+                },
+            )
+            await self._emit_stored_media_frame(p, platform=platform)
+        await self._flush_checkpoint()
+
+    async def _browser_fallback(self, target: ProfileTarget, *, record: bool) -> None:
+        platform = normalize_platform(target.platform or "web")
         cookies = cookies_from_sessions(self._platform_sessions, platforms={platform})
         storage_state = storage_state_from_sessions(self._platform_sessions, platforms={platform})
         async with BrowserSession(
@@ -260,6 +289,129 @@ class SocialFeedConnector:
         ) as session:
             if record:
                 self._session = session
+            await self._scout_target_browser(session, target)
+            if record and session.recorded_video_path:
+                self._video_path = session.recorded_video_path
+        async with self._lock:
+            if "browser" not in self._sources_used:
+                self._sources_used.append("browser")
+
+    async def _oss_fetch_bounded(
+        self, platform: str, *, handle: str, url: str
+    ) -> tuple[RawAccount, list[RawPost]]:
+        stop = asyncio.Event()
+        hb = asyncio.create_task(
+            self._oss_heartbeat(platform=platform, stop=stop)
+        )
+        try:
+            return await asyncio.wait_for(
+                self._oss_fetch(platform, handle=handle, url=url),
+                timeout=_OSS_BUDGET_S,
+            )
+        except TimeoutError:
+            raise TimeoutError(f"oss timed out after {_OSS_BUDGET_S}s") from None
+        finally:
+            stop.set()
+            hb.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb
+
+    async def _oss_heartbeat(self, *, platform: str, stop: asyncio.Event) -> None:
+        elapsed = 0
+        while not stop.is_set():
+            await self._emit(
+                "action",
+                {"detail": f"oss_working platform={platform} elapsed={elapsed}s"},
+            )
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=_HEARTBEAT_S)
+                return
+            except TimeoutError:
+                elapsed += _HEARTBEAT_S
+
+    async def _scout_linkedin(self, target: ProfileTarget, *, record: bool) -> None:
+        """OSS scrape on one Chromium; operator frames are post media, not profile scrolls."""
+        platform = "linkedin"
+        url = _profile_entry_url(target, platform)
+        handle = _handle_for(target, url)
+        cookies = cookies_from_sessions(self._platform_sessions, platforms={platform})
+        storage_state = storage_state_from_sessions(self._platform_sessions, platforms={platform})
+        await self._emit(
+            "action",
+            {
+                "detail": (
+                    f"oss_try platform={platform} "
+                    f"window={self._window.date_from}→{self._window.date_to}"
+                )
+            },
+        )
+        async with BrowserSession(
+            headless=self._headless,
+            record=record,
+            cookies=cookies,
+            storage_state=storage_state,
+        ) as session:
+            if record:
+                self._session = session
+            assert session.page is not None
+            stop = asyncio.Event()
+            hb = asyncio.create_task(
+                self._oss_heartbeat(platform=platform, stop=stop)
+            )
+            oss_ok = False
+            try:
+                await self._emit("nav", {"url": url, "platform": platform, "phase": "profile"})
+                try:
+                    await session.page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_MS)
+                    await settle_page(session.page, quiet_ms=80)
+                except Exception as exc:  # noqa: BLE001
+                    await self._emit("error", {"detail": f"linkedin oss nav: {exc}"})
+                try:
+                    account, posts = await asyncio.wait_for(
+                        fetch_linkedin_company_posts(
+                            page=session.page,
+                            run_id=self._run_id,
+                            handle=handle,
+                            url=url,
+                            window=self._window,
+                            platform_sessions=self._platform_sessions,
+                            object_store=self._object_store,
+                            max_posts=_MAX_POSTS,
+                        ),
+                        timeout=_OSS_BUDGET_S,
+                    )
+                    if posts:
+                        await self._commit_oss_posts(account, posts, platform=platform)
+                        oss_ok = True
+                    else:
+                        await self._emit(
+                            "action",
+                            {"detail": "oss_fallback platform=linkedin reason=0 posts in window"},
+                        )
+                except TimeoutError:
+                    await self._emit(
+                        "action",
+                        {
+                            "detail": (
+                                f"oss_fallback platform=linkedin "
+                                f"reason=timed out after {_OSS_BUDGET_S}s"
+                            )
+                        },
+                    )
+                except LinkedInScraperError as exc:
+                    await self._emit(
+                        "action",
+                        {"detail": f"oss_fallback platform=linkedin reason={exc}"},
+                    )
+            finally:
+                stop.set()
+                hb.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await hb
+            if oss_ok:
+                if record and session.recorded_video_path:
+                    self._video_path = session.recorded_video_path
+                return
             await self._scout_target_browser(session, target)
             if record and session.recorded_video_path:
                 self._video_path = session.recorded_video_path
@@ -290,28 +442,6 @@ class SocialFeedConnector:
                 object_store=self._object_store,
                 max_posts=_MAX_POSTS,
             )
-        if platform == "linkedin":
-            cookies = cookies_from_sessions(self._platform_sessions, platforms={"linkedin"})
-            storage_state = storage_state_from_sessions(
-                self._platform_sessions, platforms={"linkedin"}
-            )
-            async with BrowserSession(
-                headless=self._headless,
-                record=False,
-                cookies=cookies,
-                storage_state=storage_state,
-            ) as session:
-                assert session.page is not None
-                return await fetch_linkedin_company_posts(
-                    page=session.page,
-                    run_id=self._run_id,
-                    handle=handle,
-                    url=url,
-                    window=self._window,
-                    platform_sessions=self._platform_sessions,
-                    object_store=self._object_store,
-                    max_posts=_MAX_POSTS,
-                )
         raise RuntimeError(f"no oss scraper for {platform}")
 
     async def _pause(self, *, short: bool = False) -> None:
@@ -331,7 +461,7 @@ class SocialFeedConnector:
 
         await self._emit("nav", {"url": url, "platform": platform, "phase": "profile"})
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_MS)
             await settle_page(page)
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"profile nav failed {url}: {exc}"})
@@ -353,23 +483,6 @@ class SocialFeedConnector:
             self._accounts.append(
                 RawAccount(handle=handle, display_name=display, platform=platform)
             )
-
-        try:
-            await self._emit("action", {"detail": f"screenshot platform={platform}"})
-            await settle_page(page, quiet_ms=150)
-            jpeg = await asyncio.wait_for(session.screenshot_jpeg_b64(), timeout=12)
-            await self._emit(
-                "screenshot",
-                {
-                    "jpeg_b64": jpeg,
-                    "platform": platform,
-                    "url": url,
-                    "label": f"{handle} profile",
-                },
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug("profile screenshot skipped", exc_info=True)
-            await self._emit("action", {"detail": f"screenshot_skipped platform={platform}"})
 
         await self._emit("action", {"detail": f"collecting_posts platform={platform}"})
         try:
@@ -437,7 +550,7 @@ class SocialFeedConnector:
         page = session.page
         await self._emit("nav", {"url": post_url, "platform": platform, "phase": "post"})
         try:
-            await page.goto(post_url, wait_until="domcontentloaded", timeout=35000)
+            await page.goto(post_url, wait_until="domcontentloaded", timeout=_GOTO_MS)
             await settle_page(page)
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"post nav failed {post_url}: {exc}"})
@@ -451,14 +564,19 @@ class SocialFeedConnector:
             return False
         posted_at: datetime | None = parsed.get("posted_at")
         if posted_at is None:
-            posted_at = datetime.now(UTC)
-            uncertain = True
-        else:
-            uncertain = False
-            if posted_at.tzinfo is None:
-                posted_at = posted_at.replace(tzinfo=UTC)
-            if not self._window.contains(posted_at):
-                return False
+            await self._emit(
+                "action",
+                {"detail": f"skipped_post reason=no_date {post_url[:120]}"},
+            )
+            return False
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=UTC)
+        if not self._window.contains(posted_at):
+            await self._emit(
+                "action",
+                {"detail": f"skipped_post reason=outside_window {post_url[:120]}"},
+            )
+            return False
 
         media_url = parsed.get("media_url")
         media_keys: list[str] = []
@@ -482,8 +600,6 @@ class SocialFeedConnector:
             f"date_from:{self._window.date_from.isoformat()}",
             f"date_to:{self._window.date_to.isoformat()}",
         ]
-        if uncertain:
-            themes.append("posted_at_uncertain")
 
         fmt = "reel" if "/reel/" in post_url or platform == "tiktok" else "founder_post"
         post: RawPost = {
@@ -515,6 +631,9 @@ class SocialFeedConnector:
                 "has_media": bool(media_keys or media_urls),
             },
         )
+        await self._emit_post_screenshot(session, platform=platform, url=post_url, handle=handle)
+        if media_keys:
+            await self._emit_stored_media_frame(post, platform=platform)
         return True
 
     async def _download_post_media(
@@ -527,28 +646,89 @@ class SocialFeedConnector:
         assert session.page is not None
         assert self._object_store is not None
         page = session.page
-        try:
-            resp = await page.request.get(media_url, timeout=30000)
-            if resp.ok:
-                body = await resp.body()
-                ctype = resp.headers.get("content-type", "image/jpeg")
-                key = await store_bytes(
-                    self._object_store,
-                    run_id=self._run_id,
-                    post_id=post_id,
-                    data=body,
-                    content_type=ctype,
-                )
-                if key:
-                    return key
-        except Exception as exc:  # noqa: BLE001
-            logger.info("page.request media failed %s: %s", post_id, exc)
-
+        key = await download_via_page(
+            self._object_store,
+            page=page,
+            run_id=self._run_id,
+            post_id=post_id,
+            url=media_url,
+        )
+        if key:
+            return key
         return await download_media_to_store(
             self._object_store,
             run_id=self._run_id,
             post_id=post_id,
             url=media_url,
+        )
+
+    async def _flush_checkpoint(self) -> None:
+        if self._checkpoint is None:
+            return
+        try:
+            await self._checkpoint()
+        except Exception:  # noqa: BLE001
+            logger.exception("checkpoint persist failed")
+
+    async def _emit_post_screenshot(
+        self,
+        session: BrowserSession,
+        *,
+        platform: str,
+        url: str,
+        handle: str,
+    ) -> None:
+        try:
+            await self._emit("action", {"detail": f"screenshot platform={platform} kind=post"})
+            if session.page is not None:
+                await settle_page(session.page, quiet_ms=80)
+            jpeg = await asyncio.wait_for(session.screenshot_jpeg_b64(), timeout=12)
+            await self._emit(
+                "screenshot",
+                {
+                    "jpeg_b64": jpeg,
+                    "mime": "jpeg",
+                    "platform": platform,
+                    "url": url,
+                    "label": f"{handle} post",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("post screenshot skipped", exc_info=True)
+
+    async def _emit_stored_media_frame(self, post: RawPost, *, platform: str) -> None:
+        if self._object_store is None:
+            return
+        keys = list(post.get("media_keys") or [])
+        if not keys:
+            return
+        key = keys[0]
+        if key.endswith(".mp4"):
+            return
+        try:
+            path = self._object_store.resolve_path(key)
+            data = await asyncio.to_thread(path.read_bytes)
+        except Exception:  # noqa: BLE001
+            logger.debug("media frame read failed %s", key, exc_info=True)
+            return
+        if not data or len(data) > 2_500_000:
+            return
+        mime = "jpeg"
+        if key.endswith(".png"):
+            mime = "png"
+        elif key.endswith(".webp"):
+            mime = "webp"
+        elif key.endswith(".gif"):
+            mime = "gif"
+        await self._emit(
+            "screenshot",
+            {
+                "jpeg_b64": base64.b64encode(data).decode("ascii"),
+                "mime": mime,
+                "platform": platform,
+                "url": next((t[5:] for t in post.get("theme_tags") or [] if t.startswith("link:")), ""),
+                "label": f"{post['external_post_id']} media",
+            },
         )
 
     async def _emit(self, step_type: StepType, payload: dict[str, object]) -> None:

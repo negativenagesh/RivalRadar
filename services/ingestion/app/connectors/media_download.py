@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -60,6 +61,34 @@ async def download_media_to_store(
     finally:
         if owns:
             await http.aclose()
+
+
+async def download_via_page(
+    store: ObjectStore,
+    *,
+    page: Any,
+    run_id: str,
+    post_id: str,
+    url: str,
+    timeout_ms: int = 30000,
+) -> str | None:
+    """Fetch media with the authenticated Playwright context (CDN cookies)."""
+    try:
+        resp = await page.request.get(url, timeout=timeout_ms)
+        if not resp.ok:
+            return None
+        body = await resp.body()
+        ctype = resp.headers.get("content-type", "image/jpeg")
+        return await store_bytes(
+            store,
+            run_id=run_id,
+            post_id=post_id,
+            data=body,
+            content_type=ctype,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("page.request media failed %s: %s", post_id, exc)
+        return None
 
 
 async def store_bytes(

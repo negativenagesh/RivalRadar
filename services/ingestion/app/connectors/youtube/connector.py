@@ -35,8 +35,9 @@ class YouTubeConnector:
     """Fetches channel + recent uploads within a date window.
 
     Structured data: YouTube Data API v3, else yt-dlp.
-    Operator theater: Playwright screenshots only for API-backed digests.
-    yt-dlp path emits text intel artifacts (no screenshots).
+    Operator theater: Playwright screenshots of an HTML digest for both
+    API and yt-dlp paths so Live Scout always gets frames.
+    yt-dlp also emits a text intel artifact.
     """
 
     def __init__(
@@ -109,11 +110,13 @@ class YouTubeConnector:
         used_ytdlp = "yt_dlp" in self._sources_used
         if used_ytdlp:
             await self._emit_ytdlp_intel()
-        if used_api and not used_ytdlp:
-            await self._operator_frames()
-        elif used_api and used_ytdlp:
-            # Mixed: still show theater for API portion only
-            await self._operator_frames()
+        # Always push operator frames so Live Scout isn't a blank feed
+        # when yt-dlp (or a mixed API+yt-dlp run) is the data path.
+        if self._accounts or self._posts:
+            try:
+                await self._operator_frames()
+            except Exception as exc:  # noqa: BLE001
+                await self._emit("error", {"detail": f"operator frames failed: {exc}"})
 
         if self._posts:
             self._posts = await enrich_posts_media(
@@ -198,7 +201,8 @@ class YouTubeConnector:
                 "kind": "ytdlp_intel",
                 "channel_title": channel_title,
                 "accounts": [
-                    {"handle": a["handle"], "display_name": a["display_name"]} for a in self._accounts
+                    {"handle": a["handle"], "display_name": a["display_name"]}
+                    for a in self._accounts
                 ],
                 "videos": videos,
                 "date_from": self._window.date_from.isoformat(),
@@ -220,16 +224,11 @@ class YouTubeConnector:
             assert self._session.page is not None
             await self._emit("nav", {"url": path.as_uri()})
             await self._session.page.goto(path.as_uri(), wait_until="domcontentloaded")
-            if self._human_pause:
-                pause = random.uniform(2.0, 4.0)
-                await self._emit("action", {"detail": f"human_pause {pause:.1f}s"})
-                await asyncio.sleep(pause)
-            await self._session.page.mouse.wheel(0, 500)
-            if self._human_pause:
-                pause = random.uniform(2.0, 4.0)
-                await self._emit("action", {"detail": f"human_pause {pause:.1f}s"})
-                await asyncio.sleep(pause)
             await self._emit_screenshot()
+            if self._human_pause:
+                pause = random.uniform(0.35, 0.7)
+                await self._emit("action", {"detail": f"human_pause {pause:.1f}s"})
+                await asyncio.sleep(pause)
 
     async def _emit(self, step_type: StepType, payload: dict[str, object]) -> None:
         if self._event_bus is None:
@@ -250,7 +249,14 @@ class YouTubeConnector:
         if self._event_bus is None or self._session is None:
             return
         frame = await self._session.screenshot_jpeg_b64()
-        await self._emit("screenshot", {"jpeg_b64": frame})
+        await self._emit(
+            "screenshot",
+            {
+                "jpeg_b64": frame,
+                "platform": "youtube",
+                "label": "YouTube digest",
+            },
+        )
 
 
 def _render_operator_html(
@@ -267,8 +273,7 @@ def _render_operator_html(
             "</article>"
         )
     headers = "".join(
-        f"<li>{html.escape(a['display_name'])} ({html.escape(a['handle'])})</li>"
-        for a in accounts
+        f"<li>{html.escape(a['display_name'])} ({html.escape(a['handle'])})</li>" for a in accounts
     )
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>YouTube scout digest</title>

@@ -36,7 +36,12 @@ type Shot = {
   label: string;
   url: string;
   company: string;
+  mime?: string;
 };
+
+function frameSrc(b64: string, mime?: string): string {
+  return `data:image/${mime || "jpeg"};base64,${b64}`;
+}
 
 function platformName(key: string): string {
   return PLATFORM_LABELS[key.toLowerCase()] ?? key;
@@ -116,12 +121,13 @@ function shotsFromEvents(events: AgentEvent[], targets: MissionTargetPreview[]):
         label,
         url,
         company: match?.label ?? String(e.payload.company ?? "Scout"),
+        mime: String(e.payload.mime ?? "jpeg"),
       };
     });
 }
 
 function shotsFromFrames(
-  frames: { id: string; b64: string; platform: string; label: string; url: string }[],
+  frames: { id: string; b64: string; platform: string; label: string; url: string; mime?: string }[],
   targets: MissionTargetPreview[],
 ): Shot[] {
   return frames.map((f) => {
@@ -176,6 +182,19 @@ function operatorLogEvents(events: AgentEvent[]): AgentEvent[] {
   });
 }
 
+export function scoutActionLabel(input: {
+  locked: boolean;
+  starting: boolean;
+  stopping: boolean;
+  live: boolean;
+}): string {
+  if (input.locked) return "Connect platforms to unlock";
+  if (input.stopping) return "Stopping…";
+  if (input.starting) return "Starting scout…";
+  if (input.live) return "Stop Scout";
+  return "Start Scout";
+}
+
 export function LiveScout({
   recordSession,
   onRecordChange,
@@ -212,7 +231,7 @@ export function LiveScout({
   runId: string | null;
   connected: boolean;
   events: AgentEvent[];
-  frames?: { id: string; b64: string; platform: string; label: string; url: string }[];
+  frames?: { id: string; b64: string; platform: string; label: string; url: string; mime?: string }[];
   latestScreenshot: string | null;
   run: IngestionRun | null;
   error: string | null;
@@ -259,10 +278,14 @@ export function LiveScout({
 
   // Prefer Connect Center gate; until it reports, only lock when Connect is required.
   const scoutLocked = requiredPlatforms.length > 0 ? !connectionsReady : false;
-  // Only block while we are POSTing a new run. A stuck prior run in localStorage
-  // (pending/running after refresh) must not permanently disable Start Scout.
   const priorActive = status === "running" || status === "pending";
   const scoutBusy = starting || Boolean(killing);
+  const actionLabel = scoutActionLabel({
+    locked: scoutLocked,
+    starting,
+    stopping: Boolean(killing),
+    live: priorActive,
+  });
 
   const enterFullscreen = useCallback(() => {
     const el = videoRef.current;
@@ -414,44 +437,36 @@ export function LiveScout({
             YouTube / yt-dlp does not need a Connect widget.
           </p>
         )}
-        {priorActive && !scoutBusy && !scoutLocked && (
-          <p className="font-ui max-w-xl rounded-2xl border border-border/50 bg-card/30 px-4 py-2 text-sm text-muted-foreground">
-            A scout is still marked {status}. Hit Start to kill it and launch a fresh run in one
-            click.
+        {priorActive && !scoutLocked && (
+          <p
+            role="status"
+            className="font-ui max-w-xl rounded-2xl border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-primary"
+          >
+            Scout is live — post images stream below as they ingest. Hit Stop Scout, then Continue to Findings.
           </p>
         )}
         <div className="flex flex-wrap items-center justify-center gap-4">
-          {priorActive && onKill && (
-            <Button
-              size="lg"
-              variant="outline"
-              className="h-14 px-8 font-display text-base"
-              onClick={onKill}
-              disabled={scoutBusy || scoutLocked}
-            >
-              {killing ? "Killing…" : "Kill only"}
-            </Button>
-          )}
           <Button
             size="lg"
+            variant={priorActive && !starting ? "destructive" : "default"}
             className="h-14 px-10 font-display text-base"
-            onClick={onStart}
+            onClick={() => {
+              if (priorActive && onKill) {
+                onKill();
+                return;
+              }
+              onStart();
+            }}
             disabled={scoutBusy || scoutLocked}
             title={
               scoutLocked
                 ? "Connect every Context platform first"
                 : priorActive
-                  ? "Cancel the stuck run and start fresh"
+                  ? "Stop this scout"
                   : undefined
             }
           >
-            {starting
-              ? "Starting…"
-              : killing
-                ? "Killing…"
-                : scoutLocked
-                  ? "Connect platforms to unlock"
-                  : "Start Scout"}
+            {actionLabel}
           </Button>
           <label className="font-ui flex items-center gap-2 text-sm">
             <input
@@ -465,7 +480,7 @@ export function LiveScout({
           {runId && (
             <span className="font-ui inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <Radio className={`size-3 ${connected ? "text-primary" : "text-muted-foreground"}`} />
-              {connected ? "live" : "connecting…"} · {runId.slice(0, 8)}
+              {connected ? "live" : starting || priorActive ? "connecting…" : "idle"} · {runId.slice(0, 8)}
             </span>
           )}
         </div>
@@ -478,7 +493,7 @@ export function LiveScout({
       )}
       {run?.status === "cancelled" && !starting && !killing && (
         <p className="rounded-2xl border border-border/50 bg-card/30 px-4 py-3 text-sm text-muted-foreground">
-          Previous scout was killed. Hit Start Scout when you are ready.
+          Scout stopped. Continue to Findings to review ingested posts, or Start Scout again.
         </p>
       )}
       {run?.status === "error" && run.error_detail && (
@@ -500,10 +515,14 @@ export function LiveScout({
             {latestScreenshot ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={`data:image/jpeg;base64,${latestScreenshot}`}
+                src={frameSrc(latestScreenshot, frames?.at(-1)?.mime)}
                 alt="Live scout screenshot"
                 className="h-full w-full object-contain"
               />
+            ) : priorActive || starting ? (
+              <p className="font-accent px-6 text-center text-sm italic text-primary">
+                Scouting now — post images land as each post is ingested.
+              </p>
             ) : (
               <p className="font-accent px-6 text-center text-sm italic text-muted-foreground">
                 Hit Start Scout — multi-platform frames land here.
@@ -518,7 +537,11 @@ export function LiveScout({
           </div>
           <ul className="flex-1 space-y-1 overflow-y-auto p-3 font-ui text-[11px] leading-relaxed">
             {logEvents.length === 0 && (
-              <li className="text-muted-foreground">Waiting for browser scout events…</li>
+              <li className="text-muted-foreground">
+                {priorActive || starting
+                  ? "Scout started — waiting for the first hop…"
+                  : "Waiting for browser scout events…"}
+              </li>
             )}
             {logEvents.map((ev, i) => (
               <li key={`${ev.sequence}-${i}`} className="text-muted-foreground">
@@ -574,7 +597,7 @@ export function LiveScout({
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={`data:image/jpeg;base64,${s.b64}`}
+                  src={frameSrc(s.b64, s.mime)}
                   alt={`${s.company} ${s.platform}`}
                   className="aspect-video w-full object-cover"
                 />
@@ -659,7 +682,7 @@ export function LiveScout({
           <div className="max-w-5xl" onClick={(e) => e.stopPropagation()} role="presentation">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={`data:image/jpeg;base64,${lightbox.b64}`}
+              src={frameSrc(lightbox.b64, lightbox.mime)}
               alt={lightbox.label}
               className="max-h-[80vh] w-full rounded-2xl object-contain"
             />

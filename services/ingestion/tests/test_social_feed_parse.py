@@ -1,6 +1,8 @@
 from app.connectors.social_feed import _profile_entry_url
 from app.connectors.social_feed_parse import (
     _is_nav_destroy,
+    absolutize,
+    canonicalize_post_url,
     external_id_for,
     normalize_platform,
     parse_count,
@@ -13,6 +15,35 @@ def test_parse_count_suffixes() -> None:
     assert parse_count("12.5K") == 12500
     assert parse_count("2M") == 2_000_000
     assert parse_count("") == 0
+    assert parse_count(".") == 0
+    assert parse_count("N/A") == 0
+    assert parse_count("likes") == 0
+
+
+def test_canonicalize_x_photo_and_analytics_urls() -> None:
+    assert (
+        canonicalize_post_url("x", "https://x.com/Pixis_AI/status/1896962592331219042/photo/1")
+        == "https://x.com/Pixis_AI/status/1896962592331219042"
+    )
+    assert (
+        canonicalize_post_url(
+            "x", "https://x.com/Pixis_AI/status/1896962592331219042/analytics"
+        )
+        == "https://x.com/Pixis_AI/status/1896962592331219042"
+    )
+    assert (
+        canonicalize_post_url(
+            "instagram", "https://www.instagram.com/pixis_ai/p/DdGWu5tmj5o/?img_index=2"
+        )
+        == "https://www.instagram.com/p/DdGWu5tmj5o/"
+    )
+
+
+def test_absolutize_relative_hrefs() -> None:
+    assert (
+        absolutize("https://x.com/Pixis_AI", "/Pixis_AI/status/123")
+        == "https://x.com/Pixis_AI/status/123"
+    )
 
 
 def test_external_id_instagram() -> None:

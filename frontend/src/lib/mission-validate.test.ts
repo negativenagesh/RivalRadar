@@ -47,6 +47,11 @@ describe("mission step gating", () => {
       true,
     );
     expect(canReachStep(2, mission, 0, "done")).toEqual([]);
+    expect(canReachStep(2, mission, 0, "cancelled")).toEqual([]);
+    expect(canReachStep(2, mission, 0, "error")).toEqual([]);
+    expect(canReachStep(2, mission, 0, "pending").some((i) => i.fieldId === "scout-start")).toBe(
+      true,
+    );
   });
 
   it("requires Connect for LinkedIn but not YouTube", () => {

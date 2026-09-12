@@ -1,50 +1,26 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { ExternalLink, Heart, MessageCircle, Eye, Repeat2 } from "lucide-react";
 
 import type { CompetitorAccount, CompetitorPost } from "@/lib/types";
 import { ingestionMediaUrl } from "@/lib/api";
-
-function linkFromThemes(themes: string[]): string | null {
-  const hit = themes.find((t) => t.startsWith("link:"));
-  return hit ? hit.replace("link:", "") : null;
-}
+import {
+  filterFindingsPosts,
+  type FindingsRow,
+} from "@/lib/findings-filter";
+import type { MissionTargetPreview } from "@/lib/mission-store";
+import { PLATFORM_LABELS } from "@/lib/mission-store";
 
 function resolveImage(post: CompetitorPost): string | null {
   const key = post.media_keys?.[0];
   if (key) return ingestionMediaUrl(key);
   const url = post.image_url || post.media_urls?.[0] || null;
   if (!url) return null;
-  // Never treat Live Scout screenshot paths as Findings media
   if (url.includes("/screenshots/")) return null;
   if (url.startsWith("http") || url.startsWith("data:")) return url;
   const base = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
   return `${base.replace(/\/$/, "")}${url.startsWith("/") ? url : `/${url}`}`;
-}
-
-function dayKey(iso: string): string {
-  return iso.slice(0, 10);
-}
-
-function watchUrl(post: CompetitorPost, platform: string): string | null {
-  const external = linkFromThemes(post.themes ?? []);
-  if (external) return external;
-  const id = post.external_post_id || "";
-  if (platform === "youtube" && id && !id.startsWith("web-") && !id.includes(":")) {
-    return `https://www.youtube.com/watch?v=${id}`;
-  }
-  if (id.startsWith("instagram:")) {
-    const code = id.slice("instagram:".length);
-    return `https://www.instagram.com/p/${code}/`;
-  }
-  if (id.startsWith("tiktok:")) {
-    return `https://www.tiktok.com/video/${id.slice("tiktok:".length)}`;
-  }
-  if (id.startsWith("x:")) {
-    return `https://x.com/i/status/${id.slice("x:".length)}`;
-  }
-  return null;
 }
 
 function fmt(n: number): string {
@@ -53,16 +29,16 @@ function fmt(n: number): string {
   return String(n);
 }
 
-type Group = {
+type CompanySection = {
   company: string;
-  platform: string;
-  day: string;
-  posts: CompetitorPost[];
+  role: "brand" | "rival";
+  groups: { platform: string; day: string; rows: FindingsRow[] }[];
 };
 
 export function FindingsGrid({
   posts,
   accounts,
+  targets,
   loading,
   lookbackDays,
   dateFrom,
@@ -70,42 +46,54 @@ export function FindingsGrid({
 }: {
   posts: CompetitorPost[];
   accounts: CompetitorAccount[];
+  targets: MissionTargetPreview[];
   loading: boolean;
   lookbackDays: number;
   dateFrom?: string | null;
   dateTo?: string | null;
 }) {
-  const byId = Object.fromEntries(accounts.map((a) => [a.id, a]));
-  const [openComments, setOpenComments] = useState<string | null>(null);
+  const rows = useMemo(
+    () =>
+      filterFindingsPosts(posts, accounts, {
+        targets,
+        dateFrom,
+        dateTo,
+        lookbackDays,
+      }),
+    [posts, accounts, targets, dateFrom, dateTo, lookbackDays],
+  );
 
-  const groups = useMemo(() => {
-    const map = new Map<string, Group>();
-    for (const post of posts) {
-      const account = byId[post.account_id];
-      const platform =
-        account?.platform ||
-        post.themes?.find((t) =>
-          ["youtube", "linkedin", "instagram", "tiktok", "x", "threads", "mock"].includes(t),
-        ) ||
-        "other";
-      const company = account?.display_name || account?.handle || "Unknown";
-      const day = dayKey(post.posted_at);
-      const key = `${company}||${platform}||${day}`;
-      const g = map.get(key) ?? { company, platform, day, posts: [] };
-      g.posts.push(post);
-      map.set(key, g);
+  const sections = useMemo(() => {
+    const order = new Map<string, CompanySection>();
+    for (const row of rows) {
+      const key = `${row.role}::${row.company}`;
+      const section =
+        order.get(key) ??
+        { company: row.company, role: row.role, groups: [] };
+      const gkey = `${row.platform}||${row.day}`;
+      let group = section.groups.find((g) => `${g.platform}||${g.day}` === gkey);
+      if (!group) {
+        group = { platform: row.platform, day: row.day, rows: [] };
+        section.groups.push(group);
+      }
+      group.rows.push(row);
+      order.set(key, section);
     }
-    for (const g of map.values()) {
-      g.posts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
+    for (const section of order.values()) {
+      section.groups.sort((a, b) => {
+        const p = a.platform.localeCompare(b.platform);
+        if (p) return p;
+        return b.day.localeCompare(a.day);
+      });
+      for (const g of section.groups) {
+        g.rows.sort((a, b) => b.likes + b.comments - (a.likes + a.comments));
+      }
     }
-    return [...map.values()].sort((a, b) => {
-      const c = a.company.localeCompare(b.company);
-      if (c) return c;
-      const p = a.platform.localeCompare(b.platform);
-      if (p) return p;
-      return b.day.localeCompare(a.day);
+    return [...order.values()].sort((a, b) => {
+      if (a.role !== b.role) return a.role === "brand" ? -1 : 1;
+      return a.company.localeCompare(b.company);
     });
-  }, [posts, byId]);
+  }, [rows]);
 
   const windowLabel =
     dateFrom && dateTo ? `${dateFrom} → ${dateTo}` : `last ${lookbackDays} days`;
@@ -120,7 +108,7 @@ export function FindingsGrid({
         </p>
         <h2 className="font-shout text-jumble-wild text-4xl uppercase sm:text-6xl">Findings</h2>
         <p className="font-accent mx-auto max-w-2xl text-base italic text-muted-foreground">
-          Real post media · heat under every drop · {windowLabel}
+          Company + rivalry only · {windowLabel}
         </p>
       </header>
 
@@ -130,137 +118,111 @@ export function FindingsGrid({
         </p>
       )}
 
-      {!loading && posts.length === 0 && (
+      {!loading && rows.length === 0 && (
         <div className="mx-auto max-w-lg space-y-2 rounded-[2rem] border border-border/50 bg-card/20 px-6 py-12 text-center">
           <p className="font-display text-xl font-bold">No posts in this window</p>
           <p className="font-accent text-sm italic text-muted-foreground">
-            Connect Instagram → widen dates → re-run scout. Screenshots stay in Live Scout; Findings
-            only shows downloaded post media.
+            Findings only shows your company and rivals inside {windowLabel}. Re-run scout if the
+            grid is empty.
           </p>
         </div>
       )}
 
-      {groups.map((group) => (
+      {sections.map((section) => (
         <section
-          key={`${group.company}-${group.platform}-${group.day}`}
-          className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-500"
+          key={`${section.role}-${section.company}`}
+          className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500"
         >
-          <div className="flex flex-wrap items-end gap-3 border-b border-border/40 pb-3">
-            <h3 className="font-display text-3xl font-bold tracking-tight">{group.company}</h3>
+          <div className="flex flex-wrap items-end gap-3">
+            <h3 className="font-display text-3xl font-bold tracking-tight">{section.company}</h3>
             <span className="font-ui mb-1 rounded-full bg-primary/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-primary">
-              {group.platform}
-            </span>
-            <span className="font-accent mb-1 text-sm italic text-muted-foreground">{group.day}</span>
-            <span className="font-ui mb-1 ml-auto text-[11px] text-muted-foreground">
-              {group.posts.length} posts
+              {section.role === "brand" ? "Company" : "Rivalry"}
             </span>
           </div>
 
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {group.posts.map((post) => {
-              const img = resolveImage(post);
-              const title = (post.caption.split("\n")[0] ?? post.caption).trim() || "Untitled drop";
-              const views = post.views ?? 0;
-              const href = watchUrl(post, group.platform);
-              const comments = post.comment_sample ?? [];
-              const open = openComments === post.id;
+          {section.groups.map((group) => (
+            <div key={`${section.company}-${group.platform}-${group.day}`} className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3 border-b border-border/40 pb-3">
+                <span className="font-ui rounded-full bg-card px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-primary">
+                  {PLATFORM_LABELS[group.platform] ?? group.platform}
+                </span>
+                <span className="font-accent text-sm italic text-muted-foreground">{group.day}</span>
+                <span className="font-ui ml-auto text-[11px] text-muted-foreground">
+                  {group.rows.length} posts
+                </span>
+              </div>
 
-              return (
-                <article
-                  key={post.id}
-                  className="group flex flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-gradient-to-b from-card/50 to-card/20 transition duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-[0_20px_60px_-30px_oklch(0.87_0.24_128_/_0.55)]"
-                >
-                  <div className="relative aspect-[4/5] overflow-hidden bg-[radial-gradient(circle_at_30%_20%,oklch(0.87_0.24_128_/_0.12),transparent_55%)]">
-                    {img ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={img}
-                        alt=""
-                        className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    ) : (
-                      <div className="font-shout flex h-full items-center justify-center text-2xl uppercase tracking-widest text-muted-foreground/40">
-                        {post.format}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Metrics live directly under the media — the heat strip */}
-                  <div className="grid grid-cols-4 gap-px border-y border-border/40 bg-border/30">
-                    <Metric cell label="likes" value={post.likes} icon={<Heart className="size-3" />} />
-                    <Metric
-                      cell
-                      label="comments"
-                      value={post.comments}
-                      icon={<MessageCircle className="size-3" />}
-                    />
-                    <Metric cell label="views" value={views} icon={<Eye className="size-3" />} />
-                    <Metric
-                      cell
-                      label="shares"
-                      value={post.shares}
-                      icon={<Repeat2 className="size-3" />}
-                    />
-                  </div>
-
-                  <div className="flex flex-1 flex-col gap-3 p-4">
-                    <p className="font-display line-clamp-3 text-[15px] font-semibold leading-snug">
-                      {title}
-                    </p>
-                    {href && (
-                      <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-ui inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-primary transition hover:gap-2"
-                      >
-                        Open original
-                        <ExternalLink className="size-3" aria-hidden />
-                      </a>
-                    )}
-                    {comments.length > 0 && (
-                      <div className="border-t border-border/40 pt-2">
-                        <button
-                          type="button"
-                          className="font-ui text-[11px] font-semibold uppercase tracking-wide text-primary"
-                          onClick={() => setOpenComments(open ? null : post.id)}
-                        >
-                          {open ? "Hide" : "Top comments"} ({Math.min(10, comments.length)})
-                        </button>
-                        {open && (
-                          <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto">
-                            {comments.slice(0, 10).map((c, i) => (
-                              <li
-                                key={`${post.id}-c-${i}`}
-                                className="rounded-2xl bg-background/60 px-3 py-2"
-                              >
-                                <p className="font-display text-[11px] font-semibold text-primary">
-                                  {c.author}
-                                  <span className="ml-2 font-ui font-normal text-muted-foreground">
-                                    {fmt(c.likes)} likes
-                                  </span>
-                                </p>
-                                <p className="font-accent text-xs italic text-muted-foreground">
-                                  {c.text}
-                                </p>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {group.rows.map((row) => (
+                  <PostTile key={row.post.id} row={row} />
+                ))}
+              </div>
+            </div>
+          ))}
         </section>
       ))}
     </div>
   );
+}
+
+function PostTile({ row }: { row: FindingsRow }) {
+  const img = resolveImage(row.post);
+  const title = (row.post.caption.split("\n")[0] ?? row.post.caption).trim() || "Untitled drop";
+  const inner = (
+    <>
+      <div className="relative aspect-[4/5] overflow-hidden bg-[radial-gradient(circle_at_30%_20%,oklch(0.87_0.24_128_/_0.12),transparent_55%)]">
+        {img ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={img}
+            alt=""
+            className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
+        ) : (
+          <div className="font-shout flex h-full items-center justify-center text-2xl uppercase tracking-widest text-muted-foreground/40">
+            {row.post.format}
+          </div>
+        )}
+        {row.href && (
+          <span className="font-ui absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+            Open
+            <ExternalLink className="size-3" aria-hidden />
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-4 gap-px border-y border-border/40 bg-border/30">
+        <Metric cell label="likes" value={row.likes} icon={<Heart className="size-3" />} />
+        <Metric
+          cell
+          label="comments"
+          value={row.comments}
+          icon={<MessageCircle className="size-3" />}
+        />
+        <Metric cell label="views" value={row.views} icon={<Eye className="size-3" />} />
+        <Metric cell label="shares" value={row.shares} icon={<Repeat2 className="size-3" />} />
+      </div>
+
+      <div className="flex flex-1 flex-col gap-3 p-4">
+        <p className="font-display line-clamp-3 text-[15px] font-semibold leading-snug">{title}</p>
+      </div>
+    </>
+  );
+
+  const className =
+    "group flex flex-col overflow-hidden rounded-[1.75rem] border border-border/50 bg-gradient-to-b from-card/50 to-card/20 text-left text-foreground no-underline transition duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-[0_20px_60px_-30px_oklch(0.87_0.24_128_/_0.55)]";
+
+  if (row.href) {
+    return (
+      <a href={row.href} target="_blank" rel="noopener noreferrer" className={className}>
+        {inner}
+      </a>
+    );
+  }
+  return <article className={className}>{inner}</article>;
 }
 
 function Metric({

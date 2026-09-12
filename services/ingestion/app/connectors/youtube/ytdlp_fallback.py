@@ -353,8 +353,8 @@ async def _flat_playlist_fallback(
         vid = entry.get("id")
         if not vid:
             continue
-        posted = _posted_from_payload(entry) or datetime.now(UTC)
-        if not window.contains(posted):
+        posted = _posted_from_payload(entry)
+        if posted is None or not window.contains(posted):
             continue
         views = int(entry.get("view_count") or 0)
         likes = int(entry.get("like_count") or 0)
