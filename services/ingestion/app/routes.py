@@ -20,6 +20,7 @@ from app.schemas import (
     IngestionRunCreate,
     IngestionRunCreated,
     IngestionRunRead,
+    YoutubeStatusRead,
 )
 
 router = APIRouter()
@@ -109,3 +110,32 @@ async def list_accounts(
 async def list_posts(session: AsyncSession = Depends(get_session)) -> list[CompetitorPost]:
     result = await session.scalars(select(CompetitorPost))
     return list(result.all())
+
+
+@router.get("/youtube/status", response_model=YoutubeStatusRead)
+async def youtube_status() -> YoutubeStatusRead:
+    configured = bool(settings.youtube_api_key)
+    return YoutubeStatusRead(
+        api_key_configured=configured,
+        preferred_source="youtube_api" if configured else "yt_dlp",
+    )
+
+
+@router.get("/media/{media_key:path}")
+async def get_media(media_key: str) -> StreamingResponse:
+    """Serve downloaded post media from the object store."""
+    if ".." in media_key or not media_key.startswith("media/"):
+        raise HTTPException(status_code=400, detail="Invalid media key")
+    object_store = LocalDiskObjectStore(settings.object_store_root)
+    path = object_store.resolve_path(media_key)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Media not found")
+    suffix = path.suffix.lower()
+    media_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+    }.get(suffix, "application/octet-stream")
+    return StreamingResponse(object_store.open(media_key), media_type=media_type)

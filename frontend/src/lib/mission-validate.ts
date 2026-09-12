@@ -83,15 +83,24 @@ export function validateScout(
   runStatus?: string | null,
 ): FieldIssue[] {
   const issues: FieldIssue[] = [];
-  if (
+  const custom = Boolean(mission.dateFrom && mission.dateTo);
+  if (custom) {
+    if (mission.dateFrom! > mission.dateTo!) {
+      issues.push({
+        step: 1,
+        fieldId: "scout-lookback",
+        message: "Custom from date must be on or before the to date",
+      });
+    }
+  } else if (
     !Number.isFinite(mission.lookbackDays) ||
     mission.lookbackDays < 1 ||
-    mission.lookbackDays > 14
+    mission.lookbackDays > 90
   ) {
     issues.push({
       step: 1,
       fieldId: "scout-lookback",
-      message: "Set lookback days between 1 and 14 before scouting",
+      message: "Set lookback days between 1 and 90 before scouting",
     });
   }
   if (!mission.lastRunId) {

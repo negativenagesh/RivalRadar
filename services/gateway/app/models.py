@@ -69,3 +69,23 @@ class Draft(Base):
     @property
     def final_caption(self) -> str:
         return self.edited_caption if self.edited_caption is not None else self.caption
+
+
+class PlatformConnection(Base):
+    """OAuth token or encrypted cookie vault entry per workspace + platform."""
+
+    __tablename__ = "platform_connections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
+    platform: Mapped[str] = mapped_column(String(40), index=True)
+    auth_type: Mapped[str] = mapped_column(String(20))  # oauth | cookie | api_key
+    encrypted_blob: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(30), default="connected")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )

@@ -109,3 +109,24 @@ async def fetch_ingestion_screenshot(run_id: str, index: int) -> httpx.Response:
         response.raise_for_status()
     response.extensions["rivalradar_client"] = client
     return response
+
+
+
+async def fetch_youtube_status() -> dict[str, object]:
+    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
+        response = await client.get("/youtube/status")
+        response.raise_for_status()
+        result: dict[str, object] = response.json()
+        return result
+
+
+async def fetch_ingestion_media(media_key: str) -> httpx.Response:
+    client = httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=30.0)
+    request = client.build_request("GET", f"/media/{media_key}")
+    response = await client.send(request, stream=True)
+    if response.status_code >= 400:
+        await response.aclose()
+        await client.aclose()
+        response.raise_for_status()
+    response.extensions["rivalradar_client"] = client
+    return response

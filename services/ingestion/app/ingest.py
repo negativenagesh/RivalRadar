@@ -74,6 +74,10 @@ async def _upsert_posts(session: AsyncSession, connector: Connector) -> tuple[in
                 likes=raw["likes"],
                 comments=raw["comments"],
                 shares=raw["shares"],
+                views=int(raw.get("views") or 0),
+                media_urls=list(raw.get("media_urls") or []),
+                media_keys=list(raw.get("media_keys") or []),
+                comment_sample=list(raw.get("comment_sample") or []),
                 posted_at=datetime.fromisoformat(raw["posted_at"].replace("Z", "+00:00")),
             )
         )

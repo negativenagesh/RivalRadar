@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import PipelineRunStatus, ReviewState
 
@@ -45,3 +46,21 @@ class PipelineRunRead(BaseModel):
     draft_ids: list[str]
     error_detail: str | None
     created_at: datetime
+
+
+class ConnectionStatusRead(BaseModel):
+    platform: str
+    status: Literal["connected", "needs_reconnect", "not_connected"]
+    auth_type: str | None = None
+    expires_at: datetime | None = None
+    scopes: list[str] = Field(default_factory=list)
+    detail: str | None = None
+
+
+class ConnectionUpsert(BaseModel):
+    auth_type: Literal["oauth", "cookie", "api_key"] = "cookie"
+    # Opaque secrets — tokens or cookie JSON. Never passwords.
+    secret: dict[str, object] = Field(default_factory=dict)
+    expires_at: datetime | None = None
+    scopes: list[str] = Field(default_factory=list)
+    workspace_id: str = "default"

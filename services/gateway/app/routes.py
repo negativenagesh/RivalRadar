@@ -12,19 +12,29 @@ from starlette.websockets import WebSocketState
 from app.agent_events_bus import get_event_bus
 from app.clients import (
     fetch_ingestion_accounts,
+    fetch_ingestion_media,
     fetch_ingestion_posts,
     fetch_ingestion_recording,
     fetch_ingestion_run,
     fetch_ingestion_screenshot,
     fetch_latest_digest,
+    fetch_youtube_status,
     generate_creative_content,
     trigger_digest_generation,
     trigger_ingestion_run,
 )
 from app.db import get_session
-from app.models import Draft, PipelineRun, ReviewState
+from app.models import Draft, PipelineRun, PlatformConnection, ReviewState
 from app.runs import create_pipeline_run, execute_pipeline_run
-from app.schemas import DraftRead, EditRequest, PipelineRunCreated, PipelineRunRead
+from app.schemas import (
+    ConnectionStatusRead,
+    ConnectionUpsert,
+    DraftRead,
+    EditRequest,
+    PipelineRunCreated,
+    PipelineRunRead,
+)
+from app.vault import encrypt_json
 
 router = APIRouter()
 
@@ -207,3 +217,203 @@ async def reject_draft(draft_id: str, session: AsyncSession = Depends(get_sessio
     await session.commit()
     await session.refresh(draft)
     return draft
+
+
+
+_KNOWN_PLATFORMS = [
+    "youtube",
+    "meta",
+    "linkedin",
+    "x",
+    "tiktok",
+    "threads",
+    "instagram",
+    "facebook",
+]
+
+
+@router.get("/connections", response_model=list[ConnectionStatusRead])
+async def list_connections(
+    workspace_id: str = "default",
+    session: AsyncSession = Depends(get_session),
+) -> list[ConnectionStatusRead]:
+    rows = await session.scalars(
+        select(PlatformConnection).where(PlatformConnection.workspace_id == workspace_id)
+    )
+    by_platform = {r.platform: r for r in rows.all()}
+
+    youtube_detail = None
+    try:
+        yt = await fetch_youtube_status()
+        youtube_detail = "API key ready" if yt.get("api_key_configured") else "Using yt-dlp fallback"
+    except Exception:  # noqa: BLE001
+        youtube_detail = "Ingestion unreachable"
+
+    out: list[ConnectionStatusRead] = []
+    for platform in _KNOWN_PLATFORMS:
+        row = by_platform.get(platform)
+        if platform == "youtube" and youtube_detail and "API key ready" in (youtube_detail or ""):
+            out.append(
+                ConnectionStatusRead(
+                    platform=platform,
+                    status="connected",
+                    auth_type="api_key",
+                    detail=youtube_detail,
+                )
+            )
+            continue
+        if row is None:
+            out.append(
+                ConnectionStatusRead(
+                    platform=platform,
+                    status="not_connected",
+                    detail=youtube_detail if platform == "youtube" else None,
+                )
+            )
+            continue
+        status = row.status
+        if row.expires_at is not None:
+            from datetime import UTC, datetime
+
+            if row.expires_at < datetime.now(UTC):
+                status = "needs_reconnect"
+        out.append(
+            ConnectionStatusRead(
+                platform=row.platform,
+                status=status,  # type: ignore[arg-type]
+                auth_type=row.auth_type,
+                expires_at=row.expires_at,
+                scopes=list(row.scopes or []),
+                detail=None,
+            )
+        )
+    return out
+
+
+@router.get("/connections/{platform}", response_model=ConnectionStatusRead)
+async def get_connection(
+    platform: str,
+    workspace_id: str = "default",
+    session: AsyncSession = Depends(get_session),
+) -> ConnectionStatusRead:
+    platform = platform.lower()
+    all_rows = await session.scalars(
+        select(PlatformConnection).where(PlatformConnection.workspace_id == workspace_id)
+    )
+    row = next((r for r in all_rows.all() if r.platform == platform), None)
+    if platform == "youtube":
+        try:
+            yt = await fetch_youtube_status()
+            if yt.get("api_key_configured"):
+                return ConnectionStatusRead(
+                    platform=platform,
+                    status="connected",
+                    auth_type="api_key",
+                    detail="API key ready",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+    if row is None:
+        return ConnectionStatusRead(platform=platform, status="not_connected")
+    status = row.status
+    if row.expires_at is not None:
+        from datetime import UTC, datetime
+
+        if row.expires_at < datetime.now(UTC):
+            status = "needs_reconnect"
+    return ConnectionStatusRead(
+        platform=row.platform,
+        status=status,  # type: ignore[arg-type]
+        auth_type=row.auth_type,
+        expires_at=row.expires_at,
+        scopes=list(row.scopes or []),
+    )
+
+
+
+@router.post("/connections/{platform}", response_model=ConnectionStatusRead)
+async def upsert_connection(
+    platform: str,
+    body: ConnectionUpsert,
+    session: AsyncSession = Depends(get_session),
+) -> ConnectionStatusRead:
+    """Store encrypted OAuth token / cookie vault material — never passwords."""
+    platform = platform.lower()
+    if "password" in {str(k).lower() for k in body.secret}:
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords are not accepted — use OAuth or Connect session cookies",
+        )
+    blob = encrypt_json(dict(body.secret))
+    existing = await session.scalar(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == body.workspace_id,
+            PlatformConnection.platform == platform,
+        )
+    )
+    if existing is None:
+        existing = PlatformConnection(
+            workspace_id=body.workspace_id,
+            platform=platform,
+            auth_type=body.auth_type,
+            encrypted_blob=blob,
+            expires_at=body.expires_at,
+            scopes=list(body.scopes),
+            status="connected",
+        )
+        session.add(existing)
+    else:
+        existing.auth_type = body.auth_type
+        existing.encrypted_blob = blob
+        existing.expires_at = body.expires_at
+        existing.scopes = list(body.scopes)
+        existing.status = "connected"
+    await session.commit()
+    await session.refresh(existing)
+    return ConnectionStatusRead(
+        platform=existing.platform,
+        status="connected",
+        auth_type=existing.auth_type,
+        expires_at=existing.expires_at,
+        scopes=list(existing.scopes or []),
+    )
+
+
+@router.delete("/connections/{platform}", status_code=204)
+async def delete_connection(
+    platform: str,
+    workspace_id: str = "default",
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    platform = platform.lower()
+    row = await session.scalar(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == workspace_id,
+            PlatformConnection.platform == platform,
+        )
+    )
+    if row is not None:
+        await session.delete(row)
+        await session.commit()
+
+
+@router.get("/ingestion/media/{media_key:path}")
+async def download_ingestion_media(media_key: str) -> StreamingResponse:
+    try:
+        upstream = await fetch_ingestion_media(media_key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Media not found") from exc
+
+    client = upstream.extensions.get("rivalradar_client")
+
+    async def stream() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            if client is not None:
+                await client.aclose()
+
+    content_type = upstream.headers.get("content-type", "application/octet-stream")
+    return StreamingResponse(stream(), media_type=content_type)

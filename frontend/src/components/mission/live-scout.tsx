@@ -1,8 +1,16 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Circle, Download, Maximize2, Radio, X } from "lucide-react";
+import {
+  Circle,
+  Download,
+  ExternalLink,
+  Maximize2,
+  Radio,
+  X,
+} from "lucide-react";
 
+import { ConnectCenter } from "@/components/mission/connect-center";
 import { Button } from "@/components/ui/button";
 import { ingestionRecordingUrl } from "@/lib/api";
 import type { MissionTargetPreview } from "@/lib/mission-store";
@@ -10,18 +18,138 @@ import type { AgentEvent, IngestionRun } from "@/lib/types";
 
 const LOOKBACK_PRESETS = [1, 3, 7, 14] as const;
 
-type Shot = { id: string; b64: string; platform: string; label: string; url: string };
+const PLATFORM_LABELS: Record<string, string> = {
+  linkedin: "LinkedIn",
+  x: "X",
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  threads: "Threads",
+  mock: "Mock feed",
+  web: "Web",
+};
 
-function shotsFromEvents(events: AgentEvent[]): Shot[] {
+const SOURCE_LABELS: Record<string, string> = {
+  "youtube-api": "YouTube API",
+  "yt-dlp": "yt-dlp",
+  browser: "Browser",
+  "mock-browser": "Mock",
+};
+
+type Shot = {
+  id: string;
+  b64: string;
+  platform: string;
+  label: string;
+  url: string;
+  company: string;
+};
+
+function platformName(key: string): string {
+  return PLATFORM_LABELS[key.toLowerCase()] ?? key;
+}
+
+function sourceName(key: string): string {
+  return SOURCE_LABELS[key] ?? key;
+}
+
+function externalHref(t: MissionTargetPreview): string | null {
+  if (t.url?.startsWith("http")) return t.url;
+  if (t.platform === "mock") return null;
+  const handle = t.handleOrUrl.replace(/^@/, "");
+  if (!handle) return null;
+  if (t.platform === "youtube") return `https://www.youtube.com/@${handle}`;
+  if (t.platform === "x") return `https://x.com/${handle}`;
+  if (t.platform === "instagram") return `https://instagram.com/${handle}`;
+  if (t.platform === "linkedin") return `https://linkedin.com/company/${handle}`;
+  if (t.platform === "tiktok") return `https://tiktok.com/@${handle}`;
+  if (t.platform === "threads") return `https://threads.net/@${handle}`;
+  return null;
+}
+
+function TargetChip({ t }: { t: MissionTargetPreview }) {
+  const href = externalHref(t);
+  const inner = (
+    <>
+      <span className="font-display font-semibold">{platformName(t.platform)}</span>
+      <span className="font-ui text-muted-foreground">@{t.handleOrUrl.replace(/^@/, "")}</span>
+      <span className="font-ui rounded-full bg-background/70 px-1.5 py-0.5 text-[10px] text-primary">
+        {sourceName(t.source)}
+      </span>
+      {href ? <ExternalLink className="size-3 opacity-70" aria-hidden /> : null}
+    </>
+  );
+
+  const className =
+    "inline-flex items-center gap-2 rounded-full border border-border/50 bg-background/70 px-3.5 py-2 text-xs transition hover:-translate-y-0.5 hover:border-primary/50 hover:bg-primary/10 hover:shadow-[0_0_24px_-12px_oklch(0.87_0.24_128)]";
+
+  if (!href) {
+    return <span className={className}>{inner}</span>;
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+      title={`Open ${platformName(t.platform)} profile`}
+    >
+      {inner}
+    </a>
+  );
+}
+
+function shotsFromEvents(events: AgentEvent[], targets: MissionTargetPreview[]): Shot[] {
   return events
     .filter((e) => e.step_type === "screenshot" && typeof e.payload.jpeg_b64 === "string")
-    .map((e, i) => ({
-      id: `${e.sequence}-${i}`,
-      b64: String(e.payload.jpeg_b64),
-      platform: String(e.payload.platform ?? "scout"),
-      label: String(e.payload.label ?? e.payload.url ?? `frame ${i + 1}`),
-      url: String(e.payload.url ?? ""),
-    }));
+    .map((e, i) => {
+      const platform = String(e.payload.platform ?? "scout");
+      const label = String(e.payload.label ?? e.payload.url ?? `frame ${i + 1}`);
+      const url = String(e.payload.url ?? "");
+      const match =
+        targets.find((t) => t.url && url && (url.includes(t.url) || t.url.includes(url))) ||
+        targets.find(
+          (t) =>
+            t.platform.toLowerCase() === platform.toLowerCase() &&
+            (label.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, "")) ||
+              url.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, ""))),
+        ) ||
+        targets.find((t) => t.platform.toLowerCase() === platform.toLowerCase());
+      return {
+        id: `${e.sequence}-${i}`,
+        b64: String(e.payload.jpeg_b64),
+        platform,
+        label,
+        url,
+        company: match?.label ?? String(e.payload.company ?? "Scout"),
+      };
+    });
+}
+
+
+type YtDlpIntel = {
+  channel_title: string;
+  videos: { title: string; views: number; likes: number; comments: number; posted_at: string; url: string }[];
+  date_from?: string;
+  date_to?: string;
+};
+
+function ytdlpIntelFromEvents(events: AgentEvent[]): YtDlpIntel | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const e = events[i];
+    if (e.step_type === "artifact" && e.payload?.kind === "ytdlp_intel") {
+      return {
+        channel_title: String(e.payload.channel_title ?? "YouTube"),
+        videos: Array.isArray(e.payload.videos)
+          ? (e.payload.videos as YtDlpIntel["videos"])
+          : [],
+        date_from: e.payload.date_from ? String(e.payload.date_from) : undefined,
+        date_to: e.payload.date_to ? String(e.payload.date_to) : undefined,
+      };
+    }
+  }
+  return null;
 }
 
 export function LiveScout({
@@ -29,6 +157,9 @@ export function LiveScout({
   onRecordChange,
   lookbackDays,
   onLookbackChange,
+  dateFrom,
+  dateTo,
+  onCustomRangeChange,
   targets,
   onStart,
   starting,
@@ -43,6 +174,9 @@ export function LiveScout({
   onRecordChange: (v: boolean) => void;
   lookbackDays: number;
   onLookbackChange: (days: number) => void;
+  dateFrom: string | null;
+  dateTo: string | null;
+  onCustomRangeChange: (from: string | null, to: string | null) => void;
   targets: MissionTargetPreview[];
   onStart: () => void;
   starting: boolean;
@@ -58,7 +192,20 @@ export function LiveScout({
   const [replayOpen, setReplayOpen] = useState(false);
   const [lightbox, setLightbox] = useState<Shot | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const shots = useMemo(() => shotsFromEvents(events), [events]);
+  const shots = useMemo(() => shotsFromEvents(events, targets), [events, targets]);
+  const ytdlpIntel = useMemo(() => ytdlpIntelFromEvents(events), [events]);
+
+  const brandTargets = useMemo(() => targets.filter((t) => t.role === "brand"), [targets]);
+  const rivalRows = useMemo(() => {
+    const map = new Map<string, MissionTargetPreview[]>();
+    for (const t of targets) {
+      if (t.role !== "rival") continue;
+      const list = map.get(t.label) ?? [];
+      list.push(t);
+      map.set(t.label, list);
+    }
+    return [...map.entries()];
+  }, [targets]);
 
   const enterFullscreen = useCallback(() => {
     const el = videoRef.current;
@@ -100,9 +247,12 @@ export function LiveScout({
             <button
               key={d}
               type="button"
-              onClick={() => onLookbackChange(d)}
+              onClick={() => {
+                onCustomRangeChange(null, null);
+                onLookbackChange(d);
+              }}
               className={
-                lookbackDays === d
+                !dateFrom && lookbackDays === d
                   ? "font-ui rounded-full border border-primary bg-primary/20 px-4 py-2 text-sm font-bold text-primary"
                   : "font-ui rounded-full border border-border/60 px-4 py-2 text-sm text-muted-foreground hover:border-primary/40"
               }
@@ -111,24 +261,88 @@ export function LiveScout({
             </button>
           ))}
         </div>
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          <label className="font-ui text-xs text-muted-foreground">
+            From
+            <input
+              type="date"
+              value={dateFrom ?? ""}
+              onChange={(e) => onCustomRangeChange(e.target.value || null, dateTo)}
+              className="ml-2 rounded-lg border border-border/60 bg-background px-2 py-1 text-sm text-foreground"
+            />
+          </label>
+          <label className="font-ui text-xs text-muted-foreground">
+            To
+            <input
+              type="date"
+              value={dateTo ?? ""}
+              onChange={(e) => onCustomRangeChange(dateFrom, e.target.value || null)}
+              className="ml-2 rounded-lg border border-border/60 bg-background px-2 py-1 text-sm text-foreground"
+            />
+          </label>
+          {(dateFrom || dateTo) && (
+            <button
+              type="button"
+              className="font-ui text-xs text-primary underline"
+              onClick={() => onCustomRangeChange(null, null)}
+            >
+              Clear custom
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="rounded-3xl border border-border/60 bg-card/40 px-4 py-4 text-left">
-        <p className="font-ui mb-3 text-center text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">
+      <ConnectCenter targets={targets} />
+
+      <div className="mx-auto w-full max-w-3xl rounded-3xl border border-border/60 bg-gradient-to-b from-card/50 to-card/20 px-6 py-6 text-center shadow-[inset_0_1px_0_oklch(1_0_0_/_0.04)]">
+        <p className="font-ui mb-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
           mission targets · all platforms
         </p>
-        <ul className="flex flex-wrap justify-center gap-2">
-          {targets.map((t) => (
-            <li
-              key={`${t.platform}-${t.handleOrUrl}-${t.label}`}
-              className="rounded-2xl border border-border/50 bg-background/60 px-3 py-2 text-xs"
-            >
-              <span className="font-display font-semibold">{t.label}</span>
-              <span className="text-muted-foreground"> · {t.platform}</span>
-              <span className="font-ui ml-1 text-[10px] text-primary">{t.source}</span>
-            </li>
-          ))}
-        </ul>
+        <p className="font-accent mb-5 text-sm italic text-muted-foreground">
+          Tap a chip to open that profile in a new tab.
+        </p>
+
+        {brandTargets.length > 0 && (
+          <div className="mb-6 space-y-3">
+            <p className="font-ui text-[10px] font-bold uppercase tracking-[0.18em] text-primary">
+              Your company
+            </p>
+            <p className="font-display text-xl font-bold sm:text-2xl">{brandTargets[0]?.label}</p>
+            <ul className="flex flex-wrap items-center justify-center gap-2">
+              {brandTargets.map((t) => (
+                <li key={`brand-${t.platform}-${t.handleOrUrl}`}>
+                  <TargetChip t={t} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {rivalRows.length > 0 && (
+          <div className="space-y-5 border-t border-border/40 pt-5">
+            <p className="font-ui text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+              Rivals
+            </p>
+            {rivalRows.map(([name, platforms]) => (
+              <div key={name} className="space-y-2.5">
+                <p className="font-display text-lg font-bold">{name}</p>
+                <ul className="flex flex-wrap items-center justify-center gap-2">
+                  {platforms.map((t) => (
+                    <li key={`rival-${name}-${t.platform}-${t.handleOrUrl}`}>
+                      <TargetChip t={t} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {brandTargets.length === 0 && rivalRows.length === 0 && (
+          <p className="font-accent text-sm italic text-muted-foreground">
+            Add social links in Context — they show up here as clickable targets.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-center gap-4">
@@ -200,11 +414,40 @@ export function LiveScout({
         </div>
       </div>
 
-      {shots.length > 0 && (
-        <div className="space-y-3 text-left">
+      
+      {ytdlpIntel && (
+        <div className="space-y-3 rounded-3xl border border-border/60 bg-black/40 p-5 text-left font-mono text-xs">
+          <h3 className="font-display text-center text-xl font-bold text-primary">yt-dlp intel</h3>
+          <p className="font-ui text-center text-[11px] text-muted-foreground">
+            {ytdlpIntel.channel_title}
+            {ytdlpIntel.date_from && ytdlpIntel.date_to
+              ? ` · ${ytdlpIntel.date_from} → ${ytdlpIntel.date_to}`
+              : ""}{" "}
+            · text only (no screenshots)
+          </p>
+          <ul className="max-h-72 space-y-2 overflow-y-auto">
+            {ytdlpIntel.videos.map((v) => (
+              <li key={v.url} className="rounded-xl border border-border/40 px-3 py-2">
+                <a href={v.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  {v.title}
+                </a>
+                <p className="text-muted-foreground">
+                  {v.views.toLocaleString()} views · {v.likes} likes · {v.comments} comments · {v.posted_at.slice(0, 10)}
+                </p>
+              </li>
+            ))}
+            {ytdlpIntel.videos.length === 0 && (
+              <li className="text-muted-foreground">No uploads in window</li>
+            )}
+          </ul>
+        </div>
+      )}
+
+{shots.length > 0 && (
+        <div className="space-y-4 text-left">
           <h3 className="font-display text-center text-2xl font-bold">Screenshot reel</h3>
           <p className="font-accent text-center text-sm italic text-muted-foreground">
-            One-by-one captures from each platform hop — tap to expand.
+            One-by-one captures — company + platform on each tile. Tap to expand.
           </p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
             {shots.map((s) => (
@@ -217,11 +460,14 @@ export function LiveScout({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={`data:image/jpeg;base64,${s.b64}`}
-                  alt={s.label}
+                  alt={`${s.company} ${s.platform}`}
                   className="aspect-video w-full object-cover"
                 />
-                <div className="font-ui space-y-0.5 p-2 text-[10px]">
-                  <p className="font-semibold uppercase text-primary">{s.platform}</p>
+                <div className="font-ui space-y-0.5 p-2.5 text-[10px]">
+                  <p className="font-display truncate text-xs font-bold">{s.company}</p>
+                  <p className="font-semibold uppercase tracking-wide text-primary">
+                    {platformName(s.platform)}
+                  </p>
                   <p className="truncate text-muted-foreground">{s.label}</p>
                 </div>
               </button>
@@ -231,12 +477,12 @@ export function LiveScout({
       )}
 
       {recordingReady && runId && (
-        <div className="space-y-4 rounded-3xl border border-primary/30 bg-primary/5 p-6">
+        <div className="mx-auto w-full max-w-3xl space-y-4 rounded-3xl border border-primary/30 bg-primary/5 p-6 text-center">
           <h3 className="font-shout text-2xl uppercase">Session replay</h3>
           <p className="font-accent text-sm italic text-muted-foreground">
             Control center — play inline or go fullscreen.
           </p>
-          <div className="overflow-hidden rounded-2xl border border-border/60 bg-black">
+          <div className="overflow-hidden rounded-2xl border border-border/60 bg-black text-left">
             <video
               ref={videoRef}
               src={ingestionRecordingUrl(runId)}
@@ -303,8 +549,25 @@ export function LiveScout({
               className="max-h-[80vh] w-full rounded-2xl object-contain"
             />
             <p className="font-ui mt-3 text-center text-sm text-primary">
-              {lightbox.platform} · {lightbox.label}
+              <span className="font-display font-bold text-foreground">{lightbox.company}</span>
+              {" · "}
+              {platformName(lightbox.platform)}
+              {" · "}
+              {lightbox.label}
             </p>
+            {lightbox.url ? (
+              <p className="mt-2 text-center">
+                <a
+                  href={lightbox.url.startsWith("http") ? lightbox.url : `https://${lightbox.url}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-ui inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                >
+                  Open captured page
+                  <ExternalLink className="size-3" />
+                </a>
+              </p>
+            ) : null}
           </div>
         </div>
       )}

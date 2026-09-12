@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from app.connectors.base import RawAccount, RawPost
+from app.connectors.youtube.media import best_thumbnail_url
+from app.date_window import DateWindow
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,7 @@ class YtDlpError(RuntimeError):
 async def fetch_channel_via_ytdlp(
     url_or_handle: str,
     *,
-    lookback_days: int,
+    window: DateWindow,
     max_entries: int = 25,
 ) -> tuple[RawAccount, list[RawPost]]:
     """Extract channel + recent uploads via yt-dlp flat playlist JSON.
@@ -63,7 +65,6 @@ async def fetch_channel_via_ytdlp(
         handle = f"@{handle}"
     account = RawAccount(handle=handle[:100], display_name=str(title)[:200], platform="youtube")
 
-    cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
     posts: list[RawPost] = []
     entries: list[dict[str, Any]] = payload.get("entries") or []
     for entry in entries:
@@ -76,7 +77,7 @@ async def fetch_channel_via_ytdlp(
         posted = (
             datetime.fromtimestamp(int(ts), tz=UTC) if ts is not None else datetime.now(UTC)
         )
-        if posted < cutoff:
+        if not window.contains(posted):
             continue
         views = int(entry.get("view_count") or 0)
         likes = int(entry.get("like_count") or 0)
@@ -87,18 +88,23 @@ async def fetch_channel_via_ytdlp(
         thumbs = entry.get("thumbnails") or []
         if thumbs:
             thumb = thumbs[-1].get("url")
+        if not thumb:
+            thumb = best_thumbnail_url(str(vid))
+        watch = f"https://www.youtube.com/watch?v={vid}"
         posts.append(
             RawPost(
                 account_handle=account["handle"],
                 external_post_id=str(vid),
                 format="founder_post",
-                theme_tags=["youtube", "video", "source:yt_dlp", f"views:{views}"],
+                theme_tags=["youtube", "video", "source:yt_dlp", f"views:{views}", f"link:{watch}"],
                 caption=f"{vtitle}\n\n{desc}".strip(),
                 image_url=thumb,
                 likes=likes,
                 comments=comments,
-                shares=views,
+                shares=0,
                 posted_at=posted.isoformat().replace("+00:00", "Z"),
+                views=views,
+                media_urls=[thumb] if thumb else [],
             )
         )
     return account, posts

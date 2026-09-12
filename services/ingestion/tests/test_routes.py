@@ -22,14 +22,14 @@ async def test_trigger_ingestion_endpoint(client: AsyncClient) -> None:
 
     run = await _wait_for_run_done(client, run_id)
     assert run["status"] == "done"
-    assert run["result"] == {
-        "accounts_ingested": 3,
-        "posts_ingested": 10,
-        "posts_skipped_duplicate": 0,
-        "lookback_days": 3,
-        "sources_used": [],
-        "screenshots": [],
-    }
+    result = run["result"]
+    assert result["accounts_ingested"] == 3
+    assert result["posts_ingested"] == 10
+    assert result["posts_skipped_duplicate"] == 0
+    assert result["lookback_days"] == 3
+    assert result["sources_used"] == []
+    assert result["screenshots"] == []
+    assert "date_from" in result and "date_to" in result
 
 
 async def test_list_accounts_and_posts_after_ingestion(client: AsyncClient) -> None:

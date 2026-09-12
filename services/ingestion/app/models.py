@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -47,6 +48,10 @@ class CompetitorPost(Base):
     likes: Mapped[int] = mapped_column(Integer, default=0)
     comments: Mapped[int] = mapped_column(Integer, default=0)
     shares: Mapped[int] = mapped_column(Integer, default=0)
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    media_urls: Mapped[list[str]] = mapped_column(JSON, default=list)
+    media_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
+    comment_sample: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
@@ -54,7 +59,8 @@ class CompetitorPost(Base):
 
     @property
     def engagement_score(self) -> int:
-        return self.likes + self.comments * 3 + self.shares * 5
+        # views weighted lightly so YouTube heat stays useful without stuffing views into shares
+        return self.likes + self.comments * 3 + self.shares * 5 + max(0, self.views // 100)
 
     @property
     def themes(self) -> list[str]:

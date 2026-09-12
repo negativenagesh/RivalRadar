@@ -4,6 +4,7 @@ import httpx
 import pytest
 from app.connectors.youtube.api import YouTubeDataClient, channel_to_raw_account, video_to_raw_post
 from app.connectors.youtube.parse import parse_youtube_ref
+from app.date_window import DateWindow
 
 
 def test_parse_youtube_at_handle() -> None:
@@ -105,7 +106,7 @@ async def test_youtube_client_resolves_and_filters_lookback() -> None:
     async with httpx.AsyncClient(transport=transport) as http:
         client = YouTubeDataClient("fake-key", client=http)
         channel = await client.resolve_channel(handle="acme", channel_id=None)
-        videos = await client.fetch_recent_videos(channel, lookback_days=3)
+        videos = await client.fetch_recent_videos(channel, window=DateWindow.from_lookback(3))
 
     assert channel["id"] == "UCtest"
     assert len(videos) == 1
@@ -115,4 +116,5 @@ async def test_youtube_client_resolves_and_filters_lookback() -> None:
     post = video_to_raw_post(videos[0], account_handle=account["handle"], source="youtube_api")
     assert account["platform"] == "youtube"
     assert "source:youtube_api" in post["theme_tags"]
-    assert post["shares"] == 1000
+    assert post["views"] == 1000
+    assert post["shares"] == 0

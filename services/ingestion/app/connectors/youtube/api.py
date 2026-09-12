@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import httpx
 
 from app.connectors.base import RawAccount, RawPost
+from app.connectors.youtube.media import best_thumbnail_url
+from app.date_window import DateWindow
 
 API_BASE = "https://www.googleapis.com/youtube/v3"
 
@@ -50,7 +52,6 @@ class YouTubeDataClient:
             )
         items = data.get("items") or []
         if not items:
-            # Fallback search for older custom URLs
             search = await self._get(
                 "search",
                 {"part": "snippet", "type": "channel", "q": handle.lstrip("@"), "maxResults": "1"},
@@ -70,7 +71,7 @@ class YouTubeDataClient:
         self,
         channel: dict[str, Any],
         *,
-        lookback_days: int,
+        window: DateWindow,
         max_results: int = 25,
     ) -> list[dict[str, Any]]:
         uploads = (
@@ -101,12 +102,11 @@ class YouTubeDataClient:
                 "id": ",".join(video_ids),
             },
         )
-        cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
         kept: list[dict[str, Any]] = []
         for item in details.get("items") or []:
             published = item["snippet"]["publishedAt"]
             posted = datetime.fromisoformat(published.replace("Z", "+00:00"))
-            if posted >= cutoff:
+            if window.contains(posted):
                 kept.append(item)
         return kept
 
@@ -133,22 +133,29 @@ def video_to_raw_post(
     title = snippet.get("title") or "Untitled"
     desc = (snippet.get("description") or "")[:400]
     thumbs = snippet.get("thumbnails") or {}
-    thumb = (
-        (thumbs.get("high") or thumbs.get("medium") or thumbs.get("default") or {}).get("url")
-    )
+    thumb = best_thumbnail_url(video["id"], thumbs)
     likes = int(stats.get("likeCount") or 0)
     comments = int(stats.get("commentCount") or 0)
     views = int(stats.get("viewCount") or 0)
     published = snippet["publishedAt"]
+    watch = f"https://www.youtube.com/watch?v={video['id']}"
     return RawPost(
         account_handle=account_handle,
         external_post_id=video["id"],
         format="founder_post",
-        theme_tags=["youtube", "video", f"source:{source}", f"views:{views}"],
+        theme_tags=[
+            "youtube",
+            "video",
+            f"source:{source}",
+            f"views:{views}",
+            f"link:{watch}",
+        ],
         caption=f"{title}\n\n{desc}".strip(),
         image_url=thumb,
         likes=likes,
         comments=comments,
-        shares=views,  # views ride in shares slot for heat scoring until schema expands
+        shares=0,
         posted_at=published,
+        views=views,
+        media_urls=[thumb] if thumb else [],
     )

@@ -1,5 +1,7 @@
 from collections.abc import AsyncGenerator
+from contextlib import suppress
 
+from sqlalchemy import Connection, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -22,3 +24,17 @@ async def get_session() -> AsyncGenerator[AsyncSession]:
 async def init_models() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_post_columns)
+
+
+def _ensure_post_columns(sync_conn: Connection) -> None:
+    """Add media/metrics columns on existing DBs (create_all does not alter)."""
+    statements = [
+        "ALTER TABLE competitor_posts ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0",
+        "ALTER TABLE competitor_posts ADD COLUMN IF NOT EXISTS media_urls JSON DEFAULT '[]'",
+        "ALTER TABLE competitor_posts ADD COLUMN IF NOT EXISTS media_keys JSON DEFAULT '[]'",
+        "ALTER TABLE competitor_posts ADD COLUMN IF NOT EXISTS comment_sample JSON DEFAULT '[]'",
+    ]
+    for stmt in statements:
+        with suppress(Exception):
+            sync_conn.execute(text(stmt))

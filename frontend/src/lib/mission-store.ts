@@ -75,6 +75,8 @@ export const DEFAULT_MISSION: MissionState = {
   permissions: DEFAULT_PERMISSIONS,
   recordSession: true,
   lookbackDays: 3,
+  dateFrom: null,
+  dateTo: null,
   lastRunId: null,
 };
 
@@ -89,8 +91,10 @@ export function loadMission(): MissionState {
       ...parsed,
       lookbackDays:
         typeof parsed.lookbackDays === "number" && parsed.lookbackDays >= 1
-          ? Math.min(14, parsed.lookbackDays)
+          ? Math.min(90, parsed.lookbackDays)
           : 3,
+      dateFrom: typeof parsed.dateFrom === "string" ? parsed.dateFrom : null,
+      dateTo: typeof parsed.dateTo === "string" ? parsed.dateTo : null,
     };
   } catch {
     return structuredClone(DEFAULT_MISSION);
@@ -106,7 +110,9 @@ export type MissionTargetPreview = {
   label: string;
   platform: string;
   handleOrUrl: string;
+  url?: string;
   source: "youtube-api" | "yt-dlp" | "browser" | "mock-browser";
+  role: "brand" | "rival";
 };
 
 function ensureHttp(url: string): string {
@@ -131,6 +137,7 @@ function handleFromSocial(platform: SocialKey, url: string): string {
 function collectSocialTargets(
   label: string,
   socials: BrandProfile["socials"],
+  role: "brand" | "rival",
 ): { preview: MissionTargetPreview; target: IngestionTarget }[] {
   const out: { preview: MissionTargetPreview; target: IngestionTarget }[] = [];
   for (const key of SOCIAL_KEYS) {
@@ -143,7 +150,9 @@ function collectSocialTargets(
         label,
         platform: key,
         handleOrUrl: handle,
+        url,
         source: key === "youtube" ? "youtube-api" : "browser",
+        role,
       },
       target: {
         handle,
@@ -158,11 +167,15 @@ function collectSocialTargets(
 /** Visible Mission targets derived from Context (Operator strip). */
 export function buildMissionTargets(state: MissionState): MissionTargetPreview[] {
   const out: MissionTargetPreview[] = [];
-  out.push(...collectSocialTargets(state.brand.displayName || "Brand", state.brand.socials).map((x) => x.preview));
+  out.push(
+    ...collectSocialTargets(state.brand.displayName || "Brand", state.brand.socials, "brand").map(
+      (x) => x.preview,
+    ),
+  );
 
   state.competitors.forEach((c, idx) => {
     const label = c.name || `Rival ${idx + 1}`;
-    const socials = collectSocialTargets(label, c.socials);
+    const socials = collectSocialTargets(label, c.socials, "rival");
     if (socials.length) {
       out.push(...socials.map((x) => x.preview));
       return;
@@ -173,6 +186,7 @@ export function buildMissionTargets(state: MissionState): MissionTargetPreview[]
         platform: "mock",
         handleOrUrl: MOCK_HANDLES[idx % MOCK_HANDLES.length],
         source: "mock-browser",
+        role: "rival",
       });
     }
   });
@@ -184,6 +198,7 @@ export function buildMissionTargets(state: MissionState): MissionTargetPreview[]
         platform: "mock",
         handleOrUrl: handle,
         source: "mock-browser",
+        role: "rival",
       });
     });
   }
@@ -197,6 +212,8 @@ export function missionToIngestionPayload(state: MissionState): {
   record: boolean;
   headless: boolean;
   lookback_days: number;
+  date_from?: string | null;
+  date_to?: string | null;
 } {
   const targets: IngestionTarget[] = [];
   const seen = new Set<string>();
@@ -208,12 +225,12 @@ export function missionToIngestionPayload(state: MissionState): {
     targets.push(t);
   }
 
-  for (const item of collectSocialTargets("brand", state.brand.socials)) {
+  for (const item of collectSocialTargets("brand", state.brand.socials, "brand")) {
     push(item.target);
   }
 
   state.competitors.forEach((c, idx) => {
-    const socials = collectSocialTargets(c.name || `rival-${idx}`, c.socials);
+    const socials = collectSocialTargets(c.name || `rival-${idx}`, c.socials, "rival");
     if (socials.length) {
       socials.forEach((s) => push(s.target));
       return;
@@ -230,12 +247,14 @@ export function missionToIngestionPayload(state: MissionState): {
     MOCK_HANDLES.forEach((handle) => push({ handle, platform: "mock" }));
   }
 
+  const custom = Boolean(state.dateFrom && state.dateTo);
   return {
     connector: "auto",
     targets,
     record: state.recordSession,
     headless: true,
     lookback_days: state.lookbackDays,
+    ...(custom ? { date_from: state.dateFrom, date_to: state.dateTo } : {}),
   };
 }
 
