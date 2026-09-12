@@ -130,7 +130,6 @@ class YouTubeConnector:
             await self._emit("error", {"detail": f"Invalid YouTube target: {target.handle}"})
             return
 
-        await self._emit("action", {"detail": "resolve_channel", "handle": ref.handle})
         account: RawAccount | None = None
         posts: list[RawPost] = []
         source = "youtube_api"
@@ -141,7 +140,6 @@ class YouTubeConnector:
                     channel = await client.resolve_channel(
                         handle=ref.handle, channel_id=ref.channel_id
                     )
-                    await self._emit("action", {"detail": "list_uploads", "channel_id": channel["id"]})
                     videos = await client.fetch_recent_videos(channel, window=self._window)
                     account = channel_to_raw_account(channel, source)
                     posts = [
@@ -157,7 +155,6 @@ class YouTubeConnector:
             source = "yt_dlp"
             try:
                 url = ref.url or f"https://www.youtube.com/@{ref.handle}"
-                await self._emit("action", {"detail": "yt_dlp_fallback", "url": url})
                 account, posts = await fetch_channel_via_ytdlp(url, window=self._window)
                 self._sources_used.append("yt_dlp")
             except YtDlpError as exc:
@@ -166,18 +163,6 @@ class YouTubeConnector:
 
         self._accounts.append(account)
         self._posts.extend(posts)
-        await self._emit(
-            "action",
-            {
-                "detail": "ingest_video",
-                "handle": account["handle"],
-                "count": len(posts),
-                "source": source,
-                "lookback_days": self._lookback_days,
-                "date_from": self._window.date_from.isoformat(),
-                "date_to": self._window.date_to.isoformat(),
-            },
-        )
 
     async def _emit_ytdlp_intel(self) -> None:
         """Text intel panel payload — no screenshots for yt-dlp hops."""
@@ -212,15 +197,6 @@ class YouTubeConnector:
                 "videos": videos,
                 "date_from": self._window.date_from.isoformat(),
                 "date_to": self._window.date_to.isoformat(),
-            },
-        )
-        await self._emit(
-            "log",
-            {
-                "message": (
-                    f"yt-dlp intel: {len(videos)} videos · "
-                    f"{self._window.date_from} → {self._window.date_to} (no screenshots)"
-                )
             },
         )
 

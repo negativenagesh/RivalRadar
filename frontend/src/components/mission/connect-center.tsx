@@ -1,51 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, ExternalLink, Lock, Unplug } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { deleteConnection, listConnections, upsertConnection } from "@/lib/api";
-import type { MissionTargetPreview } from "@/lib/mission-store";
+import {
+  PLATFORM_HOME,
+  PLATFORM_LABELS,
+  requiredConnectPlatforms,
+  type MissionTargetPreview,
+} from "@/lib/mission-store";
 import type { ConnectionStatus } from "@/lib/types";
 
-const PRIMARY = [
-  {
-    id: "youtube",
-    label: "YouTube",
-    hint: "Uses workspace API key, or yt-dlp text intel",
-    mode: "api_key" as const,
-    cta: "Check YouTube",
-  },
-  {
-    id: "meta",
-    label: "Meta",
-    hint: "Instagram + Facebook via Meta OAuth",
-    mode: "oauth" as const,
-    cta: "Connect Meta",
-  },
-  {
-    id: "linkedin",
-    label: "LinkedIn",
-    hint: "Official LinkedIn OAuth",
-    mode: "oauth" as const,
-    cta: "Connect LinkedIn",
-  },
-  {
-    id: "x",
-    label: "X",
-    hint: "Official X OAuth",
-    mode: "oauth" as const,
-    cta: "Connect X",
-  },
-  {
-    id: "tiktok",
-    label: "TikTok",
-    hint: "One-time Connect session (cookies, not passwords)",
-    mode: "cookie" as const,
-    cta: "Connect session",
-  },
-] as const;
-
-type PlatformId = (typeof PRIMARY)[number]["id"];
+type PlatformId = string;
 
 function statusTone(status: ConnectionStatus["status"]): string {
   if (status === "connected") return "text-primary";
@@ -53,22 +21,69 @@ function statusTone(status: ConnectionStatus["status"]): string {
   return "text-muted-foreground";
 }
 
-function statusLabel(status: ConnectionStatus["status"]): string {
-  return status.replace(/_/g, " ");
+function parseCookieSecret(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error("Paste session cookies before confirming.");
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) return { cookies: parsed };
+    if (parsed && typeof parsed === "object") {
+      const obj = parsed as Record<string, unknown>;
+      if ("password" in obj || "passwd" in obj || "pass" in obj) {
+        throw new Error("Passwords are not accepted. Use session cookies only.");
+      }
+      return obj;
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("Passwords")) throw err;
+  }
+  // name=value; name2=value2
+  if (trimmed.includes("=")) {
+    const cookies = trimmed.split(/;\s*/).flatMap((part) => {
+      const eq = part.indexOf("=");
+      if (eq <= 0) return [];
+      return [{ name: part.slice(0, eq).trim(), value: part.slice(eq + 1).trim() }];
+    });
+    if (cookies.length) return { cookies };
+  }
+  return { cookies: trimmed };
 }
 
 export function ConnectCenter({
   targets,
+  onGateChange,
 }: {
   targets: MissionTargetPreview[];
+  onGateChange?: (state: { ready: boolean; missing: string[] }) => void;
 }) {
+  const required = useMemo(() => requiredConnectPlatforms(targets), [targets]);
+  const youtubeTargets = useMemo(
+    () => targets.filter((t) => t.platform.toLowerCase() === "youtube"),
+    [targets],
+  );
+
   const [rows, setRows] = useState<ConnectionStatus[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<PlatformId | null>(null);
   const [sessionBlob, setSessionBlob] = useState("");
-  const [oauthNote, setOauthNote] = useState("");
+
+  function rowFor(platform: string): ConnectionStatus | undefined {
+    const list = rows ?? [];
+    return list.find((r) => r.platform === platform);
+  }
+
+  const missing = useMemo(() => {
+    return required.filter((p) => rowFor(p)?.status !== "connected");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rowFor depends on rows
+  }, [required, rows]);
+
+  const ready = required.length === 0 || missing.length === 0;
+
+  useEffect(() => {
+    onGateChange?.({ ready, missing });
+  }, [ready, missing, onGateChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,75 +119,25 @@ export function ConnectCenter({
     }
   }
 
-  const banner = useMemo(() => {
-    const list = rows ?? [];
-    const ready = list.filter((r) => r.status === "connected").length;
-    const needs = list.filter((r) => r.status === "needs_reconnect");
-    const linkedinNeeded = targets.some((t) => t.platform === "linkedin");
-    const linkedin = list.find((r) => r.platform === "linkedin");
-    const warn =
-      linkedinNeeded && (!linkedin || linkedin.status !== "connected")
-        ? "LinkedIn URL present but not connected — scout soft-warns and continues."
-        : needs.length
-          ? `${needs.map((n) => n.platform).join(", ")} need reconnect`
-          : null;
-    return { ready, warn };
-  }, [rows, targets]);
-
   function openConnect(platform: PlatformId) {
     setDialog(platform);
     setSessionBlob("");
-    setOauthNote("");
     setError(null);
   }
 
   async function confirmConnect() {
     if (!dialog) return;
-    const meta = PRIMARY.find((p) => p.id === dialog);
-    if (!meta) return;
     setBusy(dialog);
     setError(null);
     try {
-      if (meta.mode === "cookie") {
-        const trimmed = sessionBlob.trim();
-        if (!trimmed) {
-          setError("Paste session cookies JSON from your Connect session browser — never a password.");
-          return;
-        }
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(trimmed) as Record<string, unknown>;
-        } catch {
-          parsed = { cookies: trimmed };
-        }
-        if ("password" in parsed) {
-          setError("Passwords are not accepted. Use cookies or an OAuth token.");
-          return;
-        }
-        await upsertConnection(dialog, {
-          auth_type: "cookie",
-          secret: parsed,
-          scopes: ["read"],
-        });
-      } else if (meta.mode === "oauth") {
-        // Scaffold until developer app credentials are wired — stores a reconnect marker.
-        await upsertConnection(dialog, {
-          auth_type: "oauth",
-          secret: {
-            oauth_placeholder: true,
-            note: oauthNote.trim() || "Awaiting developer OAuth client credentials",
-          },
-          scopes: ["read"],
-        });
-      } else {
-        await upsertConnection(dialog, {
-          auth_type: "api_key",
-          secret: { source: "workspace_env" },
-          scopes: ["youtube.readonly"],
-        });
-      }
+      const secret = parseCookieSecret(sessionBlob);
+      await upsertConnection(dialog, {
+        auth_type: "cookie",
+        secret,
+        scopes: ["read", "scout"],
+      });
       setDialog(null);
-      refresh();
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connect failed");
     } finally {
@@ -184,7 +149,7 @@ export function ConnectCenter({
     setBusy(platform);
     try {
       await deleteConnection(platform);
-      refresh();
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Disconnect failed");
     } finally {
@@ -192,7 +157,8 @@ export function ConnectCenter({
     }
   }
 
-  const dialogMeta = dialog ? PRIMARY.find((p) => p.id === dialog) : null;
+  const dialogLabel = dialog ? (PLATFORM_LABELS[dialog] ?? dialog) : "";
+  const dialogHome = dialog ? (PLATFORM_HOME[dialog] ?? "https://example.com") : "";
 
   return (
     <div
@@ -201,70 +167,110 @@ export function ConnectCenter({
     >
       <div className="text-center">
         <p className="font-ui text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
-          connections
+          required connections
         </p>
         <h3 className="font-display text-xl font-bold">Connect Center</h3>
         <p className="font-accent text-sm italic text-muted-foreground">
-          Official OAuth or one-time Connect session. RivalRadar never asks for platform passwords.
+          Every non-YouTube link from Context must be connected before Start Scout. RivalRadar never
+          asks for platform passwords — only a one-time Connect session (cookies).
         </p>
       </div>
 
-      <p className="font-ui text-center text-xs text-muted-foreground">
-        {loading ? "Checking…" : `${banner.ready} platforms ready`}
-        {banner.warn ? ` · ${banner.warn}` : ""}
-      </p>
+      <div
+        className={
+          ready
+            ? "rounded-2xl border border-primary/40 bg-primary/10 px-3 py-2 text-center text-sm text-primary"
+            : "rounded-2xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-center text-sm text-destructive"
+        }
+        role="status"
+      >
+        {loading
+          ? "Checking connections…"
+          : ready
+            ? required.length === 0
+              ? "No Playwright platforms in this mission — YouTube/yt-dlp can run without login."
+              : `All required platforms connected (${required.length}). Scout unlocked.`
+            : `Connect required: ${missing.map((p) => PLATFORM_LABELS[p] ?? p).join(", ")}. Start Scout stays locked.`}
+      </div>
+
+      {youtubeTargets.length > 0 && (
+        <div className="flex items-start gap-3 rounded-2xl border border-border/50 bg-background/40 px-3 py-3">
+          <Lock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <div>
+            <p className="font-display text-sm font-semibold">YouTube · no Connect needed</p>
+            <p className="font-ui text-[11px] text-muted-foreground">
+              Runs via Data API or yt-dlp in parallel with browser scouts. Login widget not required.
+            </p>
+          </div>
+        </div>
+      )}
 
       {error && !dialog && (
         <p className="rounded-2xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
-          <button type="button" className="ml-2 underline" onClick={() => refresh()}>
+          <button type="button" className="ml-2 underline" onClick={() => void refresh()}>
             Retry
           </button>
         </p>
       )}
 
+      {required.length === 0 && youtubeTargets.length === 0 && (
+        <p className="font-accent text-center text-sm italic text-muted-foreground">
+          Add LinkedIn / X / Instagram / TikTok / Threads links in Context to unlock Connect widgets.
+        </p>
+      )}
+
       <ul className="grid gap-2 sm:grid-cols-2">
-        {PRIMARY.map((p) => {
-          const row = (rows ?? []).find(
-            (r) =>
-              r.platform === p.id ||
-              (p.id === "meta" && (r.platform === "instagram" || r.platform === "facebook")),
-          );
+        {required.map((platform) => {
+          const row = rowFor(platform);
           const status = row?.status ?? "not_connected";
+          const connected = status === "connected";
+          const label = PLATFORM_LABELS[platform] ?? platform;
           return (
             <li
-              key={p.id}
-              className="flex items-center justify-between gap-2 rounded-2xl border border-border/50 bg-background/40 px-3 py-3"
+              key={platform}
+              className={
+                connected
+                  ? "flex items-center justify-between gap-2 rounded-2xl border border-primary/50 bg-primary/10 px-3 py-3"
+                  : "flex items-center justify-between gap-2 rounded-2xl border border-border/50 bg-background/40 px-3 py-3"
+              }
             >
-              <div>
-                <p className="font-display text-sm font-semibold">{p.label}</p>
+              <div className="min-w-0">
+                <p className="font-display flex items-center gap-1.5 text-sm font-semibold">
+                  {connected ? (
+                    <CheckCircle2 className="size-4 shrink-0 text-primary" aria-hidden />
+                  ) : null}
+                  {label}
+                </p>
                 <p className={`font-ui text-[11px] ${statusTone(status)}`}>
-                  {statusLabel(status)}
-                  {row?.detail ? ` · ${row.detail}` : ` · ${p.hint}`}
+                  {connected
+                    ? `Connected · ${row?.auth_type ?? "session"} saved for scout`
+                    : "Not connected · required for Start Scout"}
                 </p>
               </div>
-              {status === "connected" ? (
-                <div className="flex gap-1.5">
+              {connected ? (
+                <div className="flex shrink-0 gap-1.5">
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={busy === p.id}
-                    onClick={() => openConnect(p.id)}
+                    disabled={busy === platform}
+                    onClick={() => openConnect(platform)}
                   >
                     Reconnect
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={busy === p.id}
-                    onClick={() => void disconnect(p.id)}
+                    disabled={busy === platform}
+                    onClick={() => void disconnect(platform)}
+                    aria-label={`Clear ${label}`}
                   >
-                    Clear
+                    <Unplug className="size-3.5" />
                   </Button>
                 </div>
               ) : (
-                <Button size="sm" disabled={busy === p.id} onClick={() => openConnect(p.id)}>
-                  {p.cta}
+                <Button size="sm" disabled={busy === platform} onClick={() => openConnect(platform)}>
+                  Connect {label}
                 </Button>
               )}
             </li>
@@ -272,7 +278,7 @@ export function ConnectCenter({
         })}
       </ul>
 
-      {dialog && dialogMeta && (
+      {dialog && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
           role="presentation"
@@ -290,52 +296,48 @@ export function ConnectCenter({
                 connect widget
               </p>
               <h4 id="connect-dialog-title" className="font-display text-2xl font-bold">
-                {dialogMeta.cta}
+                Connect {dialogLabel}
               </h4>
-              <p className="font-accent text-sm italic text-muted-foreground">{dialogMeta.hint}</p>
+              <p className="font-accent text-sm italic text-muted-foreground">
+                Sign in on {dialogLabel} yourself, then deposit a Connect session. Never paste a
+                password.
+              </p>
             </div>
 
-            {dialogMeta.mode === "cookie" && (
-              <label className="block space-y-2">
-                <span className="font-ui text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Session cookies (JSON) — not a password
+            <ol className="font-ui space-y-3 text-sm text-muted-foreground">
+              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                <span className="font-semibold text-foreground">1. Open {dialogLabel} and sign in</span>
+                <div className="mt-2">
+                  <a
+                    href={dialogHome}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-primary underline"
+                  >
+                    Open {dialogLabel}
+                    <ExternalLink className="size-3.5" aria-hidden />
+                  </a>
+                </div>
+              </li>
+              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                <span className="font-semibold text-foreground">
+                  2. Paste session cookies (JSON array or name=value)
                 </span>
                 <textarea
                   value={sessionBlob}
                   onChange={(e) => setSessionBlob(e.target.value)}
                   rows={5}
-                  placeholder='{"sessionid":"...","csrftoken":"..."}'
-                  className="font-mono w-full rounded-2xl border border-border/60 bg-card/40 px-3 py-2 text-xs"
+                  placeholder='[{"name":"li_at","value":"...","domain":".linkedin.com"}]'
+                  className="font-mono mt-2 w-full rounded-2xl border border-border/60 bg-background px-3 py-2 text-xs"
                 />
-              </label>
-            )}
-
-            {dialogMeta.mode === "oauth" && (
-              <div className="space-y-2 rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <p className="font-ui text-xs text-muted-foreground">
-                  OAuth apps need your developer client IDs. Until those are wired, mark this
-                  platform as connected so Scout soft-warns instead of blocking.
+              </li>
+              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                <span className="font-semibold text-foreground">3. Confirm connection</span>
+                <p className="mt-1 text-xs">
+                  Scout injects this session into Playwright for {dialogLabel} hops only.
                 </p>
-                <label className="block space-y-1">
-                  <span className="font-ui text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Optional note
-                  </span>
-                  <input
-                    value={oauthNote}
-                    onChange={(e) => setOauthNote(e.target.value)}
-                    placeholder="e.g. awaiting Meta app review"
-                    className="font-ui w-full rounded-xl border border-border/60 bg-background px-3 py-2 text-sm"
-                  />
-                </label>
-              </div>
-            )}
-
-            {dialogMeta.mode === "api_key" && (
-              <p className="font-ui rounded-2xl border border-border/50 bg-card/30 px-3 py-3 text-xs text-muted-foreground">
-                YouTube reads <code className="text-primary">YOUTUBE_API_KEY</code> from the
-                workspace env. Without it, Scout falls back to yt-dlp text intel (no screenshots).
-              </p>
-            )}
+              </li>
+            </ol>
 
             {error && dialog && (
               <p className="rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -348,7 +350,7 @@ export function ConnectCenter({
                 Cancel
               </Button>
               <Button disabled={busy === dialog} onClick={() => void confirmConnect()}>
-                {busy === dialog ? "Saving…" : "Save connection"}
+                {busy === dialog ? "Saving…" : `Confirm ${dialogLabel} connected`}
               </Button>
             </div>
           </div>

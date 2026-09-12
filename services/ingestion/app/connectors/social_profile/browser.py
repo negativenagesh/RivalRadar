@@ -4,6 +4,7 @@ import base64
 import tempfile
 from pathlib import Path
 from types import TracebackType
+from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
@@ -14,9 +15,16 @@ class BrowserSession:
     per-context video capture -- written on context close, no extra deps.
     """
 
-    def __init__(self, *, headless: bool = True, record: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        headless: bool = True,
+        record: bool = False,
+        cookies: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._headless = headless
         self._record = record
+        self._cookies = cookies or []
         self._video_dir: Path | None = None
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -35,6 +43,8 @@ class BrowserSession:
             )
         else:
             self._context = await self._browser.new_context()
+        if self._cookies:
+            await self._context.add_cookies(self._cookies)  # type: ignore[arg-type]
         self.page = await self._context.new_page()
         return self
 

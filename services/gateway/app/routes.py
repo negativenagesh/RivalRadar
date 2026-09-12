@@ -34,7 +34,7 @@ from app.schemas import (
     PipelineRunCreated,
     PipelineRunRead,
 )
-from app.vault import encrypt_json
+from app.vault import decrypt_json, encrypt_json
 
 router = APIRouter()
 
@@ -90,8 +90,27 @@ async def pipeline_run_live_feed(websocket: WebSocket, run_id: str) -> None:
 
 
 @router.post("/ingestion/runs")
-async def start_ingestion_run(body: dict[str, object] | None = None) -> dict[str, object]:
-    return await trigger_ingestion_run(body or {})
+async def start_ingestion_run(
+    body: dict[str, object] | None = None,
+    workspace_id: str = "default",
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    payload = dict(body or {})
+    rows = await session.scalars(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == workspace_id,
+            PlatformConnection.status == "connected",
+        )
+    )
+    platform_sessions: dict[str, object] = {}
+    for row in rows.all():
+        try:
+            platform_sessions[row.platform] = decrypt_json(row.encrypted_blob)
+        except Exception:  # noqa: BLE001 - skip corrupt vault rows
+            continue
+    if platform_sessions:
+        payload["platform_sessions"] = platform_sessions
+    return await trigger_ingestion_run(payload)
 
 
 @router.get("/ingestion/runs/{run_id}")

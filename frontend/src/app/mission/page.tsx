@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useIngestionLive } from "@/hooks/use-ingestion-live";
 import {
+  listConnections,
   listIngestionAccounts,
   listIngestionPosts,
   startIngestionRun,
@@ -31,6 +32,7 @@ import {
   canReachStep,
   focusField,
   type FieldIssue,
+  validateConnections,
   validateContext,
   validateFindings,
   validateScout,
@@ -206,6 +208,13 @@ export default function MissionPage() {
     setScoutError(null);
     setStarting(true);
     try {
+      const connections = await listConnections();
+      if (!applyGate(validateConnections(missionTargets, connections))) {
+        setScoutError(
+          "Connect every Context platform (except YouTube) before starting scout.",
+        );
+        return;
+      }
       const body = missionToIngestionPayload(mission);
       const created = await startIngestionRun(body);
       patch({ lastRunId: created.run_id });

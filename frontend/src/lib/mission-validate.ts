@@ -1,5 +1,10 @@
-import type { BrandProfile, MissionState } from "./types";
+import type { BrandProfile, ConnectionStatus, MissionState } from "./types";
 import { isValidSocialUrl, isValidWebsite, type SocialKey } from "./social-validate";
+import {
+  PLATFORM_LABELS,
+  requiredConnectPlatforms,
+  type MissionTargetPreview,
+} from "./mission-store";
 
 export type MissionStep = 0 | 1 | 2 | 3;
 
@@ -76,6 +81,35 @@ export function validateContext(mission: MissionState): FieldIssue[] {
   });
 
   return issues;
+}
+
+/** Start Scout is locked until every Context Playwright platform is connected. */
+export function validateConnections(
+  targets: MissionTargetPreview[],
+  connections: ConnectionStatus[] | null | undefined,
+): FieldIssue[] {
+  const required = requiredConnectPlatforms(targets);
+  if (required.length === 0) return [];
+  if (!connections) {
+    return [
+      {
+        step: 1,
+        fieldId: "connect-center",
+        message: "Connect Center still loading — wait, then connect every required platform",
+      },
+    ];
+  }
+  const byPlatform = new Map(connections.map((c) => [c.platform, c]));
+  const missing = required.filter((p) => byPlatform.get(p)?.status !== "connected");
+  if (missing.length === 0) return [];
+  const labels = missing.map((p) => PLATFORM_LABELS[p] ?? p).join(", ");
+  return [
+    {
+      step: 1,
+      fieldId: "connect-center",
+      message: `Connect required platforms before Start Scout: ${labels}`,
+    },
+  ];
 }
 
 export function validateScout(

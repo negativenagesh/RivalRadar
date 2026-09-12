@@ -124,6 +124,7 @@ def _build_connector(
                 record=record_left and not mock_targets,
                 event_bus=event_bus,
                 object_store_root=settings.object_store_root,
+                platform_sessions=body.platform_sessions,
             )
         )
         if record_left and not mock_targets:

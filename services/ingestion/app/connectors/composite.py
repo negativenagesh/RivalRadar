@@ -1,7 +1,11 @@
-"""Merge multiple Connector implementations into one run."""
+"""Merge multiple Connector implementations into one run.
+
+YouTube/yt-dlp and Playwright platform scouts run concurrently via gather.
+"""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -41,19 +45,25 @@ class CompositeConnector:
         return out
 
     async def fetch_accounts(self) -> list[RawAccount]:
+        batches = await asyncio.gather(*(c.fetch_accounts() for c in self._connectors))
         accounts: list[RawAccount] = []
-        for c in self._connectors:
-            accounts.extend(await c.fetch_accounts())
+        for batch in batches:
+            accounts.extend(batch)
         return accounts
 
     async def fetch_posts(self) -> list[RawPost]:
+        batches = await asyncio.gather(*(c.fetch_posts() for c in self._connectors))
         posts: list[RawPost] = []
-        for c in self._connectors:
-            posts.extend(await c.fetch_posts())
+        for batch in batches:
+            posts.extend(batch)
         return posts
 
     async def aclose(self) -> None:
-        for c in self._connectors:
-            aclose = getattr(c, "aclose", None)
-            if aclose is not None:
-                await aclose()
+        await asyncio.gather(
+            *[
+                c.aclose()
+                for c in self._connectors
+                if getattr(c, "aclose", None) is not None
+            ],
+            return_exceptions=True,
+        )
