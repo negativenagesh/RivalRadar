@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
+from typing import Any
 
 from agent_events import AgentEventBus
 from sqlalchemy import select
@@ -22,6 +24,24 @@ from app.schemas import IngestionRunCreate, IngestionRunResult
 
 _MOCK_SITE_BASE_URL = "http://localhost:8000/mock-site/profile"
 _FEED_PLATFORMS = {"instagram", "linkedin", "x", "tiktok", "threads", "twitter", "facebook"}
+
+# In-process registry so cancel can interrupt the asyncio task for a run.
+_active_tasks: dict[str, asyncio.Task[Any]] = {}
+
+
+def register_run_task(run_id: str, task: asyncio.Task[Any]) -> None:
+    _active_tasks[run_id] = task
+
+    def _clear(done: asyncio.Task[Any]) -> None:
+        current = _active_tasks.get(run_id)
+        if current is done:
+            _active_tasks.pop(run_id, None)
+
+    task.add_done_callback(_clear)
+
+
+def get_active_run_task(run_id: str) -> asyncio.Task[Any] | None:
+    return _active_tasks.get(run_id)
 
 
 def _is_youtube_target(platform: str, url: str | None, handle: str) -> bool:
@@ -213,6 +233,9 @@ async def execute_run(
     async with factory() as session:
         run = await session.get(IngestionRun, run_id)
         assert run is not None
+        if run.status == RunStatus.CANCELLED:
+            await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+            return
         run.status = RunStatus.RUNNING
         await session.commit()
 
@@ -237,18 +260,57 @@ async def execute_run(
 
             run = await session.get(IngestionRun, run_id)
             assert run is not None
+            if run.status == RunStatus.CANCELLED:
+                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+                return
             run.status = RunStatus.DONE
             run.result = payload
             run.recording_key = recording_key
             await session.commit()
             await event_bus.close_run(run_id, status="done")
+        except asyncio.CancelledError:
+            run = await session.get(IngestionRun, run_id)
+            if run is not None and run.status not in {RunStatus.CANCELLED, RunStatus.DONE}:
+                run.status = RunStatus.CANCELLED
+                run.error_detail = "cancelled by operator"
+                await session.commit()
+                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+            raise
         except Exception as exc:  # noqa: BLE001
             run = await session.get(IngestionRun, run_id)
             assert run is not None
+            if run.status == RunStatus.CANCELLED:
+                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+                return
             run.status = RunStatus.ERROR
             run.error_detail = str(exc)
             await session.commit()
             await event_bus.close_run(run_id, status="error", detail=str(exc))
+
+
+async def cancel_run(
+    session: AsyncSession,
+    run_id: str,
+    event_bus: AgentEventBus,
+) -> IngestionRun:
+    """Mark a pending/running scout cancelled and interrupt its asyncio task if alive."""
+    run = await session.get(IngestionRun, run_id)
+    if run is None:
+        raise KeyError(run_id)
+    if run.status in {RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED}:
+        return run
+
+    run.status = RunStatus.CANCELLED
+    run.error_detail = "cancelled by operator"
+    await session.commit()
+    await session.refresh(run)
+
+    task = get_active_run_task(run_id)
+    if task is not None and not task.done():
+        task.cancel()
+
+    await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+    return run
 
 
 async def _archive_recording(

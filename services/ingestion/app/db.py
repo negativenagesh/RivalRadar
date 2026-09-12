@@ -25,6 +25,7 @@ async def init_models() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_post_columns)
+    await _ensure_run_status_cancelled()
 
 
 def _ensure_post_columns(sync_conn: Connection) -> None:
@@ -38,3 +39,14 @@ def _ensure_post_columns(sync_conn: Connection) -> None:
     for stmt in statements:
         with suppress(Exception):
             sync_conn.execute(text(stmt))
+
+
+async def _ensure_run_status_cancelled() -> None:
+    """Postgres native enums are not altered by create_all; ADD VALUE needs autocommit."""
+    async with engine.connect() as conn:
+        auto = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        for label in ("CANCELLED", "cancelled"):
+            with suppress(Exception):
+                await auto.execute(
+                    text(f"ALTER TYPE runstatus ADD VALUE IF NOT EXISTS '{label}'")
+                )

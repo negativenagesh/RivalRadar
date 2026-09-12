@@ -60,7 +60,7 @@ export function useIngestionLive(runId: string | null) {
         .then((latest) => {
           if (cancelled) return;
           setRun(latest);
-          if (latest.status === "done" || latest.status === "error") {
+          if (latest.status === "done" || latest.status === "error" || latest.status === "cancelled") {
             clearInterval(poll);
           }
         })
@@ -75,7 +75,8 @@ export function useIngestionLive(runId: string | null) {
     };
   }, [runId]);
 
-  const done = run?.status === "done" || run?.status === "error";
+  const done =
+    run?.status === "done" || run?.status === "error" || run?.status === "cancelled";
 
   return {
     events,

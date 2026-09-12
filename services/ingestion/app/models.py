@@ -14,6 +14,7 @@ class RunStatus(enum.StrEnum):
     RUNNING = "running"
     DONE = "done"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 class PostFormat(enum.StrEnum):

@@ -165,7 +165,9 @@ export function LiveScout({
   onCustomRangeChange,
   targets,
   onStart,
+  onKill,
   starting,
+  killing,
   runId,
   connected,
   events,
@@ -182,7 +184,9 @@ export function LiveScout({
   onCustomRangeChange: (from: string | null, to: string | null) => void;
   targets: MissionTargetPreview[];
   onStart: () => void;
+  onKill?: () => void;
   starting: boolean;
+  killing?: boolean;
   runId: string | null;
   connected: boolean;
   events: AgentEvent[];
@@ -229,7 +233,7 @@ export function LiveScout({
   // Only block while we are POSTing a new run. A stuck prior run in localStorage
   // (pending/running after refresh) must not permanently disable Start Scout.
   const priorActive = status === "running" || status === "pending";
-  const scoutBusy = starting;
+  const scoutBusy = starting || Boolean(killing);
 
   const enterFullscreen = useCallback(() => {
     const el = videoRef.current;
@@ -383,10 +387,21 @@ export function LiveScout({
         )}
         {priorActive && !scoutBusy && !scoutLocked && (
           <p className="font-ui max-w-xl rounded-2xl border border-border/50 bg-card/30 px-4 py-2 text-sm text-muted-foreground">
-            A previous scout is still marked {status}. You can start a fresh run anytime.
+            A previous scout is still marked {status}. Kill it, then start a fresh run.
           </p>
         )}
         <div className="flex flex-wrap items-center justify-center gap-4">
+          {priorActive && onKill && (
+            <Button
+              size="lg"
+              variant="outline"
+              className="h-14 px-8 font-display text-base"
+              onClick={onKill}
+              disabled={scoutBusy || scoutLocked}
+            >
+              {killing ? "Killing…" : "Kill previous run"}
+            </Button>
+          )}
           <Button
             size="lg"
             className="h-14 px-10 font-display text-base"
@@ -398,13 +413,15 @@ export function LiveScout({
                 : undefined
             }
           >
-            {scoutBusy
+            {starting
               ? "Starting…"
-              : scoutLocked
-                ? "Connect platforms to unlock"
-                : priorActive
-                  ? "Re-run Scout"
-                  : "Start Scout"}
+              : killing
+                ? "Killing…"
+                : scoutLocked
+                  ? "Connect platforms to unlock"
+                  : priorActive
+                    ? "Re-run Scout"
+                    : "Start Scout"}
           </Button>
           <label className="font-ui flex items-center gap-2 text-sm">
             <input
@@ -427,6 +444,11 @@ export function LiveScout({
       {error && (
         <p className="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
+        </p>
+      )}
+      {run?.status === "cancelled" && (
+        <p className="rounded-2xl border border-border/50 bg-card/30 px-4 py-3 text-sm text-muted-foreground">
+          Previous scout was killed. Hit Start Scout when you are ready.
         </p>
       )}
       {run?.status === "error" && run.error_detail && (

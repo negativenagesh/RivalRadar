@@ -83,6 +83,10 @@ export function getIngestionRun(runId: string): Promise<IngestionRun> {
   return request<IngestionRun>(`/ingestion/runs/${runId}`);
 }
 
+export function cancelIngestionRun(runId: string): Promise<IngestionRun> {
+  return request<IngestionRun>(`/ingestion/runs/${runId}/cancel`, { method: "POST" });
+}
+
 export function listIngestionPosts(): Promise<CompetitorPost[]> {
   return request<CompetitorPost[]>("/ingestion/posts");
 }

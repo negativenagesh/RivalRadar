@@ -70,6 +70,14 @@ async def fetch_ingestion_run(run_id: str) -> dict[str, Any]:
         return result
 
 
+async def cancel_ingestion_run(run_id: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=15.0) as client:
+        response = await client.post(f"/ingest/runs/{run_id}/cancel")
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        return result
+
+
 async def fetch_ingestion_posts() -> list[dict[str, Any]]:
     async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
         response = await client.get("/posts")

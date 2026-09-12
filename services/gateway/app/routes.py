@@ -12,6 +12,7 @@ from starlette.websockets import WebSocketState
 
 from app.agent_events_bus import get_event_bus
 from app.clients import (
+    cancel_ingestion_run,
     fetch_ingestion_accounts,
     fetch_ingestion_media,
     fetch_ingestion_posts,
@@ -135,6 +136,14 @@ async def start_ingestion_run(
 @router.get("/ingestion/runs/{run_id}")
 async def get_ingestion_run(run_id: str) -> dict[str, object]:
     return await fetch_ingestion_run(run_id)
+
+
+@router.post("/ingestion/runs/{run_id}/cancel")
+async def cancel_ingestion_run_route(run_id: str) -> dict[str, object]:
+    try:
+        return await cancel_ingestion_run(run_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
 
 @router.websocket("/ingestion/runs/{run_id}/live")

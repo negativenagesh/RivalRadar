@@ -13,7 +13,7 @@ from app.config import settings
 from app.db import get_session
 from app.models import CompetitorAccount, CompetitorPost, IngestionRun
 from app.objectstore import LocalDiskObjectStore
-from app.runs import create_run, execute_run, list_runs
+from app.runs import cancel_run, create_run, execute_run, list_runs, register_run_task
 from app.schemas import (
     CompetitorAccountRead,
     CompetitorPostRead,
@@ -35,8 +35,23 @@ async def trigger_ingestion(
 ) -> IngestionRunCreated:
     run = await create_run(session, body)
     session_factory = getattr(request.app.state, "session_factory", None)
-    asyncio.create_task(execute_run(run.id, body, event_bus, session_factory=session_factory))
+    task = asyncio.create_task(
+        execute_run(run.id, body, event_bus, session_factory=session_factory)
+    )
+    register_run_task(run.id, task)
     return IngestionRunCreated(run_id=run.id, status=run.status)
+
+
+@router.post("/ingest/runs/{run_id}/cancel", response_model=IngestionRunRead)
+async def cancel_ingestion_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    event_bus: AgentEventBus = Depends(get_event_bus),
+) -> IngestionRun:
+    try:
+        return await cancel_run(session, run_id, event_bus)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
 
 @router.get("/ingest/runs", response_model=list[IngestionRunRead])

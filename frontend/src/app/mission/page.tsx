@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useIngestionLive } from "@/hooks/use-ingestion-live";
 import {
+  cancelIngestionRun,
   listConnections,
   listIngestionAccounts,
   listIngestionPosts,
@@ -52,6 +53,7 @@ export default function MissionPage() {
   const [mission, setMission] = useState<MissionState>(() => structuredClone(DEFAULT_MISSION));
   const [storageReady, setStorageReady] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [killing, setKilling] = useState(false);
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [posts, setPosts] = useState<CompetitorPost[]>([]);
   const [accounts, setAccounts] = useState<CompetitorAccount[]>([]);
@@ -203,11 +205,36 @@ export default function MissionPage() {
     }
   }
 
+  async function handleKillScout() {
+    if (!runId) return;
+    setScoutError(null);
+    setKilling(true);
+    try {
+      await cancelIngestionRun(runId);
+      // Force a refresh of run status via re-subscribing by toggling lastRunId briefly.
+      patch({ lastRunId: runId });
+    } catch (err) {
+      setScoutError(err instanceof Error ? err.message : "Failed to kill scout");
+    } finally {
+      setKilling(false);
+    }
+  }
+
   async function handleStartScout() {
     if (!applyGate(validateContext(mission))) return;
     setScoutError(null);
     setStarting(true);
     try {
+      if (
+        runId &&
+        (live.run?.status === "running" || live.run?.status === "pending")
+      ) {
+        try {
+          await cancelIngestionRun(runId);
+        } catch {
+          // Still allow a fresh start if cancel races a finished run.
+        }
+      }
       const connections = await listConnections();
       if (!applyGate(validateConnections(missionTargets, connections))) {
         setScoutError(
@@ -276,7 +303,9 @@ export default function MissionPage() {
               onCustomRangeChange={(dateFrom, dateTo) => patch({ dateFrom, dateTo })}
               targets={missionTargets}
               onStart={() => void handleStartScout()}
+              onKill={() => void handleKillScout()}
               starting={starting}
+              killing={killing}
               runId={runId}
               connected={live.connected}
               events={live.events}

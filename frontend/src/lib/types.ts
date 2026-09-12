@@ -62,7 +62,7 @@ export type PipelineRun = {
   created_at: string;
 };
 
-export type IngestionRunStatus = "pending" | "running" | "done" | "error";
+export type IngestionRunStatus = "pending" | "running" | "done" | "error" | "cancelled";
 
 export type IngestionTarget = {
   handle: string;
