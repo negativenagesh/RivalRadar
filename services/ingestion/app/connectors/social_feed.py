@@ -1,7 +1,8 @@
-"""Per-post social feed scout (Instagram, LinkedIn, X, TikTok, Threads).
+"""Per-post social feed scout (Instagram, LinkedIn, X).
 
-Visits each post in the date window, downloads real media (not screenshots),
-and parses likes / comments / views / shares for Findings.
+OSS-first (Instaloader / gallery-dl / linkedin_scraper), Playwright fallback.
+TikTok is skipped by product request. Each platform runs in its own budgeted
+task so one hang cannot stall the others.
 """
 
 from __future__ import annotations
@@ -9,15 +10,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from agent_events import AgentEvent, AgentEventBus
 from agent_events.schema import StepType
 
 from app.connectors.base import RawAccount, RawPost
 from app.connectors.media_download import download_media_to_store, store_bytes
+from app.connectors.oss.instagram import InstaloaderError, fetch_instagram_instaloader
+from app.connectors.oss.linkedin import LinkedInScraperError, fetch_linkedin_company_posts
+from app.connectors.oss.x_gallery import GalleryDlError, fetch_x_gallery_dl
 from app.connectors.session_cookies import cookies_from_sessions, storage_state_from_sessions
 from app.connectors.social_feed_parse import (
     collect_post_urls,
@@ -34,7 +40,10 @@ logger = logging.getLogger(__name__)
 
 _AGENT_ID = "ingestion.socialfeed"
 _SERVICE = "ingestion"
-_MAX_POSTS = 30
+_MAX_POSTS = 25
+_PLATFORM_BUDGET_S = 180
+_COLLECT_BUDGET_S = 35
+_SKIP_PLATFORMS = {"tiktok"}
 
 
 class SocialFeedConnector:
@@ -52,7 +61,13 @@ class SocialFeedConnector:
         platform_sessions: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._run_id = run_id
-        self._targets = targets
+        self._targets = [
+            t for t in targets if normalize_platform(t.platform or "") not in _SKIP_PLATFORMS
+        ]
+        skipped = [
+            t for t in targets if normalize_platform(t.platform or "") in _SKIP_PLATFORMS
+        ]
+        self._skipped = skipped
         self._window = window
         self._headless = headless
         self._record = record
@@ -62,14 +77,18 @@ class SocialFeedConnector:
         self._platform_sessions = platform_sessions or {}
         self._session: BrowserSession | None = None
         self._sequence = 0
+        self._lock = asyncio.Lock()
         self._accounts: list[RawAccount] = []
         self._posts: list[RawPost] = []
         self._screenshot_keys: list[str] = []
         self._loaded = False
         self._sources_used: list[str] = []
+        self._video_path: Path | None = None
 
     @property
     def recorded_video_path(self) -> Path | None:
+        if self._video_path is not None:
+            return self._video_path
         return self._session.recorded_video_path if self._session else None
 
     @property
@@ -81,9 +100,7 @@ class SocialFeedConnector:
         return list(self._screenshot_keys)
 
     async def aclose(self) -> None:
-        if self._session is not None:
-            await self._session.__aexit__(None, None, None)
-            self._session = None
+        self._session = None
 
     async def fetch_accounts(self) -> list[RawAccount]:
         await self._ensure_loaded()
@@ -96,65 +113,221 @@ class SocialFeedConnector:
     async def _ensure_loaded(self) -> None:
         if self._loaded:
             return
-        platforms = {normalize_platform(t.platform) for t in self._targets if t.platform}
-        cookies = cookies_from_sessions(self._platform_sessions, platforms=platforms)
-        storage_state = storage_state_from_sessions(self._platform_sessions, platforms=platforms)
-        if cookies or storage_state:
+        for t in self._skipped:
+            await self._emit(
+                "action",
+                {"detail": f"skip_platform platform={normalize_platform(t.platform)} reason=disabled"},
+            )
+        platforms = sorted(
+            {normalize_platform(t.platform) for t in self._targets if t.platform}
+        )
+        all_cookies = cookies_from_sessions(self._platform_sessions, platforms=set(platforms))
+        all_state = storage_state_from_sessions(self._platform_sessions, platforms=set(platforms))
+        if all_cookies or all_state:
             await self._emit(
                 "action",
                 {
                     "detail": (
-                        f"connect_session cookies={len(cookies)} "
-                        f"storage_state={'yes' if storage_state else 'no'} "
-                        f"platforms={sorted(platforms)}"
+                        f"connect_session cookies={len(all_cookies)} "
+                        f"storage_state={'yes' if all_state else 'no'} "
+                        f"platforms={platforms}"
                     )
                 },
             )
-        self._session = await BrowserSession(
-            headless=self._headless,
-            record=self._record,
-            cookies=cookies,
-            storage_state=storage_state,
-        ).__aenter__()
-        assert self._session.page is not None
-        for target in self._targets:
-            try:
-                await self._scout_target(target)
-            except Exception as exc:  # noqa: BLE001
+        await self._emit(
+            "action",
+            {
+                "detail": (
+                    f"scouting_parallel platforms={platforms} budget_s={_PLATFORM_BUDGET_S} "
+                    f"oss=instaloader,gallery-dl,linkedin_scraper"
+                )
+            },
+        )
+
+        results = await asyncio.gather(
+            *(
+                self._scout_target_isolated(target, record=(i == 0 and self._record))
+                for i, target in enumerate(self._targets)
+            ),
+            return_exceptions=True,
+        )
+        for target, result in zip(self._targets, results, strict=True):
+            if isinstance(result, Exception):
                 platform = normalize_platform(target.platform or "web")
                 await self._emit(
                     "error",
-                    {"detail": f"scout_target failed {platform}: {exc}"},
+                    {"detail": f"scout_target failed {platform}: {result}"},
                 )
-                logger.exception("scout_target failed for %s", target.handle)
-        self._loaded = True
-        self._sources_used.append("browser")
+                logger.exception("scout_target failed for %s", target.handle, exc_info=result)
 
-    async def _pause(self) -> None:
+        self._loaded = True
+        if not self._sources_used:
+            self._sources_used.append("browser")
+
+    async def _scout_target_isolated(self, target: ProfileTarget, *, record: bool) -> None:
+        platform = normalize_platform(target.platform or "web")
+        try:
+            await asyncio.wait_for(
+                self._scout_with_oss_then_browser(target, record=record),
+                timeout=_PLATFORM_BUDGET_S,
+            )
+        except TimeoutError:
+            await self._emit(
+                "error",
+                {
+                    "detail": (
+                        f"platform_budget_exceeded {platform} "
+                        f"after {_PLATFORM_BUDGET_S}s — continuing other platforms"
+                    )
+                },
+            )
+
+    async def _scout_with_oss_then_browser(self, target: ProfileTarget, *, record: bool) -> None:
+        platform = normalize_platform(target.platform or "web")
+        url = _profile_entry_url(target, platform)
+        handle = _handle_for(target, url)
+
+        # --- OSS first ---
+        try:
+            await self._emit(
+                "action",
+                {"detail": f"oss_try platform={platform} window={self._window.date_from}→{self._window.date_to}"},
+            )
+            account, posts = await self._oss_fetch(platform, handle=handle, url=url)
+            async with self._lock:
+                self._accounts.append(account)
+                self._posts.extend(posts)
+                source = {
+                    "instagram": "instaloader",
+                    "x": "gallery_dl",
+                    "linkedin": "linkedin_scraper",
+                }.get(platform, "oss")
+                if source not in self._sources_used:
+                    self._sources_used.append(source)
+            await self._emit(
+                "action",
+                {"detail": f"found_posts count={len(posts)} platform={platform} source=oss"},
+            )
+            await self._emit(
+                "action",
+                {
+                    "detail": (
+                        f"ingested_posts count={len(posts)} platform={platform} "
+                        f"window={self._window.date_from}→{self._window.date_to} source=oss"
+                    )
+                },
+            )
+            for p in posts[:8]:
+                await self._emit(
+                    "action",
+                    {
+                        "detail": "parsed_post",
+                        "platform": platform,
+                        "id": p["external_post_id"],
+                        "likes": p["likes"],
+                        "comments": p["comments"],
+                        "views": p.get("views", 0),
+                        "has_media": bool(p.get("media_keys") or p.get("media_urls")),
+                    },
+                )
+            return
+        except (InstaloaderError, GalleryDlError, LinkedInScraperError, RuntimeError) as exc:
+            await self._emit(
+                "action",
+                {"detail": f"oss_fallback platform={platform} reason={exc}"},
+            )
+            logger.info("OSS fallback for %s: %s", platform, exc)
+
+        # --- Playwright fallback ---
+        cookies = cookies_from_sessions(self._platform_sessions, platforms={platform})
+        storage_state = storage_state_from_sessions(self._platform_sessions, platforms={platform})
+        async with BrowserSession(
+            headless=self._headless,
+            record=record,
+            cookies=cookies,
+            storage_state=storage_state,
+        ) as session:
+            if record:
+                self._session = session
+            await self._scout_target_browser(session, target)
+            if record and session.recorded_video_path:
+                self._video_path = session.recorded_video_path
+        async with self._lock:
+            if "browser" not in self._sources_used:
+                self._sources_used.append("browser")
+
+    async def _oss_fetch(
+        self, platform: str, *, handle: str, url: str
+    ) -> tuple[RawAccount, list[RawPost]]:
+        if platform == "instagram":
+            return await fetch_instagram_instaloader(
+                run_id=self._run_id,
+                handle=handle,
+                url=url,
+                window=self._window,
+                platform_sessions=self._platform_sessions,
+                object_store=self._object_store,
+                max_posts=_MAX_POSTS,
+            )
+        if platform == "x":
+            return await fetch_x_gallery_dl(
+                run_id=self._run_id,
+                handle=handle,
+                url=url,
+                window=self._window,
+                platform_sessions=self._platform_sessions,
+                object_store=self._object_store,
+                max_posts=_MAX_POSTS,
+            )
+        if platform == "linkedin":
+            cookies = cookies_from_sessions(self._platform_sessions, platforms={"linkedin"})
+            storage_state = storage_state_from_sessions(
+                self._platform_sessions, platforms={"linkedin"}
+            )
+            async with BrowserSession(
+                headless=self._headless,
+                record=False,
+                cookies=cookies,
+                storage_state=storage_state,
+            ) as session:
+                assert session.page is not None
+                return await fetch_linkedin_company_posts(
+                    page=session.page,
+                    run_id=self._run_id,
+                    handle=handle,
+                    url=url,
+                    window=self._window,
+                    platform_sessions=self._platform_sessions,
+                    object_store=self._object_store,
+                    max_posts=_MAX_POSTS,
+                )
+        raise RuntimeError(f"no oss scraper for {platform}")
+
+    async def _pause(self, *, short: bool = False) -> None:
         if not self._human_pause:
             return
-        delay = random.uniform(1.2, 2.4)
-        await self._emit("action", {"detail": f"human_pause {delay:.1f}s"})
+        delay = random.uniform(0.25, 0.55) if short else random.uniform(0.8, 1.5)
+        if not short:
+            await self._emit("action", {"detail": f"human_pause {delay:.1f}s"})
         await asyncio.sleep(delay)
 
-    async def _scout_target(self, target: ProfileTarget) -> None:
-        assert self._session is not None and self._session.page is not None
-        page = self._session.page
+    async def _scout_target_browser(self, session: BrowserSession, target: ProfileTarget) -> None:
+        assert session.page is not None
+        page = session.page
         platform = normalize_platform(target.platform or "web")
-        url = target.url or target.handle
-        if not url.startswith("http"):
-            url = f"https://{url}"
-
+        url = _profile_entry_url(target, platform)
         handle = _handle_for(target, url)
+
         await self._emit("nav", {"url": url, "platform": platform, "phase": "profile"})
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             await settle_page(page)
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"profile nav failed {url}: {exc}"})
-            self._accounts.append(
-                RawAccount(handle=handle, display_name=handle, platform=platform)
-            )
+            async with self._lock:
+                self._accounts.append(
+                    RawAccount(handle=handle, display_name=handle, platform=platform)
+                )
             return
 
         await self._pause()
@@ -165,18 +338,23 @@ class SocialFeedConnector:
         except Exception:  # noqa: BLE001
             title = handle
         display = (title or handle).split("•")[0].split("|")[0].strip()[:200] or handle
-        self._accounts.append(
-            RawAccount(handle=handle, display_name=display, platform=platform)
-        )
+        async with self._lock:
+            self._accounts.append(
+                RawAccount(handle=handle, display_name=display, platform=platform)
+            )
 
-        # Operator theater only — never used as Findings media
         try:
             await self._emit("action", {"detail": f"screenshot platform={platform}"})
             await settle_page(page, quiet_ms=150)
-            jpeg = await asyncio.wait_for(self._session.screenshot_jpeg_b64(), timeout=12)
+            jpeg = await asyncio.wait_for(session.screenshot_jpeg_b64(), timeout=12)
             await self._emit(
                 "screenshot",
-                {"jpeg_b64": jpeg, "platform": platform, "url": url, "label": f"{handle} profile"},
+                {
+                    "jpeg_b64": jpeg,
+                    "platform": platform,
+                    "url": url,
+                    "label": f"{handle} profile",
+                },
             )
         except Exception:  # noqa: BLE001
             logger.debug("profile screenshot skipped", exc_info=True)
@@ -185,8 +363,14 @@ class SocialFeedConnector:
         await self._emit("action", {"detail": f"collecting_posts platform={platform}"})
         try:
             post_urls = await asyncio.wait_for(
-                collect_post_urls(page, platform=platform, profile_url=url, limit=_MAX_POSTS),
-                timeout=45,
+                collect_post_urls(
+                    page,
+                    platform=platform,
+                    profile_url=url,
+                    limit=_MAX_POSTS,
+                    max_scrolls=4,
+                ),
+                timeout=_COLLECT_BUDGET_S,
             )
         except TimeoutError:
             await self._emit(
@@ -200,7 +384,7 @@ class SocialFeedConnector:
 
         await self._emit(
             "action",
-            {"detail": f"found_posts count={len(post_urls)} platform={platform}"},
+            {"detail": f"found_posts count={len(post_urls)} platform={platform} source=browser"},
         )
 
         kept = 0
@@ -209,6 +393,7 @@ class SocialFeedConnector:
                 break
             try:
                 ok = await self._ingest_post(
+                    session,
                     handle=handle,
                     platform=platform,
                     post_url=post_url,
@@ -222,23 +407,32 @@ class SocialFeedConnector:
         await self._emit(
             "action",
             {
-                "detail": f"ingested_posts count={kept} platform={platform} "
-                f"window={self._window.date_from}→{self._window.date_to}",
+                "detail": (
+                    f"ingested_posts count={kept} platform={platform} "
+                    f"window={self._window.date_from}→{self._window.date_to} source=browser"
+                ),
             },
         )
 
-    async def _ingest_post(self, *, handle: str, platform: str, post_url: str) -> bool:
-        assert self._session is not None and self._session.page is not None
-        page = self._session.page
+    async def _ingest_post(
+        self,
+        session: BrowserSession,
+        *,
+        handle: str,
+        platform: str,
+        post_url: str,
+    ) -> bool:
+        assert session.page is not None
+        page = session.page
         await self._emit("nav", {"url": post_url, "platform": platform, "phase": "post"})
         try:
-            await page.goto(post_url, wait_until="domcontentloaded", timeout=45000)
+            await page.goto(post_url, wait_until="domcontentloaded", timeout=35000)
             await settle_page(page)
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"post nav failed {post_url}: {exc}"})
             return False
 
-        await self._pause()
+        await self._pause(short=True)
         try:
             parsed = await parse_post_page(page, platform=platform, post_url=post_url)
         except Exception as exc:  # noqa: BLE001
@@ -246,7 +440,6 @@ class SocialFeedConnector:
             return False
         posted_at: datetime | None = parsed.get("posted_at")
         if posted_at is None:
-            # Keep recent undated posts only if still scanning early grid
             posted_at = datetime.now(UTC)
             uncertain = True
         else:
@@ -263,6 +456,7 @@ class SocialFeedConnector:
 
         if self._object_store and media_urls:
             key = await self._download_post_media(
+                session,
                 post_id=str(parsed["external_post_id"]),
                 media_url=media_urls[0],
             )
@@ -296,7 +490,8 @@ class SocialFeedConnector:
             "media_urls": media_urls,
             "media_keys": media_keys,
         }
-        self._posts.append(post)
+        async with self._lock:
+            self._posts.append(post)
         await self._emit(
             "action",
             {
@@ -311,11 +506,16 @@ class SocialFeedConnector:
         )
         return True
 
-    async def _download_post_media(self, *, post_id: str, media_url: str) -> str | None:
-        assert self._session is not None and self._session.page is not None
+    async def _download_post_media(
+        self,
+        session: BrowserSession,
+        *,
+        post_id: str,
+        media_url: str,
+    ) -> str | None:
+        assert session.page is not None
         assert self._object_store is not None
-        page = self._session.page
-        # Prefer authenticated browser fetch (Instagram CDN often needs session)
+        page = session.page
         try:
             resp = await page.request.get(media_url, timeout=30000)
             if resp.ok:
@@ -343,7 +543,9 @@ class SocialFeedConnector:
     async def _emit(self, step_type: StepType, payload: dict[str, object]) -> None:
         if self._event_bus is None:
             return
-        self._sequence += 1
+        async with self._lock:
+            self._sequence += 1
+            seq = self._sequence
         await self._event_bus.publish(
             AgentEvent(
                 run_id=self._run_id,
@@ -351,15 +553,31 @@ class SocialFeedConnector:
                 service=_SERVICE,
                 step_type=step_type,
                 payload=payload,
-                sequence=self._sequence,
+                sequence=seq,
             )
         )
 
 
-def _handle_for(target: ProfileTarget, url: str) -> str:
-    import re
-    from urllib.parse import urlparse
+def _profile_entry_url(target: ProfileTarget, platform: str) -> str:
+    url = (target.url or target.handle or "").strip()
+    if not url.startswith("http"):
+        url = f"https://{url}"
+    if platform != "linkedin":
+        return url
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    if (
+        "/company/" in path
+        and not path.endswith(("/posts", "/recent-activity", "/all"))
+        and "/posts" not in path
+        and "/recent-activity" not in path
+    ):
+        path = f"{path}/posts"
+        return parsed._replace(path=path).geturl()
+    return url
 
+
+def _handle_for(target: ProfileTarget, url: str) -> str:
     raw = (target.handle or "").strip()
     if not raw:
         path = urlparse(url).path.strip("/")

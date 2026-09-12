@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
@@ -21,7 +22,8 @@ _POST_HREF: dict[str, re.Pattern[str]] = {
     "x": re.compile(r"/status/(\d+)"),
     "twitter": re.compile(r"/status/(\d+)"),
     "linkedin": re.compile(
-        r"(?:/posts/[^/?#]+|/feed/update/[^/?#]+|/pulse/[^/?#]+|urn:li:activity:\d+|activity-\d+)"
+        r"(?:/posts/[^/?#]+|/feed/update/[^/?#]+|/pulse/[^/?#]+|"
+        r"urn:li:activity:\d+|activity[:-]\d+|recent-activity/all)"
     ),
 }
 
@@ -66,29 +68,34 @@ def _is_nav_destroy(exc: BaseException) -> bool:
 async def settle_page(
     page: Page,
     *,
-    quiet_ms: int = 400,
+    quiet_ms: int = 300,
     wait_network: bool = False,
 ) -> None:
-    """Wait out SPA redirects so evaluate won't hit a dying document.
-
-    Avoid networkidle by default — LinkedIn/Instagram keep sockets open and
-    can burn the full timeout on every call, which looks like a stuck scout.
-    """
+    """Wait out SPA redirects so evaluate won't hit a dying document."""
     with contextlib.suppress(Exception):
-        await page.wait_for_load_state("domcontentloaded", timeout=8000)
+        await page.wait_for_load_state("domcontentloaded", timeout=5000)
     if wait_network:
         with contextlib.suppress(Exception):
-            await page.wait_for_load_state("networkidle", timeout=1500)
+            await page.wait_for_load_state("networkidle", timeout=1200)
     with contextlib.suppress(Exception):
         await page.wait_for_timeout(quiet_ms)
 
 
-async def safe_evaluate(page: Page, expression: str, *, retries: int = 3) -> Any:
+async def _timed_evaluate(page: Page, expression: str, *, timeout_ms: int = 10000) -> Any:
+    """page.evaluate has no timeout kwarg — bound it via default timeout + asyncio."""
+    page.set_default_timeout(timeout_ms)
+    try:
+        return await asyncio.wait_for(page.evaluate(expression), timeout=(timeout_ms / 1000) + 2)
+    finally:
+        page.set_default_timeout(30000)
+
+
+async def safe_evaluate(page: Page, expression: str, *, retries: int = 2, timeout_ms: int = 10000) -> Any:
     last: BaseException | None = None
     for attempt in range(retries):
         try:
-            await settle_page(page, quiet_ms=300 if attempt else 500)
-            return await page.evaluate(expression)
+            await settle_page(page, quiet_ms=200 if attempt else 300)
+            return await _timed_evaluate(page, expression, timeout_ms=timeout_ms)
         except Exception as exc:  # noqa: BLE001
             last = exc
             if _is_nav_destroy(exc) and attempt + 1 < retries:
@@ -101,28 +108,49 @@ async def safe_evaluate(page: Page, expression: str, *, retries: int = 3) -> Any
 
 
 async def _collect_hrefs(page: Page) -> list[str]:
-    last: BaseException | None = None
-    for attempt in range(3):
+    """Fast href scrape — capped DOM walk (never locator.evaluate_all on huge trees)."""
+    script = """() => {
+      const out = [];
+      const seen = new Set();
+      const push = (h) => {
+        if (!h || seen.has(h)) return;
+        seen.add(h);
+        out.push(h);
+      };
+      const anchors = document.querySelectorAll('a[href]');
+      const n = Math.min(anchors.length, 600);
+      for (let i = 0; i < n; i++) push(anchors[i].getAttribute('href'));
+      // LinkedIn activity cards often expose urns without clean /posts/ hrefs
+      document.querySelectorAll('[data-urn*="activity"], [data-id*="activity"]').forEach((el) => {
+        const urn = el.getAttribute('data-urn') || el.getAttribute('data-id');
+        if (urn && urn.includes('activity')) {
+          push('https://www.linkedin.com/feed/update/' + urn);
+        }
+      });
+      return out;
+    }"""
+    for attempt in range(2):
         try:
-            # Light settle only — full networkidle stalls SPA profiles.
-            await settle_page(page, quiet_ms=250 if attempt else 350)
-            hrefs = await page.locator("a[href]").evaluate_all(
-                "els => els.map(e => e.getAttribute('href')).filter(Boolean)"
-            )
+            await settle_page(page, quiet_ms=150 if attempt else 250)
+            hrefs = await _timed_evaluate(page, script, timeout_ms=8000)
             return [h for h in (hrefs or []) if isinstance(h, str)]
         except Exception as exc:  # noqa: BLE001
-            last = exc
-            if _is_nav_destroy(exc) and attempt + 1 < 3:
-                logger.info("href collect retry after navigation (%s/3)", attempt + 1)
+            if _is_nav_destroy(exc) and attempt + 1 < 2:
+                logger.info("href collect retry after navigation")
                 continue
             logger.warning("href collect failed: %s", exc)
             return []
-    if last:
-        logger.warning("href collect exhausted retries: %s", last)
     return []
 
 
-async def collect_post_urls(page: Page, *, platform: str, profile_url: str, limit: int = 40) -> list[str]:
+async def collect_post_urls(
+    page: Page,
+    *,
+    platform: str,
+    profile_url: str,
+    limit: int = 20,
+    max_scrolls: int = 4,
+) -> list[str]:
     """Scroll a profile and collect unique post/detail URLs."""
     platform = normalize_platform(platform)
     pattern = _POST_HREF.get(platform)
@@ -130,15 +158,22 @@ async def collect_post_urls(page: Page, *, platform: str, profile_url: str, limi
     seen: set[str] = set()
     base = page.url or profile_url
 
-    for _ in range(6):
+    for scroll_i in range(max_scrolls):
         hrefs = await _collect_hrefs(page)
         for href in hrefs:
-            abs_url = absolutize(base, href.split("?")[0])
+            clean = href.split("?")[0].split("#")[0]
+            abs_url = absolutize(base, clean)
             path = urlparse(abs_url).path
-            blob = f"{path}?{urlparse(abs_url).query}"
-            if pattern and not pattern.search(blob) and not pattern.search(abs_url):
+            if pattern and not pattern.search(path) and not pattern.search(abs_url):
                 continue
             if platform == "instagram" and "/p/" not in abs_url and "/reel/" not in abs_url and "/tv/" not in abs_url:
+                continue
+            if (
+                platform == "linkedin"
+                and "recent-activity" in abs_url
+                and "/posts/" not in abs_url
+                and "activity" not in abs_url
+            ):
                 continue
             if abs_url in seen:
                 continue
@@ -146,14 +181,15 @@ async def collect_post_urls(page: Page, *, platform: str, profile_url: str, limi
             found.append(abs_url)
             if len(found) >= limit:
                 return found
+        if scroll_i + 1 >= max_scrolls:
+            break
         try:
-            await page.mouse.wheel(0, 1400)
-            await page.wait_for_timeout(800)
-            await settle_page(page, quiet_ms=300)
+            await page.mouse.wheel(0, 1600)
+            await page.wait_for_timeout(500)
             base = page.url or base
         except Exception as exc:  # noqa: BLE001
             if _is_nav_destroy(exc):
-                await settle_page(page)
+                await settle_page(page, quiet_ms=200)
                 base = page.url or base
                 continue
             logger.warning("scroll failed during collect: %s", exc)
@@ -197,6 +233,7 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
                 title: document.title || '',
               };
             }""",
+            timeout_ms=12000,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("parse_post_page evaluate failed for %s: %s", post_url, exc)

@@ -155,7 +155,13 @@ class YouTubeConnector:
             source = "yt_dlp"
             try:
                 url = ref.url or f"https://www.youtube.com/@{ref.handle}"
-                account, posts = await fetch_channel_via_ytdlp(url, window=self._window)
+                account, posts = await fetch_channel_via_ytdlp(
+                    url,
+                    window=self._window,
+                    run_id=self._run_id,
+                    object_store=self._object_store,
+                    download_media=True,
+                )
                 self._sources_used.append("yt_dlp")
             except YtDlpError as exc:
                 await self._emit("error", {"detail": f"yt-dlp failed: {exc}"})

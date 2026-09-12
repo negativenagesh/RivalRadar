@@ -23,7 +23,9 @@ ENV PATH="/build/services/ingestion/.venv/bin:$PATH" \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 RUN playwright install --with-deps chromium && \
-    pip install --no-cache-dir yt-dlp && \
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir yt-dlp gallery-dl && \
     chmod -R a+rX /opt/ms-playwright
 
 RUN mkdir -p /data/objects && chown appuser:appuser /data/objects

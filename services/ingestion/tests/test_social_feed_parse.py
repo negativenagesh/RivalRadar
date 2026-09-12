@@ -1,9 +1,11 @@
+from app.connectors.social_feed import _profile_entry_url
 from app.connectors.social_feed_parse import (
     _is_nav_destroy,
     external_id_for,
     normalize_platform,
     parse_count,
 )
+from app.connectors.social_profile.targets import ProfileTarget
 
 
 def test_parse_count_suffixes() -> None:
@@ -38,3 +40,18 @@ def test_nav_destroy_detection() -> None:
         )
     )
     assert not _is_nav_destroy(RuntimeError("timeout 30000ms exceeded"))
+
+
+def test_linkedin_company_posts_entry_url() -> None:
+    target = ProfileTarget(
+        handle="@pixisai",
+        platform="linkedin",
+        url="https://www.linkedin.com/company/pixisai",
+    )
+    assert _profile_entry_url(target, "linkedin").endswith("/company/pixisai/posts")
+    already = ProfileTarget(
+        handle="@pixisai",
+        platform="linkedin",
+        url="https://www.linkedin.com/company/pixisai/posts",
+    )
+    assert _profile_entry_url(already, "linkedin").endswith("/posts")
