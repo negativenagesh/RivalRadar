@@ -131,8 +131,9 @@ async def enrich_posts_media(
             updated = dict(post)
             vid = post["external_post_id"]
             urls = list(post.get("media_urls") or [])
-            if post.get("image_url") and post["image_url"] not in urls:
-                urls.insert(0, post["image_url"])
+            image_url = post.get("image_url")
+            if image_url and image_url not in urls:
+                urls.insert(0, image_url)
             if not urls:
                 thumb = best_thumbnail_url(vid)
                 if thumb:

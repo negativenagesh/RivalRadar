@@ -6,6 +6,7 @@ import asyncio
 import html
 import random
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from agent_events import AgentEvent, AgentEventBus
@@ -44,8 +45,8 @@ class YouTubeConnector:
         targets: list[ProfileTarget],
         *,
         lookback_days: int = 3,
-        date_from=None,
-        date_to=None,
+        date_from: date | None = None,
+        date_to: date | None = None,
         window: DateWindow | None = None,
         api_key: str | None = None,
         headless: bool = True,

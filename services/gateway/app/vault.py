@@ -23,7 +23,7 @@ def _key_bytes() -> bytes:
     return hashlib.sha256(raw).digest()
 
 
-def _fernet():
+def _fernet() -> Any | None:
     try:
         from cryptography.fernet import Fernet
     except ImportError:
@@ -36,7 +36,8 @@ def encrypt_json(payload: dict[str, Any]) -> str:
     data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     f = _fernet()
     if f is not None:
-        return f.encrypt(data).decode("utf-8")
+        token: bytes = f.encrypt(data)
+        return token.decode("utf-8")
     key = _key_bytes()
     nonce = hashlib.sha256(data[:16] + key).digest()[:16]
     stream = hashlib.sha256(key + nonce).digest()
