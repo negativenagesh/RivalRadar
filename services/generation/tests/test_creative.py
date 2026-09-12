@@ -1,4 +1,6 @@
 from app.creative import CreativeRequest, generate_creative
+from httpx import AsyncClient
+
 from tests.fakes import FakeLLMProvider
 
 
@@ -34,7 +36,7 @@ async def test_generate_image_creative() -> None:
     assert result.image_mime_type == "image/png"
 
 
-async def test_creative_endpoint(client) -> None:
+async def test_creative_endpoint(client: AsyncClient) -> None:
     response = await client.post(
         "/creative/generate",
         json={
