@@ -5,7 +5,7 @@ import type {
   IngestionTarget,
   MissionState,
 } from "./types";
-import { isValidSocialUrl } from "./social-validate";
+import { isValidSocialUrl, type SocialKey } from "./social-validate";
 
 export const MISSION_STORAGE_KEY = "rivalradar.mission";
 
@@ -41,6 +41,15 @@ export const DEFAULT_BRAND: BrandProfile = {
 };
 
 export const MOCK_HANDLES = ["nova.wear", "brewbros", "fitkit.co"] as const;
+
+const SOCIAL_KEYS: SocialKey[] = [
+  "linkedin",
+  "x",
+  "instagram",
+  "tiktok",
+  "youtube",
+  "threads",
+];
 
 export function newCompetitor(): CompetitorProfile {
   return {
@@ -97,8 +106,12 @@ export type MissionTargetPreview = {
   label: string;
   platform: string;
   handleOrUrl: string;
-  source: "youtube-api" | "yt-dlp" | "mock-browser";
+  source: "youtube-api" | "yt-dlp" | "browser" | "mock-browser";
 };
+
+function ensureHttp(url: string): string {
+  return url.startsWith("http") ? url : `https://${url}`;
+}
 
 function youtubeHandleFromUrl(url: string): string {
   const at = url.match(/youtube\.com\/@([\w.-]+)/i);
@@ -108,28 +121,60 @@ function youtubeHandleFromUrl(url: string): string {
   return url.replace(/^https?:\/\//, "").slice(0, 40);
 }
 
+function handleFromSocial(platform: SocialKey, url: string): string {
+  if (platform === "youtube") return youtubeHandleFromUrl(url);
+  const cleaned = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const parts = cleaned.split("/");
+  return (parts[parts.length - 1] || cleaned).slice(0, 40);
+}
+
+function collectSocialTargets(
+  label: string,
+  socials: BrandProfile["socials"],
+): { preview: MissionTargetPreview; target: IngestionTarget }[] {
+  const out: { preview: MissionTargetPreview; target: IngestionTarget }[] = [];
+  for (const key of SOCIAL_KEYS) {
+    const raw = socials[key].trim();
+    if (!raw || !isValidSocialUrl(key, raw)) continue;
+    const url = ensureHttp(raw);
+    const handle = handleFromSocial(key, url);
+    out.push({
+      preview: {
+        label,
+        platform: key,
+        handleOrUrl: handle,
+        source: key === "youtube" ? "youtube-api" : "browser",
+      },
+      target: {
+        handle,
+        platform: key,
+        url,
+      },
+    });
+  }
+  return out;
+}
+
 /** Visible Mission targets derived from Context (Operator strip). */
 export function buildMissionTargets(state: MissionState): MissionTargetPreview[] {
   const out: MissionTargetPreview[] = [];
-  const rivals = state.competitors.filter((c) => c.name.trim() || c.socials.youtube.trim());
+  out.push(...collectSocialTargets(state.brand.displayName || "Brand", state.brand.socials).map((x) => x.preview));
 
-  rivals.forEach((c, idx) => {
-    const yt = c.socials.youtube.trim();
-    if (yt && isValidSocialUrl("youtube", yt)) {
-      out.push({
-        label: c.name || "Rival",
-        platform: "youtube",
-        handleOrUrl: youtubeHandleFromUrl(yt),
-        source: "youtube-api",
-      });
+  state.competitors.forEach((c, idx) => {
+    const label = c.name || `Rival ${idx + 1}`;
+    const socials = collectSocialTargets(label, c.socials);
+    if (socials.length) {
+      out.push(...socials.map((x) => x.preview));
       return;
     }
-    out.push({
-      label: c.name || `Rival ${idx + 1}`,
-      platform: "mock",
-      handleOrUrl: MOCK_HANDLES[idx % MOCK_HANDLES.length],
-      source: "mock-browser",
-    });
+    if (c.name.trim() || c.website.trim()) {
+      out.push({
+        label,
+        platform: "mock",
+        handleOrUrl: MOCK_HANDLES[idx % MOCK_HANDLES.length],
+        source: "mock-browser",
+      });
+    }
   });
 
   if (out.length === 0) {
@@ -145,7 +190,7 @@ export function buildMissionTargets(state: MissionState): MissionTargetPreview[]
   return out;
 }
 
-/** Map mission form → ingestion run. YouTube URLs use API/yt-dlp; others map to mock profiles. */
+/** Map mission form → ingestion run across every linked platform. */
 export function missionToIngestionPayload(state: MissionState): {
   connector: "auto";
   targets: IngestionTarget[];
@@ -154,40 +199,35 @@ export function missionToIngestionPayload(state: MissionState): {
   lookback_days: number;
 } {
   const targets: IngestionTarget[] = [];
-  const rivals = state.competitors.filter((c) => c.name.trim() || c.website.trim() || c.socials.youtube.trim());
+  const seen = new Set<string>();
 
-  rivals.forEach((c, idx) => {
-    const yt = c.socials.youtube.trim();
-    if (yt && isValidSocialUrl("youtube", yt)) {
-      targets.push({
-        handle: youtubeHandleFromUrl(yt),
-        platform: "youtube",
-        url: yt.startsWith("http") ? yt : `https://${yt}`,
-      });
+  function push(t: IngestionTarget) {
+    const key = `${t.platform}|${t.url || t.handle}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    targets.push(t);
+  }
+
+  for (const item of collectSocialTargets("brand", state.brand.socials)) {
+    push(item.target);
+  }
+
+  state.competitors.forEach((c, idx) => {
+    const socials = collectSocialTargets(c.name || `rival-${idx}`, c.socials);
+    if (socials.length) {
+      socials.forEach((s) => push(s.target));
       return;
     }
-    const handle = MOCK_HANDLES[idx % MOCK_HANDLES.length];
-    targets.push({
-      handle,
-      platform: "mock",
-      url: undefined,
-    });
+    if (c.name.trim() || c.website.trim()) {
+      push({
+        handle: MOCK_HANDLES[idx % MOCK_HANDLES.length],
+        platform: "mock",
+      });
+    }
   });
 
   if (targets.length === 0) {
-    MOCK_HANDLES.forEach((handle) => {
-      targets.push({ handle, platform: "mock" });
-    });
-  }
-
-  // Also pull brand YouTube if set (channel-as-self scout)
-  const brandYt = state.brand.socials.youtube.trim();
-  if (brandYt && isValidSocialUrl("youtube", brandYt)) {
-    targets.unshift({
-      handle: youtubeHandleFromUrl(brandYt),
-      platform: "youtube",
-      url: brandYt.startsWith("http") ? brandYt : `https://${brandYt}`,
-    });
+    MOCK_HANDLES.forEach((handle) => push({ handle, platform: "mock" }));
   }
 
   return {
@@ -241,7 +281,7 @@ export function buildDiscoveryReport(input: {
           (p, i) =>
             `${i + 1}. [${p.format}] ${p.caption.slice(0, 120)}${p.caption.length > 120 ? "…" : ""} (score ${p.engagement_score})`,
         )
-      : ["- No posts yet — run scout with fixture or YouTube links."]),
+      : ["- No posts yet — run scout with social links."]),
     "",
     "## Gaps & plays",
     input.brand.contentPillars

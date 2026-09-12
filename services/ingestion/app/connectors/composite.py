@@ -31,6 +31,15 @@ class CompositeConnector:
                 out.append("mock")
         return out
 
+    @property
+    def screenshot_keys(self) -> list[str]:
+        out: list[str] = []
+        for c in self._connectors:
+            keys = getattr(c, "screenshot_keys", None)
+            if keys:
+                out.extend(keys)
+        return out
+
     async def fetch_accounts(self) -> list[RawAccount]:
         accounts: list[RawAccount] = []
         for c in self._connectors:

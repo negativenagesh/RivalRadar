@@ -95,10 +95,19 @@ class SocialProfileConnector:
         assert session.page is not None
         accounts: list[RawAccount] = []
         for target in self._targets:
-            await self._emit("nav", {"url": target.url})
+            await self._emit("nav", {"url": target.url, "platform": target.platform})
             await session.page.goto(target.url, wait_until="domcontentloaded")
             await self._pause()
-            await self._emit_screenshot()
+            frame = await session.screenshot_jpeg_b64()
+            await self._emit(
+                "screenshot",
+                {
+                    "jpeg_b64": frame,
+                    "platform": target.platform,
+                    "url": target.url,
+                    "label": target.handle,
+                },
+            )
 
             header = session.page.locator(".profile-header")
             display_name = await session.page.locator(".profile-name").inner_text()
@@ -116,12 +125,21 @@ class SocialProfileConnector:
         assert session.page is not None
         posts: list[RawPost] = []
         for target in self._targets:
-            await self._emit("nav", {"url": target.url})
+            await self._emit("nav", {"url": target.url, "platform": target.platform})
             await session.page.goto(target.url, wait_until="domcontentloaded")
             await self._pause()
             await session.page.mouse.wheel(0, 600)
             await self._pause()
-            await self._emit_screenshot()
+            frame = await session.screenshot_jpeg_b64()
+            await self._emit(
+                "screenshot",
+                {
+                    "jpeg_b64": frame,
+                    "platform": target.platform,
+                    "url": target.url,
+                    "label": target.handle,
+                },
+            )
 
             cards = session.page.locator(".post-card")
             count = await cards.count()

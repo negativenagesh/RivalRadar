@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 
 from agent_events import AgentEventBus
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -62,8 +63,23 @@ async def download_recording(
     return StreamingResponse(
         object_store.open(run.recording_key),
         media_type="video/webm",
-        headers={"Content-Disposition": f'attachment; filename="{run_id}.webm"'},
+        headers={"Content-Disposition": f'inline; filename="{run_id}.webm"'},
     )
+
+
+@router.get("/ingest/runs/{run_id}/screenshots/{index}")
+async def get_screenshot(
+    run_id: str, index: int, session: AsyncSession = Depends(get_session)
+) -> StreamingResponse:
+    run = await session.get(IngestionRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    key = f"screenshots/{run_id}/{index}.jpg"
+    path = LocalDiskObjectStore(settings.object_store_root).resolve_path(key)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    object_store = LocalDiskObjectStore(settings.object_store_root)
+    return StreamingResponse(object_store.open(key), media_type="image/jpeg")
 
 
 @router.websocket("/ingest/runs/{run_id}/live")
@@ -77,7 +93,8 @@ async def run_live_feed(websocket: WebSocket, run_id: str) -> None:
         return
     finally:
         if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()
 
 
 @router.get("/accounts", response_model=list[CompetitorAccountRead])

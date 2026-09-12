@@ -162,33 +162,42 @@ export default function MissionPage() {
     return false;
   }
 
+  function scrollToTop() {
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+  }
+
   function goToStep(target: MissionStep) {
     if (target === step) return;
     if (target < step) {
       setGateIssue(null);
       setStep(target);
+      scrollToTop();
       return;
     }
     const issues = canReachStep(target, mission, posts.length, live.run?.status);
     if (!applyGate(issues)) return;
     setStep(target);
+    scrollToTop();
   }
 
   function handleContinue() {
     if (step === 0) {
       if (!applyGate(validateContext(mission))) return;
       setStep(1);
+      scrollToTop();
       return;
     }
     if (step === 1) {
       if (!applyGate(validateScout(mission, live.run?.status))) return;
       void refreshFindings();
       setStep(2);
+      scrollToTop();
       return;
     }
     if (step === 2) {
       if (!applyGate(validateFindings(posts.length))) return;
       setStep(3);
+      scrollToTop();
     }
   }
 
@@ -215,23 +224,23 @@ export default function MissionPage() {
       <MissionProgress step={step} onStepClick={goToStep} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
-        <div className="mb-8">
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary">
+        <div className="mb-10 text-center">
+          <p className="font-ui text-xs font-semibold uppercase tracking-[0.28em] text-primary">
             Operator console
           </p>
-          <h1 className="mt-2 text-4xl font-bold tracking-tight sm:text-5xl">
+          <h1 className="font-shout text-jumble-wild mt-3 text-5xl uppercase sm:text-6xl">
             Mission <span className="text-primary">Control</span>
           </h1>
-          <p className="mt-3 max-w-xl text-sm text-muted-foreground sm:text-base">
-            Feed the agent your brand + rivals, watch the live scout, review findings, then unlock
-            what it can create.
+          <p className="font-accent mx-auto mt-4 max-w-2xl text-base italic text-muted-foreground sm:text-lg">
+            Feed the agent your brand + rivals, watch the live scout hop every platform, review
+            findings, then unlock what it can create.
           </p>
         </div>
 
         {gateWarning && (
           <div
             role="alert"
-            className="mb-6 animate-in fade-in slide-in-from-top-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            className="mb-6 animate-in fade-in slide-in-from-top-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-center text-sm text-destructive"
           >
             {gateWarning}
           </div>
@@ -293,21 +302,21 @@ export default function MissionPage() {
             variant="outline"
             disabled={step === 0}
             onClick={() => goToStep((step - 1) as MissionStep)}
-            className="h-14 gap-3 px-8 text-base font-semibold"
+            className="font-display h-14 gap-3 px-8 text-base font-semibold"
           >
             <ArrowLeft className="size-5" />
             Back
           </Button>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap justify-center gap-3">
             {step === 2 && (
-              <Button variant="secondary" className="h-14 px-6" onClick={() => void refreshFindings()}>
+              <Button variant="secondary" className="font-display h-14 px-6" onClick={() => void refreshFindings()}>
                 Refresh posts
               </Button>
             )}
             {step < 3 ? (
               <Button
                 onClick={handleContinue}
-                className="h-14 gap-3 px-10 text-base font-semibold shadow-[0_0_36px_-8px_oklch(0.87_0.24_128)]"
+                className="font-display h-14 gap-3 px-10 text-base font-semibold shadow-[0_0_36px_-8px_oklch(0.87_0.24_128)]"
               >
                 Continue
                 <ArrowRight className="size-5" />

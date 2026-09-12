@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 
 from agent_events import AgentEventBus
@@ -14,6 +15,7 @@ from app.clients import (
     fetch_ingestion_posts,
     fetch_ingestion_recording,
     fetch_ingestion_run,
+    fetch_ingestion_screenshot,
     fetch_latest_digest,
     generate_creative_content,
     trigger_digest_generation,
@@ -73,7 +75,8 @@ async def pipeline_run_live_feed(websocket: WebSocket, run_id: str) -> None:
         return
     finally:
         if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()
 
 
 @router.post("/ingestion/runs")
@@ -98,7 +101,8 @@ async def ingestion_run_live_feed(websocket: WebSocket, run_id: str) -> None:
         return
     finally:
         if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()
 
 
 @router.get("/ingestion/runs/{run_id}/recording")
@@ -122,8 +126,29 @@ async def download_ingestion_recording(run_id: str) -> StreamingResponse:
     return StreamingResponse(
         stream(),
         media_type="video/webm",
-        headers={"Content-Disposition": f'attachment; filename="{run_id}.webm"'},
+        headers={"Content-Disposition": f'inline; filename="{run_id}.webm"'},
     )
+
+
+@router.get("/ingestion/runs/{run_id}/screenshots/{index}")
+async def download_ingestion_screenshot(run_id: str, index: int) -> StreamingResponse:
+    try:
+        upstream = await fetch_ingestion_screenshot(run_id, index)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Screenshot not found") from exc
+
+    client = upstream.extensions.get("rivalradar_client")
+
+    async def stream() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            if client is not None:
+                await client.aclose()
+
+    return StreamingResponse(stream(), media_type="image/jpeg")
 
 
 @router.get("/ingestion/posts")
