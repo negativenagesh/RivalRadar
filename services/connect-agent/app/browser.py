@@ -1,9 +1,14 @@
-"""Headed browser sessions for platform Connect (login → dump cookies)."""
+"""Headed browser sessions for platform Connect (login → dump cookies).
+
+In Docker Compose this runs against Xvfb; operators view the browser via noVNC.
+On a bare Mac host, DISPLAY is unset and Chromium opens a normal window.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,6 +38,20 @@ class LiveSession:
         return datetime.now(UTC) > self.created_at + SESSION_TTL
 
 
+def _chromium_args() -> list[str]:
+    args = ["--disable-blink-features=AutomationControlled"]
+    # Container / Xvfb needs these; harmless on host.
+    if os.environ.get("DISPLAY") or os.environ.get("CONNECT_IN_DOCKER") == "1":
+        args.extend(
+            [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ]
+        )
+    return args
+
+
 class SessionManager:
     def __init__(self) -> None:
         self._sessions: dict[str, LiveSession] = {}
@@ -50,7 +69,7 @@ class SessionManager:
             playwright = await async_playwright().start()
             browser = await playwright.chromium.launch(
                 headless=False,
-                args=["--disable-blink-features=AutomationControlled"],
+                args=_chromium_args(),
             )
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 900},
@@ -67,7 +86,16 @@ class SessionManager:
             live.context = context
             live.page = page
             live.status = "awaiting_login"
-            live.detail = f"Sign in to {platform} in the opened browser, then confirm in RivalRadar"
+            viewer = (os.environ.get("PUBLIC_VIEWER_URL") or "").strip()
+            if viewer:
+                live.detail = (
+                    f"Sign in to {platform} in the Connect browser tab ({viewer}), "
+                    "then confirm in RivalRadar"
+                )
+            else:
+                live.detail = (
+                    f"Sign in to {platform} in the opened browser, then confirm in RivalRadar"
+                )
         except Exception as exc:  # noqa: BLE001
             logger.exception("failed to start connect session %s", session_id)
             live.status = "error"

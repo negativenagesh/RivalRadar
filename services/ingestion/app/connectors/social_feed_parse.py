@@ -63,12 +63,22 @@ def _is_nav_destroy(exc: BaseException) -> bool:
     return any(token in msg for token in _NAV_DESTROY)
 
 
-async def settle_page(page: Page, *, quiet_ms: int = 500) -> None:
-    """Wait out SPA redirects so evaluate won't hit a dying document."""
+async def settle_page(
+    page: Page,
+    *,
+    quiet_ms: int = 400,
+    wait_network: bool = False,
+) -> None:
+    """Wait out SPA redirects so evaluate won't hit a dying document.
+
+    Avoid networkidle by default — LinkedIn/Instagram keep sockets open and
+    can burn the full timeout on every call, which looks like a stuck scout.
+    """
     with contextlib.suppress(Exception):
-        await page.wait_for_load_state("domcontentloaded", timeout=15000)
-    with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=8000)
+        await page.wait_for_load_state("domcontentloaded", timeout=8000)
+    if wait_network:
+        with contextlib.suppress(Exception):
+            await page.wait_for_load_state("networkidle", timeout=1500)
     with contextlib.suppress(Exception):
         await page.wait_for_timeout(quiet_ms)
 
@@ -94,8 +104,8 @@ async def _collect_hrefs(page: Page) -> list[str]:
     last: BaseException | None = None
     for attempt in range(3):
         try:
-            await settle_page(page, quiet_ms=400 if attempt else 600)
-            # locator API recreates handles after navigation more reliably than eval_on_selector_all
+            # Light settle only — full networkidle stalls SPA profiles.
+            await settle_page(page, quiet_ms=250 if attempt else 350)
             hrefs = await page.locator("a[href]").evaluate_all(
                 "els => els.map(e => e.getAttribute('href')).filter(Boolean)"
             )
@@ -105,7 +115,6 @@ async def _collect_hrefs(page: Page) -> list[str]:
             if _is_nav_destroy(exc) and attempt + 1 < 3:
                 logger.info("href collect retry after navigation (%s/3)", attempt + 1)
                 continue
-            # Soft-fail: empty list lets the scout continue other platforms
             logger.warning("href collect failed: %s", exc)
             return []
     if last:

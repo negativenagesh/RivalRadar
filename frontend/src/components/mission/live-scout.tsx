@@ -120,6 +120,27 @@ function shotsFromEvents(events: AgentEvent[], targets: MissionTargetPreview[]):
     });
 }
 
+function shotsFromFrames(
+  frames: { id: string; b64: string; platform: string; label: string; url: string }[],
+  targets: MissionTargetPreview[],
+): Shot[] {
+  return frames.map((f) => {
+    const match =
+      targets.find((t) => t.url && f.url && (f.url.includes(t.url) || t.url.includes(f.url))) ||
+      targets.find(
+        (t) =>
+          t.platform.toLowerCase() === f.platform.toLowerCase() &&
+          (f.label.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, "")) ||
+            f.url.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, ""))),
+      ) ||
+      targets.find((t) => t.platform.toLowerCase() === f.platform.toLowerCase());
+    return {
+      ...f,
+      company: match?.label ?? "Scout",
+    };
+  });
+}
+
 
 type YtDlpIntel = {
   channel_title: string;
@@ -171,6 +192,7 @@ export function LiveScout({
   runId,
   connected,
   events,
+  frames,
   latestScreenshot,
   run,
   error,
@@ -190,6 +212,7 @@ export function LiveScout({
   runId: string | null;
   connected: boolean;
   events: AgentEvent[];
+  frames?: { id: string; b64: string; platform: string; label: string; url: string }[];
   latestScreenshot: string | null;
   run: IngestionRun | null;
   error: string | null;
@@ -204,7 +227,13 @@ export function LiveScout({
   );
   const [missingPlatforms, setMissingPlatforms] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const shots = useMemo(() => shotsFromEvents(events, targets), [events, targets]);
+  const shots = useMemo(
+    () =>
+      frames && frames.length > 0
+        ? shotsFromFrames(frames, targets)
+        : shotsFromEvents(events, targets),
+    [frames, events, targets],
+  );
   const ytdlpIntel = useMemo(() => ytdlpIntelFromEvents(events), [events]);
   const logEvents = useMemo(() => operatorLogEvents(events), [events]);
 

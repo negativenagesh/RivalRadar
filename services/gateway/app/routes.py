@@ -31,6 +31,7 @@ from app.connect_agent import (
     agent_dump_cookies,
     agent_health,
     agent_start_session,
+    public_viewer_url,
 )
 from app.connect_sessions import (
     ConnectSession,
@@ -392,9 +393,8 @@ async def start_connect_session(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Connect agent is offline. On your machine run: "
-                "cd services/connect-agent && uv sync && uv run playwright install chromium && "
-                "uv run uvicorn app.main:app --host 127.0.0.1 --port 8765"
+                "Connect agent is offline. Start the stack with `docker compose up -d` "
+                "(connect-agent is included). Viewer: http://localhost:7900"
             ),
         )
     session_id = str(uuid.uuid4())
@@ -404,6 +404,16 @@ async def start_connect_session(
         )
     except ConnectAgentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    viewer = None
+    raw_viewer = agent.get("viewer_url")
+    if isinstance(raw_viewer, str) and raw_viewer.strip():
+        viewer = raw_viewer.strip()
+    else:
+        viewer = public_viewer_url()
+    detail = str(
+        agent.get("detail")
+        or f"Sign in to {platform} in the Connect browser, then click I've logged in."
+    )
     put_session(
         ConnectSession(
             session_id=session_id,
@@ -411,7 +421,7 @@ async def start_connect_session(
             platform=platform,
             login_url=login_url,
             status="awaiting_login",
-            detail=str(agent.get("detail") or f"Sign in to {platform} in the opened browser"),
+            detail=detail,
         )
     )
     return ConnectSessionRead(
@@ -419,8 +429,9 @@ async def start_connect_session(
         platform=platform,
         status="awaiting_login",
         login_url=login_url,
-        detail=f"Browser opened for {platform}. Sign in there, then click I've logged in.",
+        detail=detail,
         agent_online=True,
+        viewer_url=viewer,
     )
 
 
@@ -437,6 +448,7 @@ async def read_connect_session(platform: str, session_id: str) -> ConnectSession
         login_url=live.login_url,
         detail=live.detail,
         agent_online=await agent_health(),
+        viewer_url=public_viewer_url(),
     )
 
 

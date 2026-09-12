@@ -149,6 +149,7 @@ export type ConnectSession = {
   login_url: string;
   detail?: string | null;
   agent_online?: boolean;
+  viewer_url?: string | null;
 };
 
 export function startConnectSession(

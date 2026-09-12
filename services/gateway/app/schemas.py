@@ -77,3 +77,4 @@ class ConnectSessionRead(BaseModel):
     login_url: str
     detail: str | None = None
     agent_online: bool = True
+    viewer_url: str | None = None
