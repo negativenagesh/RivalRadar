@@ -96,7 +96,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ingestion, intelligence, generation, compliance, gateway, frontend]
+        service: [ingestion, intelligence, generation, compliance, gateway, connect-agent, frontend]
     steps:
       - uses: actions/checkout@v4
 

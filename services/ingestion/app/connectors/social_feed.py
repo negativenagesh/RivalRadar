@@ -150,9 +150,10 @@ class SocialFeedConnector:
             return
 
         await self._pause()
+        await self._emit("action", {"detail": f"reading_profile platform={platform}"})
         try:
-            await settle_page(page)
-            title = await page.title()
+            await settle_page(page, quiet_ms=300)
+            title = await asyncio.wait_for(page.title(), timeout=8)
         except Exception:  # noqa: BLE001
             title = handle
         display = (title or handle).split("•")[0].split("|")[0].strip()[:200] or handle
@@ -162,19 +163,29 @@ class SocialFeedConnector:
 
         # Operator theater only — never used as Findings media
         try:
-            await settle_page(page, quiet_ms=200)
-            jpeg = await self._session.screenshot_jpeg_b64()
+            await self._emit("action", {"detail": f"screenshot platform={platform}"})
+            await settle_page(page, quiet_ms=150)
+            jpeg = await asyncio.wait_for(self._session.screenshot_jpeg_b64(), timeout=12)
             await self._emit(
                 "screenshot",
                 {"jpeg_b64": jpeg, "platform": platform, "url": url, "label": f"{handle} profile"},
             )
         except Exception:  # noqa: BLE001
             logger.debug("profile screenshot skipped", exc_info=True)
+            await self._emit("action", {"detail": f"screenshot_skipped platform={platform}"})
 
+        await self._emit("action", {"detail": f"collecting_posts platform={platform}"})
         try:
-            post_urls = await collect_post_urls(
-                page, platform=platform, profile_url=url, limit=_MAX_POSTS
+            post_urls = await asyncio.wait_for(
+                collect_post_urls(page, platform=platform, profile_url=url, limit=_MAX_POSTS),
+                timeout=45,
             )
+        except TimeoutError:
+            await self._emit(
+                "error",
+                {"detail": f"collect_posts timed out {platform} — continuing"},
+            )
+            post_urls = []
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"collect_posts failed {platform}: {exc}"})
             post_urls = []

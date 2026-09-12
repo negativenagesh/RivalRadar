@@ -82,3 +82,4 @@ async def test_connect_session_agent_offline(
     monkeypatch.setattr("app.routes.agent_health", _health)
     response = await client.post("/connections/linkedin/sessions", json={})
     assert response.status_code == 503
+    assert "docker compose" in response.json()["detail"].lower()

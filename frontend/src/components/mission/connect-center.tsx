@@ -105,11 +105,14 @@ export function ConnectCenter({
     try {
       const session = await startConnectSession(platform);
       setActiveSession(session);
+      if (session.viewer_url) {
+        window.open(session.viewer_url, "_blank", "noopener,noreferrer");
+      }
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Could not open Connect browser — is the connect-agent running?",
+          : "Could not open Connect browser — is connect-agent running in Compose?",
       );
     } finally {
       setBusy(null);
@@ -176,8 +179,8 @@ export function ConnectCenter({
         </p>
         <h3 className="font-display text-xl font-bold">Connect Center</h3>
         <p className="font-accent text-sm italic text-muted-foreground">
-          Click Connect — we open a browser for that platform. Sign in there. Hit I&apos;ve logged
-          in. RivalRadar captures the session automatically (never a password).
+          Click Connect — we open a browser tab for that platform (noVNC). Sign in there. Hit
+          I&apos;ve logged in. RivalRadar captures the session automatically (never a password).
         </p>
       </div>
 
@@ -304,22 +307,32 @@ export function ConnectCenter({
                 Connect {dialogLabel}
               </h4>
               <p className="font-accent text-sm italic text-muted-foreground">
-                A browser window opens on your machine. Sign in to {dialogLabel} yourself — we never
+                A Connect browser tab opens (noVNC). Sign in to {dialogLabel} yourself — we never
                 see your password. When you&apos;re in, confirm below and we capture the session.
               </p>
             </div>
 
             <ol className="font-ui space-y-3 text-sm text-muted-foreground">
               <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <span className="font-semibold text-foreground">1. Browser window</span>
+                <span className="font-semibold text-foreground">1. Connect browser</span>
                 <p className="mt-1 text-xs">
                   {activeSession
                     ? activeSession.detail ||
-                      `Opened ${dialogLabel} login — switch to that window and sign in.`
+                      `Opened ${dialogLabel} login — switch to that tab and sign in.`
                     : busy === dialog
                       ? "Opening browser…"
                       : "Waiting to open browser…"}
                 </p>
+                {activeSession?.viewer_url ? (
+                  <a
+                    href={activeSession.viewer_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex text-xs font-semibold text-primary underline"
+                  >
+                    Open Connect browser
+                  </a>
+                ) : null}
               </li>
               <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
                 <span className="font-semibold text-foreground">2. Sign in on {dialogLabel}</span>

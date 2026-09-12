@@ -1,15 +1,16 @@
 """RivalRadar Connect Agent — opens a real browser for platform login.
 
-Run on the host (not inside Docker) so a window can appear:
+Default path: Docker Compose service with Xvfb + noVNC (starts with the backend).
+Optional host path for a native Mac window:
 
   cd services/connect-agent
-  uv sync
-  uv run playwright install chromium
+  uv sync && uv run playwright install chromium
   uv run uvicorn app.main:app --host 127.0.0.1 --port 8765
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.browser import manager
 
-app = FastAPI(title="RivalRadar Connect Agent", version="0.1.0")
+app = FastAPI(title="RivalRadar Connect Agent", version="0.2.0")
 
 
 class StartBody(BaseModel):
@@ -32,15 +33,25 @@ class SessionStatus(BaseModel):
     status: str
     login_url: str
     detail: str | None = None
+    viewer_url: str | None = None
 
 
 class CookiesBody(BaseModel):
     cookies: list[dict[str, Any]] = Field(default_factory=list)
 
 
+def _viewer_url() -> str | None:
+    value = (os.environ.get("PUBLIC_VIEWER_URL") or "").strip()
+    return value or None
+
+
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "connect-agent"}
+async def health() -> dict[str, str | None]:
+    return {
+        "status": "ok",
+        "service": "connect-agent",
+        "viewer_url": _viewer_url(),
+    }
 
 
 @app.post("/sessions", response_model=SessionStatus)
@@ -55,6 +66,7 @@ async def start_session(body: StartBody) -> SessionStatus:
         status=live.status,
         login_url=live.login_url,
         detail=live.detail,
+        viewer_url=_viewer_url(),
     )
 
 
@@ -69,6 +81,7 @@ async def get_session(session_id: str) -> SessionStatus:
         status=live.status,
         login_url=live.login_url,
         detail=live.detail,
+        viewer_url=_viewer_url(),
     )
 
 

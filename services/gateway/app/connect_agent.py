@@ -1,4 +1,4 @@
-"""HTTP client for the host-side Connect Agent (headed Playwright)."""
+"""HTTP client for the Connect Agent (Playwright + optional noVNC viewer)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,11 @@ from typing import Any
 import httpx
 
 from app.config import settings
+
+_OFFLINE_HINT = (
+    "Connect agent is offline. Start the stack with `docker compose up -d` "
+    "(includes connect-agent). Viewer: http://localhost:7900"
+)
 
 
 class ConnectAgentError(RuntimeError):
@@ -26,6 +31,11 @@ def _detail_from_response(response: httpx.Response) -> str:
     return response.text or f"agent HTTP {response.status_code}"
 
 
+def public_viewer_url() -> str | None:
+    value = (settings.connect_viewer_url or "").strip()
+    return value or None
+
+
 async def agent_health() -> bool:
     try:
         async with httpx.AsyncClient(base_url=settings.connect_agent_url, timeout=3.0) as client:
@@ -43,11 +53,7 @@ async def agent_start_session(*, session_id: str, platform: str, login_url: str)
                 json={"session_id": session_id, "platform": platform, "login_url": login_url},
             )
     except httpx.HTTPError as exc:
-        raise ConnectAgentError(
-            "Connect agent is offline. On your Mac run: "
-            "cd services/connect-agent && uv sync && uv run playwright install chromium && "
-            "uv run uvicorn app.main:app --host 127.0.0.1 --port 8765"
-        ) from exc
+        raise ConnectAgentError(_OFFLINE_HINT) from exc
     if response.status_code >= 400:
         raise ConnectAgentError(_detail_from_response(response), status_code=502)
     result: dict[str, Any] = response.json()

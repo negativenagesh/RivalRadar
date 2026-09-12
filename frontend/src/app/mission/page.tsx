@@ -209,12 +209,13 @@ export default function MissionPage() {
     if (!runId) return;
     setScoutError(null);
     setKilling(true);
+    live.markOptimistic("cancelled", "cancelled by operator");
     try {
       await cancelIngestionRun(runId);
-      // Force a refresh of run status via re-subscribing by toggling lastRunId briefly.
-      patch({ lastRunId: runId });
+      await live.refreshRun();
     } catch (err) {
       setScoutError(err instanceof Error ? err.message : "Failed to kill scout");
+      await live.refreshRun();
     } finally {
       setKilling(false);
     }
@@ -229,6 +230,7 @@ export default function MissionPage() {
         runId &&
         (live.run?.status === "running" || live.run?.status === "pending")
       ) {
+        live.markOptimistic("cancelled", "cancelled by operator");
         try {
           await cancelIngestionRun(runId);
         } catch {
@@ -309,6 +311,7 @@ export default function MissionPage() {
               runId={runId}
               connected={live.connected}
               events={live.events}
+              frames={live.frames}
               latestScreenshot={live.latestScreenshot}
               run={live.run}
               error={scoutError}

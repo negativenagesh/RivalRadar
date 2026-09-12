@@ -94,6 +94,20 @@ services:
     ports:
       - "8004:8000"
 
+  connect-agent:
+    build:
+      context: .
+      dockerfile: services/connect-agent/Dockerfile
+    restart: unless-stopped
+    environment:
+      CONNECT_IN_DOCKER: "1"
+      DISPLAY: ":99"
+      PUBLIC_VIEWER_URL: ${CONNECT_VIEWER_URL:-http://localhost:7900/vnc.html?autoconnect=1&resize=scale}
+    ports:
+      - "8765:8765"
+      - "7900:7900"
+    shm_size: "1gb"
+
   gateway:
     build:
       context: .
@@ -107,7 +121,8 @@ services:
       INTELLIGENCE_SERVICE_URL: http://intelligence:8000
       GENERATION_SERVICE_URL: http://generation:8000
       COMPLIANCE_SERVICE_URL: http://compliance:8000
-      CONNECT_AGENT_URL: ${CONNECT_AGENT_URL:-http://host.docker.internal:8765}
+      CONNECT_AGENT_URL: ${CONNECT_AGENT_URL:-http://connect-agent:8765}
+      CONNECT_VIEWER_URL: ${CONNECT_VIEWER_URL:-http://localhost:7900/vnc.html?autoconnect=1&resize=scale}
     ports:
       - "8000:8000"
     extra_hosts:
@@ -125,6 +140,8 @@ services:
         condition: service_started
       compliance:
         condition: service_started
+      connect-agent:
+        condition: service_healthy
     volumes:
       - object_store:/data/objects
 
