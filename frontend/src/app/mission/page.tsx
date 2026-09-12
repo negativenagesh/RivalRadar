@@ -43,49 +43,35 @@ import type {
 } from "@/lib/types";
 
 export default function MissionPage() {
-  const [hydrated, setHydrated] = useState(false);
   const [step, setStep] = useState<MissionStep>(0);
-  const [mission, setMission] = useState<MissionState | null>(null);
+  const [mission, setMission] = useState<MissionState>(() => loadMission());
   const [starting, setStarting] = useState(false);
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [posts, setPosts] = useState<CompetitorPost[]>([]);
   const [accounts, setAccounts] = useState<CompetitorAccount[]>([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
-  const [gateWarning, setGateWarning] = useState<string | null>(null);
-  const [gateFieldId, setGateFieldId] = useState<string | null>(null);
+  const [gateIssue, setGateIssue] = useState<FieldIssue | null>(null);
 
-  const runId = mission?.lastRunId ?? null;
+  const runId = mission.lastRunId ?? null;
   const live = useIngestionLive(runId);
 
   useEffect(() => {
-    setMission(loadMission());
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!mission || !hydrated) return;
     saveMission(mission);
-  }, [mission, hydrated]);
+  }, [mission]);
 
-  // Clear the banner as soon as the flagged field is fixed.
-  useEffect(() => {
-    if (!mission || !gateWarning) return;
+  // Derived: hide the banner as soon as the flagged field is fixed (no setState in effect).
+  const gateWarning = useMemo(() => {
+    if (!gateIssue) return null;
     const open = [
       ...validateContext(mission),
       ...validateScout(mission),
       ...validateFindings(posts.length),
     ];
-    const stillBroken = gateFieldId
-      ? open.some((i) => i.fieldId === gateFieldId)
-      : open.some((i) => i.message === gateWarning);
-    if (!stillBroken) {
-      setGateWarning(null);
-      setGateFieldId(null);
-    }
-  }, [mission, posts.length, gateWarning, gateFieldId]);
+    return open.some((i) => i.fieldId === gateIssue.fieldId) ? gateIssue.message : null;
+  }, [gateIssue, mission, posts.length]);
 
   const patch = useCallback((partial: Partial<MissionState>) => {
-    setMission((prev) => (prev ? { ...prev, ...partial } : prev));
+    setMission((prev) => ({ ...prev, ...partial }));
   }, []);
 
   const setBrand = useCallback((brand: BrandProfile) => patch({ brand }), [patch]);
@@ -113,13 +99,27 @@ export default function MissionPage() {
   }, []);
 
   useEffect(() => {
-    if (live.done && live.run?.status === "done") {
-      void refreshFindings();
-    }
-  }, [live.done, live.run?.status, refreshFindings]);
+    if (!live.done || live.run?.status !== "done") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [p, a] = await Promise.all([listIngestionPosts(), listIngestionAccounts()]);
+        if (cancelled) return;
+        setPosts(p);
+        setAccounts(a);
+      } catch {
+        if (!cancelled) {
+          setPosts([]);
+          setAccounts([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [live.done, live.run?.status]);
 
   const report = useMemo(() => {
-    if (!mission) return "";
     return buildDiscoveryReport({
       brand: mission.brand,
       competitors: mission.competitors,
@@ -132,24 +132,20 @@ export default function MissionPage() {
 
   function applyGate(issues: FieldIssue[]): boolean {
     if (!issues.length) {
-      setGateWarning(null);
-      setGateFieldId(null);
+      setGateIssue(null);
       return true;
     }
     const first = issues[0];
-    setGateWarning(first.message);
-    setGateFieldId(first.fieldId);
+    setGateIssue(first);
     setStep(first.step);
     window.setTimeout(() => focusField(first.fieldId), 80);
     return false;
   }
 
   function goToStep(target: MissionStep) {
-    if (!mission) return;
     if (target === step) return;
     if (target < step) {
-      setGateWarning(null);
-      setGateFieldId(null);
+      setGateIssue(null);
       setStep(target);
       return;
     }
@@ -159,7 +155,6 @@ export default function MissionPage() {
   }
 
   function handleContinue() {
-    if (!mission) return;
     if (step === 0) {
       if (!applyGate(validateContext(mission))) return;
       setStep(1);
@@ -178,7 +173,6 @@ export default function MissionPage() {
   }
 
   async function handleStartScout() {
-    if (!mission) return;
     if (!applyGate(validateContext(mission))) return;
     setScoutError(null);
     setStarting(true);
@@ -186,22 +180,12 @@ export default function MissionPage() {
       const body = missionToIngestionPayload(mission);
       const created = await startIngestionRun(body);
       patch({ lastRunId: created.run_id });
-      setGateWarning(null);
-      setGateFieldId(null);
+      setGateIssue(null);
     } catch (err) {
       setScoutError(err instanceof Error ? err.message : "Failed to start scout");
     } finally {
       setStarting(false);
     }
-  }
-
-  if (!hydrated || !mission) {
-    return (
-      <div className="flex min-h-screen flex-col">
-        <NavBar />
-        <p className="p-10 text-sm text-muted-foreground">Loading mission…</p>
-      </div>
-    );
   }
 
   return (

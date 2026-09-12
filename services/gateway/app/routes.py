@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 
 from agent_events import AgentEventBus
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -109,7 +110,7 @@ async def download_ingestion_recording(run_id: str) -> StreamingResponse:
 
     client = upstream.extensions.get("rivalradar_client")
 
-    async def stream():
+    async def stream() -> AsyncIterator[bytes]:
         try:
             async for chunk in upstream.aiter_bytes():
                 yield chunk
@@ -127,12 +128,12 @@ async def download_ingestion_recording(run_id: str) -> StreamingResponse:
 
 @router.get("/ingestion/posts")
 async def list_ingestion_posts() -> list[dict[str, object]]:
-    return await fetch_ingestion_posts()  # type: ignore[return-value]
+    return await fetch_ingestion_posts()
 
 
 @router.get("/ingestion/accounts")
 async def list_ingestion_accounts() -> list[dict[str, object]]:
-    return await fetch_ingestion_accounts()  # type: ignore[return-value]
+    return await fetch_ingestion_accounts()
 
 
 @router.get("/drafts", response_model=list[DraftRead])
