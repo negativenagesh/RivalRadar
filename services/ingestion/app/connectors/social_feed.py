@@ -23,6 +23,7 @@ from app.connectors.social_feed_parse import (
     collect_post_urls,
     normalize_platform,
     parse_post_page,
+    settle_page,
 )
 from app.connectors.social_profile.browser import BrowserSession
 from app.connectors.social_profile.targets import ProfileTarget
@@ -109,7 +110,15 @@ class SocialFeedConnector:
         ).__aenter__()
         assert self._session.page is not None
         for target in self._targets:
-            await self._scout_target(target)
+            try:
+                await self._scout_target(target)
+            except Exception as exc:  # noqa: BLE001
+                platform = normalize_platform(target.platform or "web")
+                await self._emit(
+                    "error",
+                    {"detail": f"scout_target failed {platform}: {exc}"},
+                )
+                logger.exception("scout_target failed for %s", target.handle)
         self._loaded = True
         self._sources_used.append("browser")
 
@@ -132,6 +141,7 @@ class SocialFeedConnector:
         await self._emit("nav", {"url": url, "platform": platform, "phase": "profile"})
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await settle_page(page)
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"profile nav failed {url}: {exc}"})
             self._accounts.append(
@@ -140,7 +150,11 @@ class SocialFeedConnector:
             return
 
         await self._pause()
-        title = await page.title()
+        try:
+            await settle_page(page)
+            title = await page.title()
+        except Exception:  # noqa: BLE001
+            title = handle
         display = (title or handle).split("•")[0].split("|")[0].strip()[:200] or handle
         self._accounts.append(
             RawAccount(handle=handle, display_name=display, platform=platform)
@@ -148,6 +162,7 @@ class SocialFeedConnector:
 
         # Operator theater only — never used as Findings media
         try:
+            await settle_page(page, quiet_ms=200)
             jpeg = await self._session.screenshot_jpeg_b64()
             await self._emit(
                 "screenshot",
@@ -156,7 +171,14 @@ class SocialFeedConnector:
         except Exception:  # noqa: BLE001
             logger.debug("profile screenshot skipped", exc_info=True)
 
-        post_urls = await collect_post_urls(page, platform=platform, profile_url=url, limit=_MAX_POSTS)
+        try:
+            post_urls = await collect_post_urls(
+                page, platform=platform, profile_url=url, limit=_MAX_POSTS
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._emit("error", {"detail": f"collect_posts failed {platform}: {exc}"})
+            post_urls = []
+
         await self._emit(
             "action",
             {"detail": f"found_posts count={len(post_urls)} platform={platform}"},
@@ -166,11 +188,15 @@ class SocialFeedConnector:
         for post_url in post_urls:
             if kept >= _MAX_POSTS:
                 break
-            ok = await self._ingest_post(
-                handle=handle,
-                platform=platform,
-                post_url=post_url,
-            )
+            try:
+                ok = await self._ingest_post(
+                    handle=handle,
+                    platform=platform,
+                    post_url=post_url,
+                )
+            except Exception as exc:  # noqa: BLE001
+                await self._emit("error", {"detail": f"ingest_post failed {post_url}: {exc}"})
+                ok = False
             if ok:
                 kept += 1
 
@@ -188,12 +214,17 @@ class SocialFeedConnector:
         await self._emit("nav", {"url": post_url, "platform": platform, "phase": "post"})
         try:
             await page.goto(post_url, wait_until="domcontentloaded", timeout=45000)
+            await settle_page(page)
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"post nav failed {post_url}: {exc}"})
             return False
 
         await self._pause()
-        parsed = await parse_post_page(page, platform=platform, post_url=post_url)
+        try:
+            parsed = await parse_post_page(page, platform=platform, post_url=post_url)
+        except Exception as exc:  # noqa: BLE001
+            await self._emit("error", {"detail": f"parse_post failed {post_url}: {exc}"})
+            return False
         posted_at: datetime | None = parsed.get("posted_at")
         if posted_at is None:
             # Keep recent undated posts only if still scanning early grid
