@@ -226,17 +226,8 @@ export default function MissionPage() {
     setScoutError(null);
     setStarting(true);
     try {
-      if (
-        runId &&
-        (live.run?.status === "running" || live.run?.status === "pending")
-      ) {
-        live.markOptimistic("cancelled", "cancelled by operator");
-        try {
-          await cancelIngestionRun(runId);
-        } catch {
-          // Still allow a fresh start if cancel races a finished run.
-        }
-      }
+      // Gate connections before killing any in-flight run — otherwise cancel
+      // succeeds, start aborts, and the UI sits on "killed / Re-run".
       const connections = await listConnections();
       if (!applyGate(validateConnections(missionTargets, connections))) {
         setScoutError(
@@ -244,6 +235,16 @@ export default function MissionPage() {
         );
         return;
       }
+
+      if (runId && (live.run?.status === "running" || live.run?.status === "pending")) {
+        live.markOptimistic("cancelled", "cancelled by operator");
+        try {
+          await cancelIngestionRun(runId);
+        } catch {
+          // Still allow a fresh start if cancel races a finished run.
+        }
+      }
+
       const body = missionToIngestionPayload(mission);
       const created = await startIngestionRun(body);
       patch({ lastRunId: created.run_id });

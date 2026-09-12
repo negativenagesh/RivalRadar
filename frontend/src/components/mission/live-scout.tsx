@@ -416,7 +416,8 @@ export function LiveScout({
         )}
         {priorActive && !scoutBusy && !scoutLocked && (
           <p className="font-ui max-w-xl rounded-2xl border border-border/50 bg-card/30 px-4 py-2 text-sm text-muted-foreground">
-            A previous scout is still marked {status}. Kill it, then start a fresh run.
+            A scout is still marked {status}. Hit Start to kill it and launch a fresh run in one
+            click.
           </p>
         )}
         <div className="flex flex-wrap items-center justify-center gap-4">
@@ -428,7 +429,7 @@ export function LiveScout({
               onClick={onKill}
               disabled={scoutBusy || scoutLocked}
             >
-              {killing ? "Killing…" : "Kill previous run"}
+              {killing ? "Killing…" : "Kill only"}
             </Button>
           )}
           <Button
@@ -439,7 +440,9 @@ export function LiveScout({
             title={
               scoutLocked
                 ? "Connect every Context platform first"
-                : undefined
+                : priorActive
+                  ? "Cancel the stuck run and start fresh"
+                  : undefined
             }
           >
             {starting
@@ -448,9 +451,7 @@ export function LiveScout({
                 ? "Killing…"
                 : scoutLocked
                   ? "Connect platforms to unlock"
-                  : priorActive
-                    ? "Re-run Scout"
-                    : "Start Scout"}
+                  : "Start Scout"}
           </Button>
           <label className="font-ui flex items-center gap-2 text-sm">
             <input
@@ -475,7 +476,7 @@ export function LiveScout({
           {error}
         </p>
       )}
-      {run?.status === "cancelled" && (
+      {run?.status === "cancelled" && !starting && !killing && (
         <p className="rounded-2xl border border-border/50 bg-card/30 px-4 py-3 text-sm text-muted-foreground">
           Previous scout was killed. Hit Start Scout when you are ready.
         </p>
