@@ -71,10 +71,11 @@ export type IngestionTarget = {
 };
 
 export type IngestionRunCreate = {
-  connector: "fixture" | "social_profile";
+  connector: "fixture" | "social_profile" | "youtube" | "auto";
   targets: IngestionTarget[];
   record: boolean;
   headless?: boolean;
+  lookback_days?: number;
 };
 
 export type IngestionRunCreated = {
@@ -178,6 +179,7 @@ export type MissionState = {
   competitors: CompetitorProfile[];
   permissions: CreativePermissions;
   recordSession: boolean;
+  lookbackDays: number;
   lastRunId: string | null;
 };
 

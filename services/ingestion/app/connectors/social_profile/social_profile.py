@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import random
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agent_events import AgentEvent, AgentEventBus
@@ -38,18 +41,26 @@ class SocialProfileConnector:
         headless: bool = True,
         record: bool = False,
         event_bus: AgentEventBus | None = None,
+        lookback_days: int = 3,
+        human_pause: bool = True,
     ) -> None:
         self._run_id = run_id
         self._targets = targets
         self._headless = headless
         self._record = record
         self._event_bus = event_bus
+        self._lookback_days = lookback_days
+        self._human_pause = human_pause
         self._session: BrowserSession | None = None
         self._sequence = 0
 
     @property
     def recorded_video_path(self) -> Path | None:
         return self._session.recorded_video_path if self._session else None
+
+    @property
+    def sources_used(self) -> list[str]:
+        return ["mock"]
 
     async def _ensure_session(self) -> BrowserSession:
         if self._session is None:
@@ -62,6 +73,23 @@ class SocialProfileConnector:
         if self._session is not None:
             await self._session.__aexit__(None, None, None)
 
+    async def _pause(self) -> None:
+        if not self._human_pause:
+            return
+        delay = random.uniform(2.0, 4.0)
+        await self._emit("action", {"detail": f"human_pause {delay:.1f}s"})
+        await asyncio.sleep(delay)
+
+    def _within_lookback(self, posted_at: str) -> bool:
+        if not posted_at:
+            return True
+        try:
+            posted = datetime.fromisoformat(posted_at.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        cutoff = datetime.now(UTC) - timedelta(days=self._lookback_days)
+        return posted >= cutoff
+
     async def fetch_accounts(self) -> list[RawAccount]:
         session = await self._ensure_session()
         assert session.page is not None
@@ -69,6 +97,7 @@ class SocialProfileConnector:
         for target in self._targets:
             await self._emit("nav", {"url": target.url})
             await session.page.goto(target.url, wait_until="domcontentloaded")
+            await self._pause()
             await self._emit_screenshot()
 
             header = session.page.locator(".profile-header")
@@ -79,7 +108,7 @@ class SocialProfileConnector:
                     handle=target.handle, display_name=display_name.strip(), platform=platform
                 )
             )
-            await self._emit("action", {"extracted": "account", "handle": target.handle})
+            await self._emit("action", {"detail": "extracted account", "handle": target.handle})
         return accounts
 
     async def fetch_posts(self) -> list[RawPost]:
@@ -89,13 +118,19 @@ class SocialProfileConnector:
         for target in self._targets:
             await self._emit("nav", {"url": target.url})
             await session.page.goto(target.url, wait_until="domcontentloaded")
+            await self._pause()
             await session.page.mouse.wheel(0, 600)
+            await self._pause()
             await self._emit_screenshot()
 
             cards = session.page.locator(".post-card")
             count = await cards.count()
+            kept = 0
             for i in range(count):
                 card = cards.nth(i)
+                posted_at = await card.locator(".post-posted-at").get_attribute("datetime") or ""
+                if not self._within_lookback(posted_at):
+                    continue
                 posts.append(
                     build_raw_post(
                         account_handle=target.handle,
@@ -110,12 +145,18 @@ class SocialProfileConnector:
                         likes=await card.locator('[data-stat="likes"]').inner_text(),
                         comments=await card.locator('[data-stat="comments"]').inner_text(),
                         shares=await card.locator('[data-stat="shares"]').inner_text(),
-                        posted_at=await card.locator(".post-posted-at").get_attribute("datetime")
-                        or "",
+                        posted_at=posted_at,
                     )
                 )
+                kept += 1
             await self._emit(
-                "action", {"extracted": "posts", "handle": target.handle, "count": count}
+                "action",
+                {
+                    "detail": "extracted posts",
+                    "handle": target.handle,
+                    "count": kept,
+                    "lookback_days": self._lookback_days,
+                },
             )
         return posts
 

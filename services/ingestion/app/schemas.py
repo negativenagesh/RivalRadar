@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import PostFormat, RunStatus
 
@@ -37,6 +37,8 @@ class IngestionRunResult(BaseModel):
     accounts_ingested: int
     posts_ingested: int
     posts_skipped_duplicate: int
+    lookback_days: int | None = None
+    sources_used: list[str] = Field(default_factory=list)
 
 
 class ProfileTargetIn(BaseModel):
@@ -46,10 +48,11 @@ class ProfileTargetIn(BaseModel):
 
 
 class IngestionRunCreate(BaseModel):
-    connector: Literal["fixture", "social_profile"] = "fixture"
+    connector: Literal["fixture", "social_profile", "youtube", "auto"] = "fixture"
     targets: list[ProfileTargetIn] = []
     record: bool = False
     headless: bool = True
+    lookback_days: int = Field(default=3, ge=1, le=14)
 
 
 class IngestionRunCreated(BaseModel):

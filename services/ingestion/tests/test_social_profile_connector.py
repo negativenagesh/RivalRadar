@@ -32,7 +32,9 @@ async def mock_site_base_url() -> AsyncGenerator[str]:
 
 async def test_social_profile_connector_scrapes_mock_site(mock_site_base_url: str) -> None:
     target = ProfileTarget(handle="@nova.wear", platform="instagram", url=f"{mock_site_base_url}/nova.wear")
-    connector = SocialProfileConnector("test-run", [target], headless=True)
+    connector = SocialProfileConnector(
+        "test-run", [target], headless=True, lookback_days=14, human_pause=False
+    )
 
     try:
         accounts = await connector.fetch_accounts()
@@ -54,7 +56,9 @@ async def test_social_profile_connector_scrapes_mock_site(mock_site_base_url: st
 
 async def test_social_profile_connector_records_video(mock_site_base_url: str) -> None:
     target = ProfileTarget(handle="@nova.wear", platform="instagram", url=f"{mock_site_base_url}/nova.wear")
-    connector = SocialProfileConnector("test-run-record", [target], headless=True, record=True)
+    connector = SocialProfileConnector(
+        "test-run-record", [target], headless=True, record=True, human_pause=False
+    )
 
     try:
         await connector.fetch_accounts()
@@ -73,7 +77,9 @@ async def test_social_profile_connector_emits_events(mock_site_base_url: str) ->
 
     bus = AgentEventBus(FakeRedis(decode_responses=True))
     target = ProfileTarget(handle="@nova.wear", platform="instagram", url=f"{mock_site_base_url}/nova.wear")
-    connector = SocialProfileConnector("test-run-events", [target], headless=True, event_bus=bus)
+    connector = SocialProfileConnector(
+        "test-run-events", [target], headless=True, event_bus=bus, human_pause=False
+    )
 
     try:
         await connector.fetch_accounts()
@@ -86,3 +92,16 @@ async def test_social_profile_connector_emits_events(mock_site_base_url: str) ->
     assert "nav" in step_types
     assert "screenshot" in step_types
     assert step_types[-1] == "status"
+
+
+async def test_social_profile_lookback_filters_old_posts(mock_site_base_url: str) -> None:
+    target = ProfileTarget(handle="@nova.wear", platform="instagram", url=f"{mock_site_base_url}/nova.wear")
+    connector = SocialProfileConnector(
+        "test-lookback", [target], headless=True, lookback_days=1, human_pause=False
+    )
+    try:
+        posts = await connector.fetch_posts()
+    finally:
+        await connector.aclose()
+    assert len(posts) < 4
+    assert len(posts) >= 1

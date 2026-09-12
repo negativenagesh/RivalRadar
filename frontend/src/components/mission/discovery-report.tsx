@@ -31,8 +31,8 @@ const PERM_OPTIONS: {
   },
   {
     key: "imageConcepts",
-    label: "Image / meme concepts",
-    hint: "Visual briefs for design or gen",
+    label: "Nano Banana post visuals",
+    hint: "Gemini image gen (concept fallback if quota is empty)",
   },
   {
     key: "carouselOutlines",
@@ -67,7 +67,7 @@ export function DiscoveryReport({
 
   async function run(kind: "image" | "comment" | "reply") {
     if (kind === "image" && !permissions.imageConcepts) {
-      setError("Enable “Image / meme concepts” permission first.");
+      setError("Enable “Nano Banana post visuals” permission first.");
       return;
     }
     if (kind === "comment" && !permissions.suggestComments) {
@@ -147,7 +147,7 @@ export function DiscoveryReport({
             className="gap-2"
           >
             {busy === "image" ? <Loader2 className="size-4 animate-spin" /> : <ImageIcon className="size-4" />}
-            Generate image
+            Nano Banana image
           </Button>
           <Button
             size="lg"
@@ -195,7 +195,12 @@ export function DiscoveryReport({
               <div className="space-y-3 p-4">
                 <p className="text-sm leading-relaxed">{r.text}</p>
                 {r.image_concept && r.kind === "image" && (
-                  <p className="text-xs text-muted-foreground">Concept: {r.image_concept}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Concept: {r.image_concept}
+                    {!r.image_data_base64
+                      ? " — pixels need a paid Gemini / Nano Banana quota; concept shown instead."
+                      : ""}
+                  </p>
                 )}
                 {r.image_data_base64 && r.image_mime_type && (
                   // eslint-disable-next-line @next/next/no-img-element

@@ -26,6 +26,8 @@ async def test_trigger_ingestion_endpoint(client: AsyncClient) -> None:
         "accounts_ingested": 3,
         "posts_ingested": 10,
         "posts_skipped_duplicate": 0,
+        "lookback_days": 3,
+        "sources_used": [],
     }
 
 
