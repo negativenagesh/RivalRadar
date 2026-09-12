@@ -11,6 +11,7 @@ from app.connectors.base import Connector
 from app.connectors.composite import CompositeConnector
 from app.connectors.fixture import FixtureConnector
 from app.connectors.social_profile import ProfileTarget, SocialProfileConnector
+from app.connectors.web_url import WebUrlConnector
 from app.connectors.youtube import YouTubeConnector
 from app.db import async_session_factory as default_session_factory
 from app.ingest import run_ingestion
@@ -26,31 +27,56 @@ def _is_youtube_target(platform: str, url: str | None, handle: str) -> bool:
     return "youtube" in blob or "youtu.be" in blob
 
 
+def _has_http_url(url: str | None) -> bool:
+    if not url:
+        return False
+    u = url.strip().lower()
+    return u.startswith("http://") or u.startswith("https://") or "." in u
+
+
 def _build_connector(run_id: str, body: IngestionRunCreate, event_bus: AgentEventBus) -> Connector:
     if body.connector == "fixture":
         return FixtureConnector()
 
-    youtube_targets = [
-        ProfileTarget(
-            handle=t.handle,
-            platform="youtube",
-            url=t.url or t.handle,
-        )
-        for t in body.targets
-        if _is_youtube_target(t.platform, t.url, t.handle)
-    ]
-    mock_targets = [
-        ProfileTarget(
-            handle=t.handle,
-            platform=t.platform,
-            url=t.url or f"{_MOCK_SITE_BASE_URL}/{t.handle.lstrip('@')}",
-        )
-        for t in body.targets
-        if not _is_youtube_target(t.platform, t.url, t.handle)
-    ]
+    youtube_targets: list[ProfileTarget] = []
+    web_targets: list[ProfileTarget] = []
+    mock_targets: list[ProfileTarget] = []
 
-    # Default demo: if no targets classified, use all as mock social profiles.
-    if body.connector == "social_profile" and not youtube_targets and not mock_targets:
+    for t in body.targets:
+        if _is_youtube_target(t.platform, t.url, t.handle):
+            youtube_targets.append(
+                ProfileTarget(handle=t.handle, platform="youtube", url=t.url or t.handle)
+            )
+        elif t.platform == "mock" or (not _has_http_url(t.url) and t.platform in {"mock", ""}):
+            mock_targets.append(
+                ProfileTarget(
+                    handle=t.handle,
+                    platform=t.platform or "mock",
+                    url=t.url or f"{_MOCK_SITE_BASE_URL}/{t.handle.lstrip('@')}",
+                )
+            )
+        elif _has_http_url(t.url) or t.platform in {
+            "linkedin",
+            "x",
+            "instagram",
+            "tiktok",
+            "threads",
+            "web",
+        }:
+            url = t.url or t.handle
+            if not url.startswith("http"):
+                url = f"https://{url}"
+            web_targets.append(ProfileTarget(handle=t.handle, platform=t.platform, url=url))
+        else:
+            mock_targets.append(
+                ProfileTarget(
+                    handle=t.handle,
+                    platform=t.platform or "mock",
+                    url=f"{_MOCK_SITE_BASE_URL}/{t.handle.lstrip('@')}",
+                )
+            )
+
+    if body.connector == "social_profile" and not youtube_targets and not web_targets and not mock_targets:
         mock_targets = [
             ProfileTarget(
                 handle=t.handle,
@@ -61,6 +87,8 @@ def _build_connector(run_id: str, body: IngestionRunCreate, event_bus: AgentEven
         ]
 
     connectors: list[Connector] = []
+    record_left = body.record
+
     if youtube_targets or body.connector == "youtube":
         targets = youtube_targets or [
             ProfileTarget(handle=t.handle, platform="youtube", url=t.url or t.handle)
@@ -73,17 +101,35 @@ def _build_connector(run_id: str, body: IngestionRunCreate, event_bus: AgentEven
                 lookback_days=body.lookback_days,
                 api_key=settings.youtube_api_key,
                 headless=body.headless,
-                record=body.record and not mock_targets,
+                record=record_left and not web_targets and not mock_targets,
                 event_bus=event_bus,
             )
         )
+        if record_left and not web_targets and not mock_targets:
+            record_left = False
+
+    if web_targets and body.connector != "youtube":
+        connectors.append(
+            WebUrlConnector(
+                run_id,
+                web_targets,
+                lookback_days=body.lookback_days,
+                headless=body.headless,
+                record=record_left and not mock_targets,
+                event_bus=event_bus,
+                object_store_root=settings.object_store_root,
+            )
+        )
+        if record_left and not mock_targets:
+            record_left = False
+
     if mock_targets and body.connector != "youtube":
         connectors.append(
             SocialProfileConnector(
                 run_id,
                 mock_targets,
                 headless=body.headless,
-                record=body.record,
+                record=record_left,
                 event_bus=event_bus,
                 lookback_days=body.lookback_days,
             )
@@ -116,14 +162,6 @@ async def execute_run(
     object_store: ObjectStore | None = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
-    """Runs in the background: performs ingestion, streams progress via
-    event_bus, persists the final status/result, and archives any
-    recording. Owns its own DB session since it outlives the request.
-
-    session_factory defaults to the app's real engine-bound factory; tests
-    inject an in-memory-sqlite-backed one so the background task and the
-    test's assertions share the same database.
-    """
     store: ObjectStore
     if object_store is None:
         store = LocalDiskObjectStore(settings.object_store_root)
@@ -142,6 +180,7 @@ async def execute_run(
             result = await run_ingestion(session, connector)
             recording_key = await _archive_recording(run_id, connector, store)
             sources = list(getattr(connector, "sources_used", []) or [])
+            shots = list(getattr(connector, "screenshot_keys", []) or [])
             enriched = IngestionRunResult(
                 accounts_ingested=result.accounts_ingested,
                 posts_ingested=result.posts_ingested,
@@ -149,15 +188,17 @@ async def execute_run(
                 lookback_days=body.lookback_days,
                 sources_used=sources,
             )
+            payload = enriched.model_dump()
+            payload["screenshots"] = shots
 
             run = await session.get(IngestionRun, run_id)
             assert run is not None
             run.status = RunStatus.DONE
-            run.result = enriched.model_dump()
+            run.result = payload
             run.recording_key = recording_key
             await session.commit()
             await event_bus.close_run(run_id, status="done")
-        except Exception as exc:  # noqa: BLE001 - must record failure state either way
+        except Exception as exc:  # noqa: BLE001
             run = await session.get(IngestionRun, run_id)
             assert run is not None
             run.status = RunStatus.ERROR

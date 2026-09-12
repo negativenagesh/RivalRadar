@@ -84,6 +84,10 @@ export function ingestionRecordingUrl(runId: string): string {
   return `${GATEWAY_URL}/ingestion/runs/${runId}/recording`;
 }
 
+export function ingestionScreenshotUrl(runId: string, index: number): string {
+  return `${GATEWAY_URL}/ingestion/runs/${runId}/screenshots/${index}`;
+}
+
 export function ingestionLiveWsUrl(runId: string): string {
   const base = GATEWAY_URL.replace(/^http/, "ws");
   return `${base}/ingestion/runs/${runId}/live`;

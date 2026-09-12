@@ -95,6 +95,17 @@ async def fetch_ingestion_recording(run_id: str) -> httpx.Response:
         await response.aclose()
         await client.aclose()
         response.raise_for_status()
-    # Attach client so the route can close both after streaming.
+    response.extensions["rivalradar_client"] = client
+    return response
+
+
+async def fetch_ingestion_screenshot(run_id: str, index: int) -> httpx.Response:
+    client = httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=30.0)
+    request = client.build_request("GET", f"/ingest/runs/{run_id}/screenshots/{index}")
+    response = await client.send(request, stream=True)
+    if response.status_code >= 400:
+        await response.aclose()
+        await client.aclose()
+        response.raise_for_status()
     response.extensions["rivalradar_client"] = client
     return response

@@ -28,6 +28,7 @@ async def test_trigger_ingestion_endpoint(client: AsyncClient) -> None:
         "posts_skipped_duplicate": 0,
         "lookback_days": 3,
         "sources_used": [],
+        "screenshots": [],
     }
 
 

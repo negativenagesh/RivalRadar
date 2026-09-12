@@ -1,15 +1,42 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import {
+  Archivo_Black,
+  Bricolage_Grotesque,
+  Fraunces,
+  Space_Grotesk,
+  Syne,
+} from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const syne = Syne({
+  variable: "--font-display",
   subsets: ["latin"],
+  weight: ["500", "700", "800"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const bricolage = Bricolage_Grotesque({
+  variable: "--font-body",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+});
+
+const space = Space_Grotesk({
+  variable: "--font-ui",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+});
+
+const fraunces = Fraunces({
+  variable: "--font-accent",
+  subsets: ["latin"],
+  weight: ["500", "700"],
+  style: ["normal", "italic"],
+});
+
+const archivo = Archivo_Black({
+  variable: "--font-shout",
+  subsets: ["latin"],
+  weight: "400",
 });
 
 export const metadata: Metadata = {
@@ -22,9 +49,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`dark ${syne.variable} ${bricolage.variable} ${space.variable} ${fraunces.variable} ${archivo.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">
+      <body className="flex min-h-full flex-col bg-background font-[family-name:var(--font-body)] text-foreground">
         {children}
       </body>
     </html>
