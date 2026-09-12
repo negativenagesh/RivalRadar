@@ -61,3 +61,140 @@ export type PipelineRun = {
   error_detail: string | null;
   created_at: string;
 };
+
+export type IngestionRunStatus = "pending" | "running" | "done" | "error";
+
+export type IngestionTarget = {
+  handle: string;
+  platform: string;
+  url?: string | null;
+};
+
+export type IngestionRunCreate = {
+  connector: "fixture" | "social_profile";
+  targets: IngestionTarget[];
+  record: boolean;
+  headless?: boolean;
+};
+
+export type IngestionRunCreated = {
+  run_id: string;
+  status: IngestionRunStatus;
+};
+
+export type IngestionRun = {
+  id: string;
+  connector_type: string;
+  status: IngestionRunStatus;
+  record: boolean;
+  recording_key: string | null;
+  error_detail: string | null;
+  result: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type CompetitorAccount = {
+  id: string;
+  handle: string;
+  display_name: string;
+  platform: string;
+};
+
+export type CompetitorPost = {
+  id: string;
+  account_id: string;
+  external_post_id: string;
+  format: string;
+  theme_tags: string;
+  caption: string;
+  image_url: string | null;
+  likes: number;
+  comments: number;
+  shares: number;
+  posted_at: string;
+  engagement_score: number;
+  themes: string[];
+};
+
+export type AgentStepType =
+  | "nav"
+  | "action"
+  | "screenshot"
+  | "dom_snapshot"
+  | "log"
+  | "status"
+  | "error"
+  | "artifact";
+
+export type AgentEvent = {
+  run_id: string;
+  agent_id: string;
+  service: string;
+  step_type: AgentStepType;
+  payload: Record<string, unknown>;
+  timestamp: string;
+  sequence: number;
+};
+
+export type BrandProfile = {
+  displayName: string;
+  category: string;
+  website: string;
+  socials: {
+    linkedin: string;
+    x: string;
+    instagram: string;
+    tiktok: string;
+    youtube: string;
+    threads: string;
+  };
+  voiceNotes: string;
+  forbiddenClaims: string;
+  idealCustomer: string;
+  contentPillars: string;
+  preferredFormats: string[];
+  timezone: string;
+};
+
+export type CompetitorProfile = {
+  id: string;
+  name: string;
+  website: string;
+  socials: BrandProfile["socials"];
+  whyTheyMatter: string;
+};
+
+export type CreativePermissions = {
+  draftReplies: boolean;
+  draftTrendJack: boolean;
+  suggestComments: boolean;
+  imageConcepts: boolean;
+  carouselOutlines: boolean;
+  comparisonSlides: boolean;
+};
+
+export type MissionState = {
+  brand: BrandProfile;
+  competitors: CompetitorProfile[];
+  permissions: CreativePermissions;
+  recordSession: boolean;
+  lastRunId: string | null;
+};
+
+export type CreativeKind = "image" | "comment" | "reply";
+
+export type CreativeRequest = {
+  kind: CreativeKind;
+  report_markdown: string;
+  brand_name: string;
+  voice_notes?: string;
+  competitor_caption?: string;
+};
+
+export type CreativeResult = {
+  kind: CreativeKind;
+  text: string;
+  image_concept: string | null;
+  image_mime_type: string | null;
+  image_data_base64: string | null;
+};

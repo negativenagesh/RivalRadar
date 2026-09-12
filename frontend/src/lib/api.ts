@@ -1,6 +1,18 @@
-import type { Digest, Draft, PipelineRun, PipelineRunCreated } from "./types";
+import type {
+  CompetitorAccount,
+  CompetitorPost,
+  CreativeRequest,
+  CreativeResult,
+  Digest,
+  Draft,
+  IngestionRun,
+  IngestionRunCreate,
+  IngestionRunCreated,
+  PipelineRun,
+  PipelineRunCreated,
+} from "./types";
 
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
+export const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${GATEWAY_URL}${path}`, {
@@ -47,4 +59,39 @@ export function editDraft(draftId: string, caption: string): Promise<Draft> {
 
 export function rejectDraft(draftId: string): Promise<Draft> {
   return request<Draft>(`/drafts/${draftId}/reject`, { method: "POST" });
+}
+
+export function startIngestionRun(body: IngestionRunCreate): Promise<IngestionRunCreated> {
+  return request<IngestionRunCreated>("/ingestion/runs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getIngestionRun(runId: string): Promise<IngestionRun> {
+  return request<IngestionRun>(`/ingestion/runs/${runId}`);
+}
+
+export function listIngestionPosts(): Promise<CompetitorPost[]> {
+  return request<CompetitorPost[]>("/ingestion/posts");
+}
+
+export function listIngestionAccounts(): Promise<CompetitorAccount[]> {
+  return request<CompetitorAccount[]>("/ingestion/accounts");
+}
+
+export function ingestionRecordingUrl(runId: string): string {
+  return `${GATEWAY_URL}/ingestion/runs/${runId}/recording`;
+}
+
+export function ingestionLiveWsUrl(runId: string): string {
+  const base = GATEWAY_URL.replace(/^http/, "ws");
+  return `${base}/ingestion/runs/${runId}/live`;
+}
+
+export function generateCreative(body: CreativeRequest): Promise<CreativeResult> {
+  return request<CreativeResult>("/creative/generate", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

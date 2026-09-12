@@ -2,14 +2,19 @@ import asyncio
 
 from agent_events import AgentEventBus
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
 from app.agent_events_bus import get_event_bus
 from app.clients import (
+    fetch_ingestion_accounts,
+    fetch_ingestion_posts,
+    fetch_ingestion_recording,
     fetch_ingestion_run,
     fetch_latest_digest,
+    generate_creative_content,
     trigger_digest_generation,
     trigger_ingestion_run,
 )
@@ -43,6 +48,11 @@ async def generate_drafts(
     return PipelineRunCreated(run_id=run.id, status=run.status)
 
 
+@router.post("/creative/generate")
+async def creative_generate(body: dict[str, object]) -> dict[str, object]:
+    return await generate_creative_content(body)
+
+
 @router.get("/pipeline-runs/{run_id}", response_model=PipelineRunRead)
 async def get_pipeline_run(run_id: str, session: AsyncSession = Depends(get_session)) -> PipelineRun:
     run = await session.get(PipelineRun, run_id)
@@ -73,6 +83,56 @@ async def start_ingestion_run(body: dict[str, object] | None = None) -> dict[str
 @router.get("/ingestion/runs/{run_id}")
 async def get_ingestion_run(run_id: str) -> dict[str, object]:
     return await fetch_ingestion_run(run_id)
+
+
+@router.websocket("/ingestion/runs/{run_id}/live")
+async def ingestion_run_live_feed(websocket: WebSocket, run_id: str) -> None:
+    """Live scout feed — same Redis stream ingestion publishes to."""
+    await websocket.accept()
+    event_bus = get_event_bus()
+    try:
+        async for event in event_bus.subscribe(run_id):
+            await websocket.send_text(event.model_dump_json())
+    except WebSocketDisconnect:
+        return
+    finally:
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close()
+
+
+@router.get("/ingestion/runs/{run_id}/recording")
+async def download_ingestion_recording(run_id: str) -> StreamingResponse:
+    try:
+        upstream = await fetch_ingestion_recording(run_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="No recording available for this run") from exc
+
+    client = upstream.extensions.get("rivalradar_client")
+
+    async def stream():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            if client is not None:
+                await client.aclose()
+
+    return StreamingResponse(
+        stream(),
+        media_type="video/webm",
+        headers={"Content-Disposition": f'attachment; filename="{run_id}.webm"'},
+    )
+
+
+@router.get("/ingestion/posts")
+async def list_ingestion_posts() -> list[dict[str, object]]:
+    return await fetch_ingestion_posts()  # type: ignore[return-value]
+
+
+@router.get("/ingestion/accounts")
+async def list_ingestion_accounts() -> list[dict[str, object]]:
+    return await fetch_ingestion_accounts()  # type: ignore[return-value]
 
 
 @router.get("/drafts", response_model=list[DraftRead])
