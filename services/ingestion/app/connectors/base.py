@@ -1,10 +1,16 @@
-from typing import Protocol, TypedDict
+from typing import NotRequired, Protocol, TypedDict
 
 
 class RawAccount(TypedDict):
     handle: str
     display_name: str
     platform: str
+
+
+class CommentSample(TypedDict):
+    author: str
+    text: str
+    likes: int
 
 
 class RawPost(TypedDict):
@@ -18,6 +24,10 @@ class RawPost(TypedDict):
     comments: int
     shares: int
     posted_at: str
+    views: NotRequired[int]
+    media_urls: NotRequired[list[str]]
+    media_keys: NotRequired[list[str]]
+    comment_sample: NotRequired[list[CommentSample]]
 
 
 class Connector(Protocol):

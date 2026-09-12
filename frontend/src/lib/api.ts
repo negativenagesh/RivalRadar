@@ -1,6 +1,7 @@
 import type {
   CompetitorAccount,
   CompetitorPost,
+  ConnectionStatus,
   CreativeRequest,
   CreativeResult,
   Digest,
@@ -22,6 +23,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     throw new Error(`${init?.method ?? "GET"} ${path} failed: ${response.status}`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
   }
   return response.json() as Promise<T>;
 }
@@ -98,4 +102,35 @@ export function generateCreative(body: CreativeRequest): Promise<CreativeResult>
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+
+export function listConnections(workspaceId = "default"): Promise<ConnectionStatus[]> {
+  return request<ConnectionStatus[]>(`/connections?workspace_id=${encodeURIComponent(workspaceId)}`);
+}
+
+export function upsertConnection(
+  platform: string,
+  body: {
+    auth_type: "oauth" | "cookie" | "api_key";
+    secret: Record<string, unknown>;
+    expires_at?: string | null;
+    scopes?: string[];
+    workspace_id?: string;
+  },
+): Promise<ConnectionStatus> {
+  return request<ConnectionStatus>(`/connections/${platform}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteConnection(platform: string, workspaceId = "default"): Promise<void> {
+  return request<void>(`/connections/${platform}?workspace_id=${encodeURIComponent(workspaceId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function ingestionMediaUrl(mediaKey: string): string {
+  return `${GATEWAY_URL}/ingestion/media/${mediaKey}`;
 }

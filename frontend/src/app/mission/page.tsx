@@ -262,6 +262,9 @@ export default function MissionPage() {
               onRecordChange={(recordSession) => patch({ recordSession })}
               lookbackDays={mission.lookbackDays}
               onLookbackChange={(lookbackDays) => patch({ lookbackDays })}
+              dateFrom={mission.dateFrom}
+              dateTo={mission.dateTo}
+              onCustomRangeChange={(dateFrom, dateTo) => patch({ dateFrom, dateTo })}
               targets={missionTargets}
               onStart={() => void handleStartScout()}
               starting={starting}
@@ -282,6 +285,8 @@ export default function MissionPage() {
               accounts={accounts}
               loading={loadingPosts}
               lookbackDays={mission.lookbackDays}
+              dateFrom={mission.dateFrom}
+              dateTo={mission.dateTo}
             />
           </div>
         )}

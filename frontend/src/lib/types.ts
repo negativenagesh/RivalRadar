@@ -76,6 +76,8 @@ export type IngestionRunCreate = {
   record: boolean;
   headless?: boolean;
   lookback_days?: number;
+  date_from?: string | null;
+  date_to?: string | null;
 };
 
 export type IngestionRunCreated = {
@@ -101,6 +103,12 @@ export type CompetitorAccount = {
   platform: string;
 };
 
+export type CommentSample = {
+  author: string;
+  text: string;
+  likes: number;
+};
+
 export type CompetitorPost = {
   id: string;
   account_id: string;
@@ -112,6 +120,10 @@ export type CompetitorPost = {
   likes: number;
   comments: number;
   shares: number;
+  views?: number;
+  media_urls?: string[];
+  media_keys?: string[];
+  comment_sample?: CommentSample[];
   posted_at: string;
   engagement_score: number;
   themes: string[];
@@ -174,12 +186,24 @@ export type CreativePermissions = {
   comparisonSlides: boolean;
 };
 
+export type ConnectionStatus = {
+  platform: string;
+  status: "connected" | "needs_reconnect" | "not_connected";
+  auth_type?: string | null;
+  expires_at?: string | null;
+  scopes?: string[];
+  detail?: string | null;
+};
+
 export type MissionState = {
   brand: BrandProfile;
   competitors: CompetitorProfile[];
   permissions: CreativePermissions;
   recordSession: boolean;
   lookbackDays: number;
+  /** ISO date YYYY-MM-DD when custom range is active */
+  dateFrom: string | null;
+  dateTo: string | null;
   lastRunId: string | null;
 };
 

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     intelligence_service_url: str = "http://localhost:8002"
     generation_service_url: str = "http://localhost:8003"
     compliance_service_url: str = "http://localhost:8004"
+    connection_vault_key: str | None = None
 
 
 settings = Settings()

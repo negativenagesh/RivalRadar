@@ -34,7 +34,12 @@ def _has_http_url(url: str | None) -> bool:
     return u.startswith("http://") or u.startswith("https://") or "." in u
 
 
-def _build_connector(run_id: str, body: IngestionRunCreate, event_bus: AgentEventBus) -> Connector:
+def _build_connector(
+    run_id: str,
+    body: IngestionRunCreate,
+    event_bus: AgentEventBus,
+    object_store: ObjectStore | None = None,
+) -> Connector:
     if body.connector == "fixture":
         return FixtureConnector()
 
@@ -98,11 +103,12 @@ def _build_connector(run_id: str, body: IngestionRunCreate, event_bus: AgentEven
             YouTubeConnector(
                 run_id,
                 targets,
-                lookback_days=body.lookback_days,
+                window=body.resolved_window(),
                 api_key=settings.youtube_api_key,
                 headless=body.headless,
                 record=record_left and not web_targets and not mock_targets,
                 event_bus=event_bus,
+                object_store=object_store,
             )
         )
         if record_left and not web_targets and not mock_targets:
@@ -175,17 +181,20 @@ async def execute_run(
         run.status = RunStatus.RUNNING
         await session.commit()
 
-        connector = _build_connector(run_id, body, event_bus)
+        connector = _build_connector(run_id, body, event_bus, object_store=store)
         try:
             result = await run_ingestion(session, connector)
             recording_key = await _archive_recording(run_id, connector, store)
-            sources = list(getattr(connector, "sources_used", []) or [])
+            sources = list(getattr(connector, "sources_used", None) or getattr(connector, "sources_used", []) or [])
             shots = list(getattr(connector, "screenshot_keys", []) or [])
+            window = body.resolved_window()
             enriched = IngestionRunResult(
                 accounts_ingested=result.accounts_ingested,
                 posts_ingested=result.posts_ingested,
                 posts_skipped_duplicate=result.posts_skipped_duplicate,
-                lookback_days=body.lookback_days,
+                lookback_days=window.span_days,
+                date_from=window.date_from.isoformat(),
+                date_to=window.date_to.isoformat(),
                 sources_used=sources,
             )
             payload = enriched.model_dump()

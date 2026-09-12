@@ -1,49 +1,65 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { CompetitorAccount, CompetitorPost } from "@/lib/types";
-
-function sourceFromThemes(themes: string[]): string {
-  const hit = themes.find((t) => t.startsWith("source:"));
-  if (!hit) return "scout";
-  return hit.replace("source:", "").replace(/_/g, " ");
-}
+import { ingestionMediaUrl } from "@/lib/api";
 
 function linkFromThemes(themes: string[]): string | null {
   const hit = themes.find((t) => t.startsWith("link:"));
   return hit ? hit.replace("link:", "") : null;
 }
 
-function viewsFromThemes(themes: string[]): number | null {
-  const hit = themes.find((t) => t.startsWith("views:"));
-  if (!hit) return null;
-  const n = Number(hit.replace("views:", ""));
-  return Number.isFinite(n) ? n : null;
-}
-
-function resolveImage(url: string | null, gateway?: string): string | null {
+function resolveImage(post: CompetitorPost): string | null {
+  const key = post.media_keys?.[0];
+  if (key) return ingestionMediaUrl(key);
+  const url = post.image_url || post.media_urls?.[0] || null;
   if (!url) return null;
   if (url.startsWith("http") || url.startsWith("data:")) return url;
-  const base = gateway || process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+  const base = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
   return `${base.replace(/\/$/, "")}${url.startsWith("/") ? url : `/${url}`}`;
 }
+
+function dayKey(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function watchUrl(post: CompetitorPost, platform: string): string | null {
+  const external = linkFromThemes(post.themes ?? []);
+  const isYt = platform === "youtube" || (post.themes ?? []).includes("youtube");
+  if (isYt && post.external_post_id && !post.external_post_id.startsWith("web-")) {
+    return `https://www.youtube.com/watch?v=${post.external_post_id}`;
+  }
+  return external;
+}
+
+type Group = {
+  company: string;
+  platform: string;
+  day: string;
+  posts: CompetitorPost[];
+};
 
 export function FindingsGrid({
   posts,
   accounts,
   loading,
   lookbackDays,
+  dateFrom,
+  dateTo,
 }: {
   posts: CompetitorPost[];
   accounts: CompetitorAccount[];
   loading: boolean;
   lookbackDays: number;
+  dateFrom?: string | null;
+  dateTo?: string | null;
 }) {
   const byId = Object.fromEntries(accounts.map((a) => [a.id, a]));
+  const [openComments, setOpenComments] = useState<string | null>(null);
 
-  const byPlatform = useMemo(() => {
-    const map = new Map<string, CompetitorPost[]>();
+  const groups = useMemo(() => {
+    const map = new Map<string, Group>();
     for (const post of posts) {
       const account = byId[post.account_id];
       const platform =
@@ -52,12 +68,24 @@ export function FindingsGrid({
           ["youtube", "linkedin", "instagram", "tiktok", "x", "threads", "mock"].includes(t),
         ) ||
         "other";
-      const list = map.get(platform) ?? [];
-      list.push(post);
-      map.set(platform, list);
+      const company = account?.display_name || account?.handle || "Unknown";
+      const day = dayKey(post.posted_at);
+      const key = `${company}||${platform}||${day}`;
+      const g = map.get(key) ?? { company, platform, day, posts: [] };
+      g.posts.push(post);
+      map.set(key, g);
     }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return [...map.values()].sort((a, b) => {
+      const c = a.company.localeCompare(b.company);
+      if (c) return c;
+      const p = a.platform.localeCompare(b.platform);
+      if (p) return p;
+      return b.day.localeCompare(a.day);
+    });
   }, [posts, byId]);
+
+  const windowLabel =
+    dateFrom && dateTo ? `${dateFrom} → ${dateTo}` : `last ${lookbackDays} days`;
 
   return (
     <div className="mx-auto max-w-6xl space-y-10 text-center">
@@ -67,57 +95,45 @@ export function FindingsGrid({
         </p>
         <h2 className="font-shout text-jumble-wild text-4xl uppercase sm:text-5xl">Findings</h2>
         <p className="font-accent mx-auto max-w-2xl text-base italic text-muted-foreground">
-          Platform-wise tiles from the last {lookbackDays} days — captions, shots, heat, deep links.
+          Company → platform → day · media, captions, heat, top comments · {windowLabel}
         </p>
       </div>
-
-      {accounts.length > 0 && (
-        <div className="flex flex-wrap justify-center gap-2">
-          {accounts.map((a) => (
-            <div
-              key={a.id}
-              className="rounded-2xl border border-border/60 bg-card/40 px-3 py-2 text-left text-xs"
-            >
-              <span className="font-display font-semibold text-primary">{a.display_name}</span>
-              <span className="font-ui text-muted-foreground">
-                {" "}
-                · {a.handle} · {a.platform}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
 
       {loading && <p className="font-ui text-sm text-muted-foreground">Loading posts…</p>}
 
       {!loading && posts.length === 0 && (
-        <p className="rounded-2xl border border-border/60 px-4 py-10 font-accent text-sm italic text-muted-foreground">
-          No posts yet. Finish a multi-platform scout first.
-        </p>
+        <div className="space-y-2 rounded-2xl border border-border/60 px-4 py-10">
+          <p className="font-accent text-sm italic text-muted-foreground">
+            No posts in this window.
+          </p>
+          <p className="font-ui text-xs text-muted-foreground">
+            Widen date range · Reconnect Instagram · Confirm YouTube API / yt-dlp
+          </p>
+        </div>
       )}
 
-      {byPlatform.map(([platform, platformPosts], idx) => (
-        <section key={platform} className={`space-y-4 ${idx % 2 === 0 ? "tilt-l" : "tilt-r"}`}>
-          <h3 className="font-shout text-3xl uppercase text-primary">{platform}</h3>
-          <div className="grid gap-4 text-left sm:grid-cols-2 lg:grid-cols-3">
-            {platformPosts.map((post) => {
-              const account = byId[post.account_id];
-              const source = sourceFromThemes(post.themes ?? []);
-              const views = viewsFromThemes(post.themes ?? []);
-              const external = linkFromThemes(post.themes ?? []);
-              const isYt =
-                platform === "youtube" || (post.themes ?? []).includes("youtube");
-              const watchUrl =
-                isYt && post.external_post_id && !post.external_post_id.startsWith("web-")
-                  ? `https://www.youtube.com/watch?v=${post.external_post_id}`
-                  : external;
-              const img = resolveImage(post.image_url);
+      {groups.map((group) => (
+        <section key={`${group.company}-${group.platform}-${group.day}`} className="space-y-4 text-left">
+          <div className="flex flex-wrap items-baseline justify-center gap-2 text-center sm:justify-start">
+            <h3 className="font-display text-2xl font-bold">{group.company}</h3>
+            <span className="font-ui text-xs uppercase tracking-widest text-primary">
+              {group.platform}
+            </span>
+            <span className="font-ui text-xs text-muted-foreground">{group.day}</span>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {group.posts.map((post) => {
+              const img = resolveImage(post);
               const title = post.caption.split("\n")[0] ?? post.caption;
+              const views = post.views ?? null;
+              const href = watchUrl(post, group.platform);
+              const comments = post.comment_sample ?? [];
+              const open = openComments === post.id;
 
               return (
                 <article
                   key={post.id}
-                  className="flex flex-col overflow-hidden rounded-3xl border border-border/60 bg-card/40 transition hover:border-primary/50 hover:shadow-[0_0_40px_-18px_oklch(0.87_0.24_128)]"
+                  className="flex flex-col overflow-hidden rounded-3xl border border-border/60 bg-card/40"
                 >
                   <div className="aspect-[4/3] bg-muted/30">
                     {img ? (
@@ -137,38 +153,54 @@ export function FindingsGrid({
                     )}
                   </div>
                   <div className="flex flex-1 flex-col gap-2 p-4">
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="font-display font-medium text-primary">
-                        {account?.handle ?? post.account_id.slice(0, 8)}
-                      </span>
-                      <span className="font-ui rounded-full bg-primary/15 px-2 py-0.5 text-[10px] uppercase text-primary">
-                        {source}
-                      </span>
-                    </div>
                     <p className="font-display line-clamp-3 text-sm font-semibold leading-snug">
                       {title}
                     </p>
-                    {post.caption.includes("\n") && (
-                      <p className="font-accent line-clamp-2 text-xs italic text-muted-foreground">
-                        {post.caption.split("\n").slice(1).join(" ").trim()}
-                      </p>
-                    )}
-                    <div className="font-ui mt-auto flex flex-wrap gap-2 pt-2 text-[11px] text-muted-foreground">
+                    <div className="font-ui flex flex-wrap gap-2 text-[11px] text-muted-foreground">
                       <span>{post.likes} likes</span>
                       <span>{post.comments} comments</span>
-                      {views !== null ? <span>{views.toLocaleString()} views</span> : null}
-                      <span>score {post.engagement_score}</span>
-                      <span>{post.posted_at.slice(0, 10)}</span>
+                      {views !== null && views !== undefined ? (
+                        <span>{Number(views).toLocaleString()} views</span>
+                      ) : null}
+                      {post.shares ? <span>{post.shares} shares</span> : null}
                     </div>
-                    {watchUrl && (
+                    {href && (
                       <a
-                        href={watchUrl}
+                        href={href}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="font-ui text-xs font-bold text-primary hover:underline"
                       >
                         Open original →
                       </a>
+                    )}
+                    {comments.length > 0 && (
+                      <div className="mt-1 border-t border-border/40 pt-2">
+                        <button
+                          type="button"
+                          className="font-ui text-[11px] font-semibold uppercase tracking-wide text-primary"
+                          onClick={() => setOpenComments(open ? null : post.id)}
+                        >
+                          {open ? "Hide" : "Top comments"} ({Math.min(10, comments.length)})
+                        </button>
+                        {open && (
+                          <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto">
+                            {comments.slice(0, 10).map((c, i) => (
+                              <li key={`${post.id}-c-${i}`} className="rounded-xl bg-background/50 px-2 py-1.5">
+                                <p className="font-display text-[11px] font-semibold text-primary">
+                                  {c.author}
+                                  <span className="ml-2 font-ui font-normal text-muted-foreground">
+                                    {c.likes} likes
+                                  </span>
+                                </p>
+                                <p className="font-accent text-xs italic text-muted-foreground">
+                                  {c.text}
+                                </p>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                     )}
                   </div>
                 </article>
