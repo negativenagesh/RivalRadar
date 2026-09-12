@@ -64,3 +64,16 @@ class ConnectionUpsert(BaseModel):
     expires_at: datetime | None = None
     scopes: list[str] = Field(default_factory=list)
     workspace_id: str = "default"
+
+
+class ConnectSessionStart(BaseModel):
+    workspace_id: str = "default"
+
+
+class ConnectSessionRead(BaseModel):
+    session_id: str
+    platform: str
+    status: Literal["awaiting_login", "ready", "completed", "cancelled", "expired", "error"]
+    login_url: str
+    detail: str | None = None
+    agent_online: bool = True

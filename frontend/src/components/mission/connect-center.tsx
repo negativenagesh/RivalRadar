@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ExternalLink, Lock, Unplug } from "lucide-react";
+import { CheckCircle2, Lock, Unplug } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { deleteConnection, listConnections, upsertConnection } from "@/lib/api";
 import {
-  PLATFORM_HOME,
+  cancelConnectSession,
+  completeConnectSession,
+  deleteConnection,
+  listConnections,
+  startConnectSession,
+  type ConnectSession,
+} from "@/lib/api";
+import {
   PLATFORM_LABELS,
   requiredConnectPlatforms,
   type MissionTargetPreview,
@@ -19,34 +25,6 @@ function statusTone(status: ConnectionStatus["status"]): string {
   if (status === "connected") return "text-primary";
   if (status === "needs_reconnect") return "text-amber-600";
   return "text-muted-foreground";
-}
-
-function parseCookieSecret(raw: string): Record<string, unknown> {
-  const trimmed = raw.trim();
-  if (!trimmed) throw new Error("Paste session cookies before confirming.");
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (Array.isArray(parsed)) return { cookies: parsed };
-    if (parsed && typeof parsed === "object") {
-      const obj = parsed as Record<string, unknown>;
-      if ("password" in obj || "passwd" in obj || "pass" in obj) {
-        throw new Error("Passwords are not accepted. Use session cookies only.");
-      }
-      return obj;
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message.startsWith("Passwords")) throw err;
-  }
-  // name=value; name2=value2
-  if (trimmed.includes("=")) {
-    const cookies = trimmed.split(/;\s*/).flatMap((part) => {
-      const eq = part.indexOf("=");
-      if (eq <= 0) return [];
-      return [{ name: part.slice(0, eq).trim(), value: part.slice(eq + 1).trim() }];
-    });
-    if (cookies.length) return { cookies };
-  }
-  return { cookies: trimmed };
 }
 
 export function ConnectCenter({
@@ -67,7 +45,7 @@ export function ConnectCenter({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<PlatformId | null>(null);
-  const [sessionBlob, setSessionBlob] = useState("");
+  const [activeSession, setActiveSession] = useState<ConnectSession | null>(null);
 
   function rowFor(platform: string): ConnectionStatus | undefined {
     const list = rows ?? [];
@@ -119,29 +97,57 @@ export function ConnectCenter({
     }
   }
 
-  function openConnect(platform: PlatformId) {
+  async function openConnect(platform: PlatformId) {
     setDialog(platform);
-    setSessionBlob("");
     setError(null);
+    setBusy(platform);
+    setActiveSession(null);
+    try {
+      const session = await startConnectSession(platform);
+      setActiveSession(session);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not open Connect browser — is the connect-agent running?",
+      );
+    } finally {
+      setBusy(null);
+    }
   }
 
-  async function confirmConnect() {
-    if (!dialog) return;
+  async function confirmLoggedIn() {
+    if (!dialog || !activeSession) return;
     setBusy(dialog);
     setError(null);
     try {
-      const secret = parseCookieSecret(sessionBlob);
-      await upsertConnection(dialog, {
-        auth_type: "cookie",
-        secret,
-        scopes: ["read", "scout"],
-      });
+      await completeConnectSession(dialog, activeSession.session_id);
       setDialog(null);
+      setActiveSession(null);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Connect failed");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not capture session — finish login in the browser, then try again",
+      );
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function closeDialog() {
+    const platform = dialog;
+    const session = activeSession;
+    setDialog(null);
+    setActiveSession(null);
+    setError(null);
+    if (platform && session) {
+      try {
+        await cancelConnectSession(platform, session.session_id);
+      } catch {
+        // best-effort close
+      }
     }
   }
 
@@ -158,7 +164,6 @@ export function ConnectCenter({
   }
 
   const dialogLabel = dialog ? (PLATFORM_LABELS[dialog] ?? dialog) : "";
-  const dialogHome = dialog ? (PLATFORM_HOME[dialog] ?? "https://example.com") : "";
 
   return (
     <div
@@ -171,8 +176,8 @@ export function ConnectCenter({
         </p>
         <h3 className="font-display text-xl font-bold">Connect Center</h3>
         <p className="font-accent text-sm italic text-muted-foreground">
-          Every non-YouTube link from Context must be connected before Start Scout. RivalRadar never
-          asks for platform passwords — only a one-time Connect session (cookies).
+          Click Connect — we open a browser for that platform. Sign in there. Hit I&apos;ve logged
+          in. RivalRadar captures the session automatically (never a password).
         </p>
       </div>
 
@@ -199,7 +204,7 @@ export function ConnectCenter({
           <div>
             <p className="font-display text-sm font-semibold">YouTube · no Connect needed</p>
             <p className="font-ui text-[11px] text-muted-foreground">
-              Runs via Data API or yt-dlp in parallel with browser scouts. Login widget not required.
+              Runs via Data API or yt-dlp in parallel with browser scouts.
             </p>
           </div>
         </div>
@@ -244,7 +249,7 @@ export function ConnectCenter({
                 </p>
                 <p className={`font-ui text-[11px] ${statusTone(status)}`}>
                   {connected
-                    ? `Connected · ${row?.auth_type ?? "session"} saved for scout`
+                    ? "Connected · browser session saved for scout"
                     : "Not connected · required for Start Scout"}
                 </p>
               </div>
@@ -254,7 +259,7 @@ export function ConnectCenter({
                     size="sm"
                     variant="outline"
                     disabled={busy === platform}
-                    onClick={() => openConnect(platform)}
+                    onClick={() => void openConnect(platform)}
                   >
                     Reconnect
                   </Button>
@@ -269,7 +274,7 @@ export function ConnectCenter({
                   </Button>
                 </div>
               ) : (
-                <Button size="sm" disabled={busy === platform} onClick={() => openConnect(platform)}>
+                <Button size="sm" disabled={busy === platform} onClick={() => void openConnect(platform)}>
                   Connect {label}
                 </Button>
               )}
@@ -282,7 +287,7 @@ export function ConnectCenter({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
           role="presentation"
-          onClick={() => setDialog(null)}
+          onClick={() => void closeDialog()}
         >
           <div
             role="dialog"
@@ -293,48 +298,41 @@ export function ConnectCenter({
           >
             <div>
               <p className="font-ui text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                connect widget
+                connect session
               </p>
               <h4 id="connect-dialog-title" className="font-display text-2xl font-bold">
                 Connect {dialogLabel}
               </h4>
               <p className="font-accent text-sm italic text-muted-foreground">
-                Sign in on {dialogLabel} yourself, then deposit a Connect session. Never paste a
-                password.
+                A browser window opens on your machine. Sign in to {dialogLabel} yourself — we never
+                see your password. When you&apos;re in, confirm below and we capture the session.
               </p>
             </div>
 
             <ol className="font-ui space-y-3 text-sm text-muted-foreground">
               <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <span className="font-semibold text-foreground">1. Open {dialogLabel} and sign in</span>
-                <div className="mt-2">
-                  <a
-                    href={dialogHome}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-primary underline"
-                  >
-                    Open {dialogLabel}
-                    <ExternalLink className="size-3.5" aria-hidden />
-                  </a>
-                </div>
-              </li>
-              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <span className="font-semibold text-foreground">
-                  2. Paste session cookies (JSON array or name=value)
-                </span>
-                <textarea
-                  value={sessionBlob}
-                  onChange={(e) => setSessionBlob(e.target.value)}
-                  rows={5}
-                  placeholder='[{"name":"li_at","value":"...","domain":".linkedin.com"}]'
-                  className="font-mono mt-2 w-full rounded-2xl border border-border/60 bg-background px-3 py-2 text-xs"
-                />
-              </li>
-              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <span className="font-semibold text-foreground">3. Confirm connection</span>
+                <span className="font-semibold text-foreground">1. Browser window</span>
                 <p className="mt-1 text-xs">
-                  Scout injects this session into Playwright for {dialogLabel} hops only.
+                  {activeSession
+                    ? activeSession.detail ||
+                      `Opened ${dialogLabel} login — switch to that window and sign in.`
+                    : busy === dialog
+                      ? "Opening browser…"
+                      : "Waiting to open browser…"}
+                </p>
+              </li>
+              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                <span className="font-semibold text-foreground">2. Sign in on {dialogLabel}</span>
+                <p className="mt-1 text-xs">
+                  Use your normal account in the opened browser. Do not paste cookies or passwords
+                  here.
+                </p>
+              </li>
+              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                <span className="font-semibold text-foreground">3. Confirm</span>
+                <p className="mt-1 text-xs">
+                  Click I&apos;ve logged in — RivalRadar grabs the session from that browser and
+                  saves it encrypted for scout.
                 </p>
               </li>
             </ol>
@@ -346,11 +344,14 @@ export function ConnectCenter({
             )}
 
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setDialog(null)}>
+              <Button variant="ghost" onClick={() => void closeDialog()}>
                 Cancel
               </Button>
-              <Button disabled={busy === dialog} onClick={() => void confirmConnect()}>
-                {busy === dialog ? "Saving…" : `Confirm ${dialogLabel} connected`}
+              <Button
+                disabled={busy === dialog || !activeSession}
+                onClick={() => void confirmLoggedIn()}
+              >
+                {busy === dialog ? "Saving session…" : "I've logged in"}
               </Button>
             </div>
           </div>
