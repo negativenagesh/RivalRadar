@@ -13,6 +13,7 @@ import random
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from agent_events import AgentEvent, AgentEventBus
@@ -39,7 +40,7 @@ class WebUrlConnector:
         event_bus: AgentEventBus | None = None,
         human_pause: bool = True,
         object_store_root: str | None = None,
-        platform_sessions: dict[str, object] | None = None,
+        platform_sessions: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._run_id = run_id
         self._targets = targets
