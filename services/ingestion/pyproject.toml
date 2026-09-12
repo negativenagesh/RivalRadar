@@ -14,6 +14,10 @@ dependencies = [
     "playwright>=1.49.0",
     "anyio>=4.6.0",
     "agent-events",
+    "instaloader>=4.14",
+    "gallery-dl>=1.27",
+    "linkedin-scraper>=3.1.0",
+    "yt-dlp>=2025.1.0",
 ]
 
 [tool.uv.sources]
