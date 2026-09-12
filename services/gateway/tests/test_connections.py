@@ -35,27 +35,40 @@ async def test_connect_session_flow(client: AsyncClient, monkeypatch: pytest.Mon
     async def _health() -> bool:
         return True
 
-    async def _start(*, session_id: str, platform: str, login_url: str) -> dict[str, str]:
+    async def _start(
+        *,
+        session_id: str,
+        platform: str,
+        login_url: str,
+        cookies: list[dict[str, object]] | None = None,
+        storage_state: dict[str, object] | None = None,
+    ) -> dict[str, str]:
         assert platform == "instagram"
         assert "instagram" in login_url
+        _ = cookies, storage_state
         return {"session_id": session_id, "status": "awaiting_login", "detail": "ok"}
 
-    async def _cookies(session_id: str) -> list[dict[str, str]]:
-        return [
-            {
-                "name": "sessionid",
-                "value": "abc",
-                "domain": ".instagram.com",
-                "path": "/",
-            }
-        ]
+    async def _dump(session_id: str) -> dict[str, object]:
+        _ = session_id
+        return {
+            "cookies": [
+                {
+                    "name": "sessionid",
+                    "value": "abc",
+                    "domain": ".instagram.com",
+                    "path": "/",
+                    "expires": 2_000_000_000,
+                }
+            ],
+            "storage_state": {"cookies": [], "origins": []},
+        }
 
     async def _close(session_id: str) -> None:
         return None
 
     monkeypatch.setattr("app.routes.agent_health", _health)
     monkeypatch.setattr("app.routes.agent_start_session", _start)
-    monkeypatch.setattr("app.routes.agent_dump_cookies", _cookies)
+    monkeypatch.setattr("app.routes.agent_dump_session", _dump)
     monkeypatch.setattr("app.routes.agent_close_session", _close)
 
     started = await client.post("/connections/instagram/sessions", json={"workspace_id": "default"})
@@ -70,6 +83,7 @@ async def test_connect_session_flow(client: AsyncClient, monkeypatch: pytest.Mon
     assert done.status_code == 200
     assert done.json()["status"] == "connected"
     assert done.json()["auth_type"] == "cookie"
+    assert done.json()["expires_at"] is not None
 
 
 @pytest.mark.asyncio

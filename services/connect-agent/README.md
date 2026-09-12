@@ -1,36 +1,29 @@
 # RivalRadar Connect Agent
 
-Playwright helper that opens a real browser for platform login (Instagram, LinkedIn, X,
-TikTok, Threads). RivalRadar never asks for passwords or pasted cookies — when you click
-**I've logged in**, the agent dumps cookies to the gateway vault.
+Playwright helper for platform login (Instagram, LinkedIn, X, TikTok, Threads).
+RivalRadar never asks for passwords — when you click **I've logged in**, cookies +
+`storage_state` are vaulted in the gateway.
 
-## Default: Docker Compose (recommended)
+## Stay signed in
 
-`connect-agent` starts with the rest of the backend:
+Each platform gets a **persistent Chromium profile** under `/data/profiles/{platform}`
+(Compose volume `connect_profiles`). Reconnect reopens that profile and also re-seeds
+vaulted cookies, so you usually stay logged in.
+
+## Default: Docker Compose
 
 ```bash
 docker compose up -d --build
 ```
 
 - API: `http://localhost:8765`
-- Browser viewer (noVNC): `http://localhost:7900`
-
-Gateway talks to it at `http://connect-agent:8765`. Click **Connect** in Mission Control and
-sign in inside the noVNC tab.
+- Viewer (noVNC): `http://localhost:7900`
+- Profiles volume: `connect_profiles`
 
 ## Optional: native Mac window
 
-If you prefer a real Chromium window on the host instead of noVNC:
-
 ```bash
 cd services/connect-agent
-uv sync
-uv run playwright install chromium
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8765
-```
-
-Then point gateway at the host agent:
-
-```bash
-CONNECT_AGENT_URL=http://host.docker.internal:8765 docker compose up -d gateway
+uv sync && uv run playwright install chromium
+CONNECT_PROFILE_ROOT=./.profiles uv run uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```

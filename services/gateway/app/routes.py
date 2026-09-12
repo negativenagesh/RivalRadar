@@ -28,14 +28,15 @@ from app.clients import (
 from app.connect_agent import (
     ConnectAgentError,
     agent_close_session,
-    agent_dump_cookies,
+    agent_dump_session,
     agent_health,
     agent_start_session,
     public_viewer_url,
 )
 from app.connect_sessions import (
     ConnectSession,
-    login_url_for,
+    connect_open_url,
+    expires_at_from_cookies,
     pop_session,
     put_session,
 )
@@ -382,13 +383,13 @@ async def get_connection(
 async def start_connect_session(
     platform: str,
     body: ConnectSessionStart | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> ConnectSessionRead:
-    """Open a headed browser via the host Connect Agent for platform login."""
+    """Open a headed browser via the Connect Agent for platform login."""
     platform = platform.lower()
     if platform in {"youtube", "mock", "web"}:
         raise HTTPException(status_code=400, detail="This platform does not use Connect sessions")
     workspace_id = (body.workspace_id if body else "default") or "default"
-    login_url = login_url_for(platform)
     if not await agent_health():
         raise HTTPException(
             status_code=503,
@@ -397,10 +398,38 @@ async def start_connect_session(
                 "(connect-agent is included). Viewer: http://localhost:7900"
             ),
         )
+
+    seed_cookies: list[dict[str, object]] = []
+    seed_state: dict[str, object] | None = None
+    existing = await session.scalar(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == workspace_id,
+            PlatformConnection.platform == platform,
+        )
+    )
+    if existing is not None and existing.status == "connected":
+        try:
+            secret = decrypt_json(existing.encrypted_blob)
+            raw_cookies = secret.get("cookies")
+            if isinstance(raw_cookies, list):
+                seed_cookies = [c for c in raw_cookies if isinstance(c, dict)]
+            raw_state = secret.get("storage_state")
+            if isinstance(raw_state, dict):
+                seed_state = raw_state
+        except Exception:  # noqa: BLE001
+            seed_cookies = []
+            seed_state = None
+
+    has_saved = bool(seed_cookies or seed_state)
+    open_url = connect_open_url(platform, has_saved_session=has_saved)
     session_id = str(uuid.uuid4())
     try:
         agent = await agent_start_session(
-            session_id=session_id, platform=platform, login_url=login_url
+            session_id=session_id,
+            platform=platform,
+            login_url=open_url,
+            cookies=seed_cookies or None,
+            storage_state=seed_state,
         )
     except ConnectAgentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -412,14 +441,18 @@ async def start_connect_session(
         viewer = public_viewer_url()
     detail = str(
         agent.get("detail")
-        or f"Sign in to {platform} in the Connect browser, then click I've logged in."
+        or (
+            f"Reusing saved {platform} session — confirm you're signed in, then click I've logged in."
+            if has_saved
+            else f"Sign in to {platform} in the Connect browser, then click I've logged in."
+        )
     )
     put_session(
         ConnectSession(
             session_id=session_id,
             workspace_id=workspace_id,
             platform=platform,
-            login_url=login_url,
+            login_url=open_url,
             status="awaiting_login",
             detail=detail,
         )
@@ -428,7 +461,7 @@ async def start_connect_session(
         session_id=session_id,
         platform=platform,
         status="awaiting_login",
-        login_url=login_url,
+        login_url=open_url,
         detail=detail,
         agent_online=True,
         viewer_url=viewer,
@@ -471,16 +504,22 @@ async def complete_connect_session(
         pop_session(session_id)
         raise HTTPException(status_code=409, detail="Connect session expired — start again")
     try:
-        cookies = await agent_dump_cookies(session_id)
+        dump = await agent_dump_session(session_id)
     except ConnectAgentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    cookies_raw = dump.get("cookies")
+    cookies = [c for c in cookies_raw if isinstance(c, dict)] if isinstance(cookies_raw, list) else []
     if not cookies:
         raise HTTPException(
             status_code=409,
             detail="No session cookies yet — finish signing in in the browser, then try again",
         )
-    secret = {"cookies": cookies, "source": "connect_session"}
+    storage_state = dump.get("storage_state")
+    secret: dict[str, object] = {"cookies": cookies, "source": "connect_session"}
+    if isinstance(storage_state, dict):
+        secret["storage_state"] = storage_state
     blob = encrypt_json(secret)
+    expires_at = expires_at_from_cookies(cookies)
     existing = await session.scalar(
         select(PlatformConnection).where(
             PlatformConnection.workspace_id == live.workspace_id,
@@ -495,6 +534,7 @@ async def complete_connect_session(
             encrypted_blob=blob,
             scopes=["read", "scout"],
             status="connected",
+            expires_at=expires_at,
         )
         session.add(existing)
     else:
@@ -502,6 +542,7 @@ async def complete_connect_session(
         existing.encrypted_blob = blob
         existing.scopes = ["read", "scout"]
         existing.status = "connected"
+        existing.expires_at = expires_at
     await session.commit()
     await session.refresh(existing)
     await agent_close_session(session_id)
@@ -512,7 +553,7 @@ async def complete_connect_session(
         auth_type=existing.auth_type,
         expires_at=existing.expires_at,
         scopes=list(existing.scopes or []),
-        detail="Connected via browser Connect session",
+        detail="Connected via browser Connect session — profile kept for soft reconnect",
     )
 
 

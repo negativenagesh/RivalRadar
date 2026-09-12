@@ -45,13 +45,26 @@ async def agent_health() -> bool:
         return False
 
 
-async def agent_start_session(*, session_id: str, platform: str, login_url: str) -> dict[str, Any]:
+async def agent_start_session(
+    *,
+    session_id: str,
+    platform: str,
+    login_url: str,
+    cookies: list[dict[str, Any]] | None = None,
+    storage_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "session_id": session_id,
+        "platform": platform,
+        "login_url": login_url,
+    }
+    if cookies:
+        payload["cookies"] = cookies
+    if storage_state:
+        payload["storage_state"] = storage_state
     try:
         async with httpx.AsyncClient(base_url=settings.connect_agent_url, timeout=90.0) as client:
-            response = await client.post(
-                "/sessions",
-                json={"session_id": session_id, "platform": platform, "login_url": login_url},
-            )
+            response = await client.post("/sessions", json=payload)
     except httpx.HTTPError as exc:
         raise ConnectAgentError(_OFFLINE_HINT) from exc
     if response.status_code >= 400:
@@ -60,7 +73,7 @@ async def agent_start_session(*, session_id: str, platform: str, login_url: str)
     return result
 
 
-async def agent_dump_cookies(session_id: str) -> list[dict[str, Any]]:
+async def agent_dump_session(session_id: str) -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(base_url=settings.connect_agent_url, timeout=30.0) as client:
             response = await client.post(f"/sessions/{session_id}/cookies")
@@ -72,6 +85,13 @@ async def agent_dump_cookies(session_id: str) -> list[dict[str, Any]]:
             status_code=409 if response.status_code == 409 else 502,
         )
     data = response.json()
+    if not isinstance(data, dict):
+        raise ConnectAgentError("Connect agent returned invalid session dump")
+    return data
+
+
+async def agent_dump_cookies(session_id: str) -> list[dict[str, Any]]:
+    data = await agent_dump_session(session_id)
     cookies = data.get("cookies")
     if not isinstance(cookies, list):
         raise ConnectAgentError("Connect agent returned invalid cookies")

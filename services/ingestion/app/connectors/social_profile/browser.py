@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import tempfile
 from pathlib import Path
 from types import TracebackType
@@ -12,6 +13,20 @@ from playwright.async_api import Browser, BrowserContext, Page, Playwright, asyn
 from app.connectors.session_cookies import sanitize_playwright_cookies
 
 logger = logging.getLogger(__name__)
+
+# Keep aligned with connect-agent so vaulted cookies look like the same browser.
+CONNECT_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def _chromium_args(*, headless: bool) -> list[str]:
+    args = ["--disable-blink-features=AutomationControlled"]
+    if os.environ.get("CONNECT_IN_DOCKER") == "1" or not headless:
+        args.extend(["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+    return args
 
 
 class BrowserSession:
@@ -26,10 +41,12 @@ class BrowserSession:
         headless: bool = True,
         record: bool = False,
         cookies: list[dict[str, Any]] | None = None,
+        storage_state: dict[str, Any] | None = None,
     ) -> None:
         self._headless = headless
         self._record = record
         self._cookies = cookies or []
+        self._storage_state = storage_state
         self._video_dir: Path | None = None
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -38,17 +55,30 @@ class BrowserSession:
 
     async def __aenter__(self) -> BrowserSession:
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self._headless)
+        self._browser = await self._playwright.chromium.launch(
+            headless=self._headless,
+            args=_chromium_args(headless=self._headless),
+        )
 
+        context_kwargs: dict[str, Any] = {
+            "viewport": {"width": 1280, "height": 900},
+            "user_agent": CONNECT_UA,
+            "locale": "en-US",
+            "timezone_id": "America/Los_Angeles",
+        }
+        if self._storage_state:
+            context_kwargs["storage_state"] = self._storage_state
         if self._record:
             self._video_dir = Path(tempfile.mkdtemp(prefix="rivalradar-rec-"))
-            self._context = await self._browser.new_context(
-                record_video_dir=str(self._video_dir),
-                record_video_size={"width": 1280, "height": 800},
-            )
-        else:
-            self._context = await self._browser.new_context()
-        await self._inject_cookies(self._cookies)
+            context_kwargs["record_video_dir"] = str(self._video_dir)
+            context_kwargs["record_video_size"] = {"width": 1280, "height": 800}
+
+        self._context = await self._browser.new_context(**context_kwargs)
+        if not self._storage_state:
+            await self._inject_cookies(self._cookies)
+        elif self._cookies:
+            # storage_state already applied; merge any extra cookies.
+            await self._inject_cookies(self._cookies)
         self.page = await self._context.new_page()
         return self
 
