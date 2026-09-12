@@ -20,7 +20,9 @@ import {
   startIngestionRun,
 } from "@/lib/api";
 import {
+  DEFAULT_MISSION,
   buildDiscoveryReport,
+  buildMissionTargets,
   loadMission,
   missionToIngestionPayload,
   saveMission,
@@ -44,7 +46,9 @@ import type {
 
 export default function MissionPage() {
   const [step, setStep] = useState<MissionStep>(0);
-  const [mission, setMission] = useState<MissionState>(() => loadMission());
+  // Same default on server + first client paint; hydrate from localStorage after mount.
+  const [mission, setMission] = useState<MissionState>(() => structuredClone(DEFAULT_MISSION));
+  const [storageReady, setStorageReady] = useState(false);
   const [starting, setStarting] = useState(false);
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [posts, setPosts] = useState<CompetitorPost[]>([]);
@@ -56,19 +60,32 @@ export default function MissionPage() {
   const live = useIngestionLive(runId);
 
   useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setMission(loadMission());
+      setStorageReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
     saveMission(mission);
-  }, [mission]);
+  }, [mission, storageReady]);
 
   // Derived: hide the banner as soon as the flagged field is fixed (no setState in effect).
   const gateWarning = useMemo(() => {
     if (!gateIssue) return null;
     const open = [
       ...validateContext(mission),
-      ...validateScout(mission),
+      ...validateScout(mission, live.run?.status),
       ...validateFindings(posts.length),
     ];
     return open.some((i) => i.fieldId === gateIssue.fieldId) ? gateIssue.message : null;
-  }, [gateIssue, mission, posts.length]);
+  }, [gateIssue, mission, posts.length, live.run?.status]);
 
   const patch = useCallback((partial: Partial<MissionState>) => {
     setMission((prev) => ({ ...prev, ...partial }));
@@ -125,8 +142,11 @@ export default function MissionPage() {
       competitors: mission.competitors,
       posts,
       permissions: mission.permissions,
+      lookbackDays: mission.lookbackDays,
     });
   }, [mission, posts]);
+
+  const missionTargets = useMemo(() => buildMissionTargets(mission), [mission]);
 
   const topCaption = posts[0]?.caption ?? "";
 
@@ -149,7 +169,7 @@ export default function MissionPage() {
       setStep(target);
       return;
     }
-    const issues = canReachStep(target, mission, posts.length);
+    const issues = canReachStep(target, mission, posts.length, live.run?.status);
     if (!applyGate(issues)) return;
     setStep(target);
   }
@@ -161,7 +181,7 @@ export default function MissionPage() {
       return;
     }
     if (step === 1) {
-      if (!applyGate(validateScout(mission))) return;
+      if (!applyGate(validateScout(mission, live.run?.status))) return;
       void refreshFindings();
       setStep(2);
       return;
@@ -231,6 +251,9 @@ export default function MissionPage() {
             <LiveScout
               recordSession={mission.recordSession}
               onRecordChange={(recordSession) => patch({ recordSession })}
+              lookbackDays={mission.lookbackDays}
+              onLookbackChange={(lookbackDays) => patch({ lookbackDays })}
+              targets={missionTargets}
               onStart={() => void handleStartScout()}
               starting={starting}
               runId={runId}
@@ -245,7 +268,12 @@ export default function MissionPage() {
 
         {step === 2 && (
           <div id="findings-grid">
-            <FindingsGrid posts={posts} accounts={accounts} loading={loadingPosts} />
+            <FindingsGrid
+              posts={posts}
+              accounts={accounts}
+              loading={loadingPosts}
+              lookbackDays={mission.lookbackDays}
+            />
           </div>
         )}
 

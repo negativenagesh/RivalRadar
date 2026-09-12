@@ -38,5 +38,10 @@ describe("mission step gating", () => {
     mission.competitors = [{ ...newCompetitor(), name: "Rival", website: "rival.com" }];
     expect(canReachStep(1, mission, 0)).toEqual([]);
     expect(canReachStep(2, mission, 0).some((i) => i.step === 1)).toBe(true);
+    mission.lastRunId = "run-1";
+    expect(canReachStep(2, mission, 0, "running").some((i) => i.fieldId === "scout-start")).toBe(
+      true,
+    );
+    expect(canReachStep(2, mission, 0, "done")).toEqual([]);
   });
 });

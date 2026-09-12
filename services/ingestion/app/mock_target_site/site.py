@@ -11,6 +11,7 @@ authorized access to a real target.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from importlib.resources import files
 from typing import Any
 
@@ -50,6 +51,13 @@ def _load_fixtures() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     return accounts, posts
 
 
+def _relative_posted_at(index: int, total: int) -> str:
+    """Spread fixture posts across the last ~5 days so lookback filters work."""
+    day_offset = index % 5
+    posted = datetime.now(UTC) - timedelta(days=day_offset, hours=index)
+    return posted.isoformat().replace("+00:00", "Z")
+
+
 def render_index() -> str:
     accounts, _ = _load_fixtures()
     links = "\n".join(
@@ -78,9 +86,9 @@ def render_profile_page(handle_slug: str) -> str | None:
             likes=p["likes"],
             comments=p["comments"],
             shares=p["shares"],
-            posted_at=p["posted_at"],
+            posted_at=_relative_posted_at(i, len(account_posts)),
         )
-        for p in account_posts
+        for i, p in enumerate(account_posts)
     )
     return _PAGE_TEMPLATE.format(
         handle=account["handle"],

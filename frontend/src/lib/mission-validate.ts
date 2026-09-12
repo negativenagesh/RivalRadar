@@ -78,17 +78,36 @@ export function validateContext(mission: MissionState): FieldIssue[] {
   return issues;
 }
 
-export function validateScout(mission: MissionState): FieldIssue[] {
-  if (!mission.lastRunId) {
-    return [
-      {
-        step: 1,
-        fieldId: "scout-start",
-        message: "Start a scout run before leaving this step",
-      },
-    ];
+export function validateScout(
+  mission: MissionState,
+  runStatus?: string | null,
+): FieldIssue[] {
+  const issues: FieldIssue[] = [];
+  if (
+    !Number.isFinite(mission.lookbackDays) ||
+    mission.lookbackDays < 1 ||
+    mission.lookbackDays > 14
+  ) {
+    issues.push({
+      step: 1,
+      fieldId: "scout-lookback",
+      message: "Set lookback days between 1 and 14 before scouting",
+    });
   }
-  return [];
+  if (!mission.lastRunId) {
+    issues.push({
+      step: 1,
+      fieldId: "scout-start",
+      message: "Start a scout run before leaving this step",
+    });
+  } else if (runStatus && runStatus !== "done") {
+    issues.push({
+      step: 1,
+      fieldId: "scout-start",
+      message: "Wait for the scout run to finish before continuing",
+    });
+  }
+  return issues;
 }
 
 export function validateFindings(postsLength: number): FieldIssue[] {
@@ -109,11 +128,12 @@ export function canReachStep(
   target: MissionStep,
   mission: MissionState,
   postsLength: number,
+  runStatus?: string | null,
 ): FieldIssue[] {
   if (target <= 0) return [];
   const issues: FieldIssue[] = [];
   if (target >= 1) issues.push(...validateContext(mission));
-  if (target >= 2) issues.push(...validateScout(mission));
+  if (target >= 2) issues.push(...validateScout(mission, runStatus));
   if (target >= 3) issues.push(...validateFindings(postsLength));
   return issues;
 }

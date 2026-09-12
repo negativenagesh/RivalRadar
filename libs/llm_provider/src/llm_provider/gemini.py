@@ -9,7 +9,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from llm_provider.base import ImageResult, Message
 
 DEFAULT_TEXT_MODEL = "gemini-3.6-flash"
-DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
+DEFAULT_IMAGE_MODEL = "gemini-3.1-flash-image"
 
 
 class GeminiOpenAICompatProvider:

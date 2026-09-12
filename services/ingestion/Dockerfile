@@ -23,6 +23,7 @@ ENV PATH="/build/services/ingestion/.venv/bin:$PATH" \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 RUN playwright install --with-deps chromium && \
+    pip install --no-cache-dir yt-dlp && \
     chmod -R a+rX /opt/ms-playwright
 
 RUN mkdir -p /data/objects && chown appuser:appuser /data/objects
