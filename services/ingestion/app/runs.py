@@ -10,6 +10,7 @@ from app.config import settings
 from app.connectors.base import Connector
 from app.connectors.composite import CompositeConnector
 from app.connectors.fixture import FixtureConnector
+from app.connectors.social_feed import SocialFeedConnector
 from app.connectors.social_profile import ProfileTarget, SocialProfileConnector
 from app.connectors.web_url import WebUrlConnector
 from app.connectors.youtube import YouTubeConnector
@@ -20,6 +21,7 @@ from app.objectstore import LocalDiskObjectStore, ObjectStore
 from app.schemas import IngestionRunCreate, IngestionRunResult
 
 _MOCK_SITE_BASE_URL = "http://localhost:8000/mock-site/profile"
+_FEED_PLATFORMS = {"instagram", "linkedin", "x", "tiktok", "threads", "twitter", "facebook"}
 
 
 def _is_youtube_target(platform: str, url: str | None, handle: str) -> bool:
@@ -44,6 +46,7 @@ def _build_connector(
         return FixtureConnector()
 
     youtube_targets: list[ProfileTarget] = []
+    feed_targets: list[ProfileTarget] = []
     web_targets: list[ProfileTarget] = []
     mock_targets: list[ProfileTarget] = []
 
@@ -60,18 +63,32 @@ def _build_connector(
                     url=t.url or f"{_MOCK_SITE_BASE_URL}/{t.handle.lstrip('@')}",
                 )
             )
-        elif _has_http_url(t.url) or t.platform in {
-            "linkedin",
-            "x",
-            "instagram",
-            "tiktok",
-            "threads",
-            "web",
-        }:
+        elif t.platform.lower() in _FEED_PLATFORMS or (
+            _has_http_url(t.url)
+            and any(p in (t.url or "").lower() for p in ("instagram.com", "linkedin.com", "tiktok.com", "threads.net", "x.com", "twitter.com"))
+        ):
             url = t.url or t.handle
             if not url.startswith("http"):
                 url = f"https://{url}"
-            web_targets.append(ProfileTarget(handle=t.handle, platform=t.platform, url=url))
+            platform = t.platform.lower() if t.platform else "web"
+            if platform == "twitter":
+                platform = "x"
+            if "instagram.com" in url.lower():
+                platform = "instagram"
+            elif "linkedin.com" in url.lower():
+                platform = "linkedin"
+            elif "tiktok.com" in url.lower():
+                platform = "tiktok"
+            elif "threads.net" in url.lower():
+                platform = "threads"
+            elif "x.com" in url.lower() or "twitter.com" in url.lower():
+                platform = "x"
+            feed_targets.append(ProfileTarget(handle=t.handle, platform=platform, url=url))
+        elif _has_http_url(t.url) or t.platform in {"web"}:
+            url = t.url or t.handle
+            if not url.startswith("http"):
+                url = f"https://{url}"
+            web_targets.append(ProfileTarget(handle=t.handle, platform=t.platform or "web", url=url))
         else:
             mock_targets.append(
                 ProfileTarget(
@@ -81,7 +98,7 @@ def _build_connector(
                 )
             )
 
-    if body.connector == "social_profile" and not youtube_targets and not web_targets and not mock_targets:
+    if body.connector == "social_profile" and not youtube_targets and not feed_targets and not web_targets and not mock_targets:
         mock_targets = [
             ProfileTarget(
                 handle=t.handle,
@@ -93,6 +110,7 @@ def _build_connector(
 
     connectors: list[Connector] = []
     record_left = body.record
+    window = body.resolved_window()
 
     if youtube_targets or body.connector == "youtube":
         targets = youtube_targets or [
@@ -103,12 +121,28 @@ def _build_connector(
             YouTubeConnector(
                 run_id,
                 targets,
-                window=body.resolved_window(),
+                window=window,
                 api_key=settings.youtube_api_key,
+                headless=body.headless,
+                record=record_left and not feed_targets and not web_targets and not mock_targets,
+                event_bus=event_bus,
+                object_store=object_store,
+            )
+        )
+        if record_left and not feed_targets and not web_targets and not mock_targets:
+            record_left = False
+
+    if feed_targets and body.connector != "youtube":
+        connectors.append(
+            SocialFeedConnector(
+                run_id,
+                feed_targets,
+                window=window,
                 headless=body.headless,
                 record=record_left and not web_targets and not mock_targets,
                 event_bus=event_bus,
                 object_store=object_store,
+                platform_sessions=body.platform_sessions,
             )
         )
         if record_left and not web_targets and not mock_targets:
