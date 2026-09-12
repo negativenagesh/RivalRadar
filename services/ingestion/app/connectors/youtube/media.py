@@ -76,6 +76,7 @@ async def fetch_top_comments(
 
 
 async def download_media_to_store(
+    store: ObjectStore,
     *,
     run_id: str,
     post_id: str,
@@ -104,8 +105,7 @@ async def download_media_to_store(
         try:
             return await store.put(key, tmp_path)
         except Exception:
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
+            tmp_path.unlink(missing_ok=True)  # noqa: ASYNC240
             raise
     except Exception as exc:  # noqa: BLE001
         logger.info("media download failed for %s: %s", post_id, exc)
@@ -119,6 +119,7 @@ async def enrich_posts_media(
     posts: list[RawPost],
     *,
     run_id: str,
+    store: ObjectStore | None = None,
     api_key: str | None = None,
 ) -> list[RawPost]:
     """Attach media_keys + optional comment_sample; prefer local media URL for Findings."""

@@ -1,9 +1,9 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.date_window import DateWindow, DateWindowError
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def test_from_lookback_inclusive_span() -> None:

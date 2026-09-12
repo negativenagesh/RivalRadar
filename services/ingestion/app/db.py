@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from contextlib import suppress
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -36,8 +37,5 @@ def _ensure_post_columns(sync_conn) -> None:  # noqa: ANN001
         "ALTER TABLE competitor_posts ADD COLUMN IF NOT EXISTS comment_sample JSON DEFAULT '[]'",
     ]
     for stmt in statements:
-        try:
+        with suppress(Exception):
             sync_conn.execute(text(stmt))
-        except Exception:
-            # SQLite / older Postgres variants — ignore if unsupported
-            pass

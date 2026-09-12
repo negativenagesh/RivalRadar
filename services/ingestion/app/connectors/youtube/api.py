@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -10,7 +10,6 @@ import httpx
 from app.connectors.base import RawAccount, RawPost
 from app.connectors.youtube.media import best_thumbnail_url
 from app.date_window import DateWindow
-
 
 API_BASE = "https://www.googleapis.com/youtube/v3"
 

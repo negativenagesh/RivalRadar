@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from app.connectors.youtube.api import YouTubeDataClient, channel_to_raw_account, video_to_raw_post
-from app.date_window import DateWindow
 from app.connectors.youtube.parse import parse_youtube_ref
+from app.date_window import DateWindow
 
 
 def test_parse_youtube_at_handle() -> None:

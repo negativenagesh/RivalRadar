@@ -6,7 +6,6 @@ import asyncio
 import html
 import random
 import tempfile
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agent_events import AgentEvent, AgentEventBus

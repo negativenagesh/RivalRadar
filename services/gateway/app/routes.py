@@ -11,14 +11,14 @@ from starlette.websockets import WebSocketState
 
 from app.agent_events_bus import get_event_bus
 from app.clients import (
-    fetch_ingestion_media,
-    fetch_youtube_status,
     fetch_ingestion_accounts,
+    fetch_ingestion_media,
     fetch_ingestion_posts,
     fetch_ingestion_recording,
     fetch_ingestion_run,
     fetch_ingestion_screenshot,
     fetch_latest_digest,
+    fetch_youtube_status,
     generate_creative_content,
     trigger_digest_generation,
     trigger_ingestion_run,
@@ -339,8 +339,11 @@ async def upsert_connection(
 ) -> ConnectionStatusRead:
     """Store encrypted OAuth token / cookie vault material — never passwords."""
     platform = platform.lower()
-    if "password" in {k.lower() for k in body.secret.keys()}:
-        raise HTTPException(status_code=400, detail="Passwords are not accepted — use OAuth or Connect session cookies")
+    if "password" in {str(k).lower() for k in body.secret}:
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords are not accepted — use OAuth or Connect session cookies",
+        )
     blob = encrypt_json(dict(body.secret))
     existing = await session.scalar(
         select(PlatformConnection).where(
