@@ -13,21 +13,14 @@ import {
 import { ConnectCenter } from "@/components/mission/connect-center";
 import { Button } from "@/components/ui/button";
 import { ingestionRecordingUrl } from "@/lib/api";
-import type { MissionTargetPreview } from "@/lib/mission-store";
+import {
+  PLATFORM_LABELS,
+  requiredConnectPlatforms,
+  type MissionTargetPreview,
+} from "@/lib/mission-store";
 import type { AgentEvent, IngestionRun } from "@/lib/types";
 
 const LOOKBACK_PRESETS = [1, 3, 7, 14] as const;
-
-const PLATFORM_LABELS: Record<string, string> = {
-  linkedin: "LinkedIn",
-  x: "X",
-  instagram: "Instagram",
-  tiktok: "TikTok",
-  youtube: "YouTube",
-  threads: "Threads",
-  mock: "Mock feed",
-  web: "Web",
-};
 
 const SOURCE_LABELS: Record<string, string> = {
   "youtube-api": "YouTube API",
@@ -152,6 +145,16 @@ function ytdlpIntelFromEvents(events: AgentEvent[]): YtDlpIntel | null {
   return null;
 }
 
+/** Operator feed shows Playwright hops; yt-dlp/API actions stay out of the log. */
+function operatorLogEvents(events: AgentEvent[]): AgentEvent[] {
+  return events.filter((e) => {
+    if (e.agent_id === "ingestion.youtube") {
+      return e.step_type === "error" || e.step_type === "screenshot";
+    }
+    return e.step_type !== "artifact";
+  });
+}
+
 export function LiveScout({
   recordSession,
   onRecordChange,
@@ -162,7 +165,9 @@ export function LiveScout({
   onCustomRangeChange,
   targets,
   onStart,
+  onKill,
   starting,
+  killing,
   runId,
   connected,
   events,
@@ -179,7 +184,9 @@ export function LiveScout({
   onCustomRangeChange: (from: string | null, to: string | null) => void;
   targets: MissionTargetPreview[];
   onStart: () => void;
+  onKill?: () => void;
   starting: boolean;
+  killing?: boolean;
   runId: string | null;
   connected: boolean;
   events: AgentEvent[];
@@ -191,9 +198,15 @@ export function LiveScout({
   const recordingReady = Boolean(run?.recording_key) && status === "done";
   const [replayOpen, setReplayOpen] = useState(false);
   const [lightbox, setLightbox] = useState<Shot | null>(null);
+  const requiredPlatforms = useMemo(() => requiredConnectPlatforms(targets), [targets]);
+  const [connectionsReady, setConnectionsReady] = useState(
+    () => requiredConnectPlatforms(targets).length === 0,
+  );
+  const [missingPlatforms, setMissingPlatforms] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const shots = useMemo(() => shotsFromEvents(events, targets), [events, targets]);
   const ytdlpIntel = useMemo(() => ytdlpIntelFromEvents(events), [events]);
+  const logEvents = useMemo(() => operatorLogEvents(events), [events]);
 
   const brandTargets = useMemo(() => targets.filter((t) => t.role === "brand"), [targets]);
   const rivalRows = useMemo(() => {
@@ -207,6 +220,21 @@ export function LiveScout({
     return [...map.entries()];
   }, [targets]);
 
+  const onGateChange = useCallback(
+    (state: { ready: boolean; missing: string[] }) => {
+      setConnectionsReady(state.ready);
+      setMissingPlatforms(state.missing);
+    },
+    [],
+  );
+
+  // Prefer Connect Center gate; until it reports, only lock when Connect is required.
+  const scoutLocked = requiredPlatforms.length > 0 ? !connectionsReady : false;
+  // Only block while we are POSTing a new run. A stuck prior run in localStorage
+  // (pending/running after refresh) must not permanently disable Start Scout.
+  const priorActive = status === "running" || status === "pending";
+  const scoutBusy = starting || Boolean(killing);
+
   const enterFullscreen = useCallback(() => {
     const el = videoRef.current;
     if (!el) return;
@@ -218,7 +246,11 @@ export function LiveScout({
     if (ev.step_type === "action") {
       return String(ev.payload.detail ?? ev.payload.action ?? ev.payload.extracted ?? "");
     }
-    if (ev.step_type === "status") return String(ev.payload.status ?? "");
+    if (ev.step_type === "status") {
+      const st = String(ev.payload.status ?? "");
+      const detail = ev.payload.detail ? ` · ${String(ev.payload.detail)}` : "";
+      return `${st}${detail}`;
+    }
     if (ev.step_type === "error") return String(ev.payload.detail ?? "");
     if (ev.step_type === "log") return String(ev.payload.message ?? "");
     if (ev.step_type === "screenshot") {
@@ -292,7 +324,7 @@ export function LiveScout({
         </div>
       </div>
 
-      <ConnectCenter targets={targets} />
+      <ConnectCenter targets={targets} onGateChange={onGateChange} />
 
       <div className="mx-auto w-full max-w-3xl rounded-3xl border border-border/60 bg-gradient-to-b from-card/50 to-card/20 px-6 py-6 text-center shadow-[inset_0_1px_0_oklch(1_0_0_/_0.04)]">
         <p className="font-ui mb-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
@@ -345,30 +377,83 @@ export function LiveScout({
         )}
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-4">
-        <Button size="lg" className="h-14 px-10 font-display text-base" onClick={onStart} disabled={starting || status === "running" || status === "pending"}>
-          {starting || status === "running" || status === "pending" ? "Scouting…" : "Start Scout"}
-        </Button>
-        <label className="font-ui flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={recordSession}
-            onChange={(e) => onRecordChange(e.target.checked)}
-            className="size-4 accent-[var(--primary)]"
-          />
-          Record session
-        </label>
-        {runId && (
-          <span className="font-ui inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Radio className={`size-3 ${connected ? "text-primary" : "text-muted-foreground"}`} />
-            {connected ? "live" : "connecting…"} · {runId.slice(0, 8)}
-          </span>
+      <div className="flex flex-col items-center gap-3">
+        {scoutLocked && (
+          <p className="font-ui max-w-xl rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+            Start Scout is locked until you connect:{" "}
+            {missingPlatforms.map((p) => PLATFORM_LABELS[p] ?? p).join(", ") || "required platforms"}.
+            YouTube / yt-dlp does not need a Connect widget.
+          </p>
         )}
+        {priorActive && !scoutBusy && !scoutLocked && (
+          <p className="font-ui max-w-xl rounded-2xl border border-border/50 bg-card/30 px-4 py-2 text-sm text-muted-foreground">
+            A previous scout is still marked {status}. Kill it, then start a fresh run.
+          </p>
+        )}
+        <div className="flex flex-wrap items-center justify-center gap-4">
+          {priorActive && onKill && (
+            <Button
+              size="lg"
+              variant="outline"
+              className="h-14 px-8 font-display text-base"
+              onClick={onKill}
+              disabled={scoutBusy || scoutLocked}
+            >
+              {killing ? "Killing…" : "Kill previous run"}
+            </Button>
+          )}
+          <Button
+            size="lg"
+            className="h-14 px-10 font-display text-base"
+            onClick={onStart}
+            disabled={scoutBusy || scoutLocked}
+            title={
+              scoutLocked
+                ? "Connect every Context platform first"
+                : undefined
+            }
+          >
+            {starting
+              ? "Starting…"
+              : killing
+                ? "Killing…"
+                : scoutLocked
+                  ? "Connect platforms to unlock"
+                  : priorActive
+                    ? "Re-run Scout"
+                    : "Start Scout"}
+          </Button>
+          <label className="font-ui flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={recordSession}
+              onChange={(e) => onRecordChange(e.target.checked)}
+              className="size-4 accent-[var(--primary)]"
+            />
+            Record session
+          </label>
+          {runId && (
+            <span className="font-ui inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Radio className={`size-3 ${connected ? "text-primary" : "text-muted-foreground"}`} />
+              {connected ? "live" : "connecting…"} · {runId.slice(0, 8)}
+            </span>
+          )}
+        </div>
       </div>
 
       {error && (
         <p className="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
+        </p>
+      )}
+      {run?.status === "cancelled" && (
+        <p className="rounded-2xl border border-border/50 bg-card/30 px-4 py-3 text-sm text-muted-foreground">
+          Previous scout was killed. Hit Start Scout when you are ready.
+        </p>
+      )}
+      {run?.status === "error" && run.error_detail && (
+        <p className="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          Scout failed: {run.error_detail}
         </p>
       )}
 
@@ -399,13 +484,13 @@ export function LiveScout({
 
         <div className="flex max-h-[360px] flex-col overflow-hidden rounded-3xl border border-border/60">
           <div className="font-ui border-b border-border/40 px-3 py-2 text-xs text-muted-foreground">
-            event log
+            event log · browser scout (yt-dlp runs parallel, quiet)
           </div>
           <ul className="flex-1 space-y-1 overflow-y-auto p-3 font-ui text-[11px] leading-relaxed">
-            {events.length === 0 && (
-              <li className="text-muted-foreground">Waiting for events…</li>
+            {logEvents.length === 0 && (
+              <li className="text-muted-foreground">Waiting for browser scout events…</li>
             )}
-            {events.map((ev, i) => (
+            {logEvents.map((ev, i) => (
               <li key={`${ev.sequence}-${i}`} className="text-muted-foreground">
                 <span className="text-primary">{ev.step_type}</span> {eventDetail(ev)}
               </li>

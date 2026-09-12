@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import logging
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.connectors.base import CommentSample, RawPost
+from app.connectors.media_download import download_media_to_store
 from app.objectstore import ObjectStore
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "best_thumbnail_url",
+    "download_media_to_store",
+    "enrich_posts_media",
+    "fetch_top_comments",
+]
 
 
 def best_thumbnail_url(video_id: str, snippet_thumbs: dict[str, Any] | None = None) -> str | None:
@@ -73,46 +79,6 @@ async def fetch_top_comments(
         )
     samples.sort(key=lambda c: c["likes"], reverse=True)
     return samples[:limit]
-
-
-async def download_media_to_store(
-    store: ObjectStore,
-    *,
-    run_id: str,
-    post_id: str,
-    url: str,
-    client: httpx.AsyncClient | None = None,
-) -> str | None:
-    """Fetch remote media bytes and store under media/{run_id}/{post_id}.*"""
-    owns = client is None
-    http = client or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
-    try:
-        response = await http.get(url)
-        if response.status_code >= 400 or not response.content:
-            return None
-        content_type = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-        ext = ".jpg"
-        if "png" in content_type:
-            ext = ".png"
-        elif "webp" in content_type:
-            ext = ".webp"
-        elif "gif" in content_type:
-            ext = ".gif"
-        key = f"media/{run_id}/{post_id}{ext}"
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-            tmp.write(response.content)
-            tmp_path = Path(tmp.name)
-        try:
-            return await store.put(key, tmp_path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)  # noqa: ASYNC240
-            raise
-    except Exception as exc:  # noqa: BLE001
-        logger.info("media download failed for %s: %s", post_id, exc)
-        return None
-    finally:
-        if owns:
-            await http.aclose()
 
 
 async def enrich_posts_media(

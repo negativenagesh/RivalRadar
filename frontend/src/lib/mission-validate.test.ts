@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { isValidSocialUrl, isValidWebsite } from "./social-validate";
-import { canReachStep, validateContext } from "./mission-validate";
-import { DEFAULT_MISSION, newCompetitor } from "./mission-store";
+import {
+  canReachStep,
+  validateConnections,
+  validateContext,
+} from "./mission-validate";
+import { DEFAULT_MISSION, newCompetitor, requiredConnectPlatforms } from "./mission-store";
 
 describe("social URL validation", () => {
   it("accepts platform profile URLs", () => {
@@ -43,5 +47,37 @@ describe("mission step gating", () => {
       true,
     );
     expect(canReachStep(2, mission, 0, "done")).toEqual([]);
+  });
+
+  it("requires Connect for LinkedIn but not YouTube", () => {
+    const targets = [
+      {
+        label: "Pixis",
+        platform: "linkedin",
+        handleOrUrl: "pixis",
+        url: "https://linkedin.com/company/pixis",
+        source: "browser" as const,
+        role: "brand" as const,
+      },
+      {
+        label: "Pixis",
+        platform: "youtube",
+        handleOrUrl: "pixis",
+        url: "https://youtube.com/@pixis",
+        source: "youtube-api" as const,
+        role: "brand" as const,
+      },
+    ];
+    expect(requiredConnectPlatforms(targets)).toEqual(["linkedin"]);
+    expect(validateConnections(targets, []).some((i) => i.fieldId === "connect-center")).toBe(true);
+    expect(
+      validateConnections(targets, [
+        {
+          platform: "linkedin",
+          status: "connected",
+          auth_type: "cookie",
+        },
+      ]),
+    ).toEqual([]);
   });
 });

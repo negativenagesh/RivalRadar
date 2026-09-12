@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import uuid
 from collections.abc import AsyncIterator
 
 from agent_events import AgentEventBus
@@ -11,6 +12,7 @@ from starlette.websockets import WebSocketState
 
 from app.agent_events_bus import get_event_bus
 from app.clients import (
+    cancel_ingestion_run,
     fetch_ingestion_accounts,
     fetch_ingestion_media,
     fetch_ingestion_posts,
@@ -23,18 +25,36 @@ from app.clients import (
     trigger_digest_generation,
     trigger_ingestion_run,
 )
+from app.connect_agent import (
+    ConnectAgentError,
+    agent_close_session,
+    agent_dump_cookies,
+    agent_health,
+    agent_start_session,
+)
+from app.connect_sessions import (
+    ConnectSession,
+    login_url_for,
+    pop_session,
+    put_session,
+)
+from app.connect_sessions import (
+    get_session as get_connect_session,
+)
 from app.db import get_session
 from app.models import Draft, PipelineRun, PlatformConnection, ReviewState
 from app.runs import create_pipeline_run, execute_pipeline_run
 from app.schemas import (
     ConnectionStatusRead,
     ConnectionUpsert,
+    ConnectSessionRead,
+    ConnectSessionStart,
     DraftRead,
     EditRequest,
     PipelineRunCreated,
     PipelineRunRead,
 )
-from app.vault import encrypt_json
+from app.vault import decrypt_json, encrypt_json
 
 router = APIRouter()
 
@@ -90,13 +110,40 @@ async def pipeline_run_live_feed(websocket: WebSocket, run_id: str) -> None:
 
 
 @router.post("/ingestion/runs")
-async def start_ingestion_run(body: dict[str, object] | None = None) -> dict[str, object]:
-    return await trigger_ingestion_run(body or {})
+async def start_ingestion_run(
+    body: dict[str, object] | None = None,
+    workspace_id: str = "default",
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    payload = dict(body or {})
+    rows = await session.scalars(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == workspace_id,
+            PlatformConnection.status == "connected",
+        )
+    )
+    platform_sessions: dict[str, object] = {}
+    for row in rows.all():
+        try:
+            platform_sessions[row.platform] = decrypt_json(row.encrypted_blob)
+        except Exception:  # noqa: BLE001 - skip corrupt vault rows
+            continue
+    if platform_sessions:
+        payload["platform_sessions"] = platform_sessions
+    return await trigger_ingestion_run(payload)
 
 
 @router.get("/ingestion/runs/{run_id}")
 async def get_ingestion_run(run_id: str) -> dict[str, object]:
     return await fetch_ingestion_run(run_id)
+
+
+@router.post("/ingestion/runs/{run_id}/cancel")
+async def cancel_ingestion_run_route(run_id: str) -> dict[str, object]:
+    try:
+        return await cancel_ingestion_run(run_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
 
 @router.websocket("/ingestion/runs/{run_id}/live")
@@ -329,6 +376,141 @@ async def get_connection(
         scopes=list(row.scopes or []),
     )
 
+
+@router.post("/connections/{platform}/sessions", response_model=ConnectSessionRead)
+async def start_connect_session(
+    platform: str,
+    body: ConnectSessionStart | None = None,
+) -> ConnectSessionRead:
+    """Open a headed browser via the host Connect Agent for platform login."""
+    platform = platform.lower()
+    if platform in {"youtube", "mock", "web"}:
+        raise HTTPException(status_code=400, detail="This platform does not use Connect sessions")
+    workspace_id = (body.workspace_id if body else "default") or "default"
+    login_url = login_url_for(platform)
+    if not await agent_health():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Connect agent is offline. On your machine run: "
+                "cd services/connect-agent && uv sync && uv run playwright install chromium && "
+                "uv run uvicorn app.main:app --host 127.0.0.1 --port 8765"
+            ),
+        )
+    session_id = str(uuid.uuid4())
+    try:
+        agent = await agent_start_session(
+            session_id=session_id, platform=platform, login_url=login_url
+        )
+    except ConnectAgentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    put_session(
+        ConnectSession(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            platform=platform,
+            login_url=login_url,
+            status="awaiting_login",
+            detail=str(agent.get("detail") or f"Sign in to {platform} in the opened browser"),
+        )
+    )
+    return ConnectSessionRead(
+        session_id=session_id,
+        platform=platform,
+        status="awaiting_login",
+        login_url=login_url,
+        detail=f"Browser opened for {platform}. Sign in there, then click I've logged in.",
+        agent_online=True,
+    )
+
+
+@router.get("/connections/{platform}/sessions/{session_id}", response_model=ConnectSessionRead)
+async def read_connect_session(platform: str, session_id: str) -> ConnectSessionRead:
+    platform = platform.lower()
+    live = get_connect_session(session_id)
+    if live is None or live.platform != platform:
+        raise HTTPException(status_code=404, detail="Connect session not found")
+    return ConnectSessionRead(
+        session_id=live.session_id,
+        platform=live.platform,
+        status=live.status,  # type: ignore[arg-type]
+        login_url=live.login_url,
+        detail=live.detail,
+        agent_online=await agent_health(),
+    )
+
+
+@router.post(
+    "/connections/{platform}/sessions/{session_id}/complete",
+    response_model=ConnectionStatusRead,
+)
+async def complete_connect_session(
+    platform: str,
+    session_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> ConnectionStatusRead:
+    """Capture cookies from the open browser and vault them — never passwords."""
+    platform = platform.lower()
+    live = get_connect_session(session_id)
+    if live is None or live.platform != platform:
+        raise HTTPException(status_code=404, detail="Connect session not found")
+    if live.status == "expired":
+        await agent_close_session(session_id)
+        pop_session(session_id)
+        raise HTTPException(status_code=409, detail="Connect session expired — start again")
+    try:
+        cookies = await agent_dump_cookies(session_id)
+    except ConnectAgentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    if not cookies:
+        raise HTTPException(
+            status_code=409,
+            detail="No session cookies yet — finish signing in in the browser, then try again",
+        )
+    secret = {"cookies": cookies, "source": "connect_session"}
+    blob = encrypt_json(secret)
+    existing = await session.scalar(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == live.workspace_id,
+            PlatformConnection.platform == platform,
+        )
+    )
+    if existing is None:
+        existing = PlatformConnection(
+            workspace_id=live.workspace_id,
+            platform=platform,
+            auth_type="cookie",
+            encrypted_blob=blob,
+            scopes=["read", "scout"],
+            status="connected",
+        )
+        session.add(existing)
+    else:
+        existing.auth_type = "cookie"
+        existing.encrypted_blob = blob
+        existing.scopes = ["read", "scout"]
+        existing.status = "connected"
+    await session.commit()
+    await session.refresh(existing)
+    await agent_close_session(session_id)
+    pop_session(session_id)
+    return ConnectionStatusRead(
+        platform=existing.platform,
+        status="connected",
+        auth_type=existing.auth_type,
+        expires_at=existing.expires_at,
+        scopes=list(existing.scopes or []),
+        detail="Connected via browser Connect session",
+    )
+
+
+@router.post("/connections/{platform}/sessions/{session_id}/cancel", status_code=204)
+async def cancel_connect_session(platform: str, session_id: str) -> None:
+    platform = platform.lower()
+    live = get_connect_session(session_id)
+    if live is not None and live.platform == platform:
+        pop_session(session_id)
+    await agent_close_session(session_id)
 
 
 @router.post("/connections/{platform}", response_model=ConnectionStatusRead)

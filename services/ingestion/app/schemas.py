@@ -68,6 +68,8 @@ class IngestionRunCreate(BaseModel):
     lookback_days: int = Field(default=3, ge=1, le=90)
     date_from: date | None = None
     date_to: date | None = None
+    # Decrypted Connect Center sessions keyed by platform (linkedin, x, …)
+    platform_sessions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_window(self) -> "IngestionRunCreate":

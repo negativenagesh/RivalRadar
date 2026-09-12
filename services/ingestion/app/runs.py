@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
+from typing import Any
 
 from agent_events import AgentEventBus
 from sqlalchemy import select
@@ -10,6 +12,7 @@ from app.config import settings
 from app.connectors.base import Connector
 from app.connectors.composite import CompositeConnector
 from app.connectors.fixture import FixtureConnector
+from app.connectors.social_feed import SocialFeedConnector
 from app.connectors.social_profile import ProfileTarget, SocialProfileConnector
 from app.connectors.web_url import WebUrlConnector
 from app.connectors.youtube import YouTubeConnector
@@ -20,6 +23,25 @@ from app.objectstore import LocalDiskObjectStore, ObjectStore
 from app.schemas import IngestionRunCreate, IngestionRunResult
 
 _MOCK_SITE_BASE_URL = "http://localhost:8000/mock-site/profile"
+_FEED_PLATFORMS = {"instagram", "linkedin", "x", "tiktok", "threads", "twitter", "facebook"}
+
+# In-process registry so cancel can interrupt the asyncio task for a run.
+_active_tasks: dict[str, asyncio.Task[Any]] = {}
+
+
+def register_run_task(run_id: str, task: asyncio.Task[Any]) -> None:
+    _active_tasks[run_id] = task
+
+    def _clear(done: asyncio.Task[Any]) -> None:
+        current = _active_tasks.get(run_id)
+        if current is done:
+            _active_tasks.pop(run_id, None)
+
+    task.add_done_callback(_clear)
+
+
+def get_active_run_task(run_id: str) -> asyncio.Task[Any] | None:
+    return _active_tasks.get(run_id)
 
 
 def _is_youtube_target(platform: str, url: str | None, handle: str) -> bool:
@@ -44,6 +66,7 @@ def _build_connector(
         return FixtureConnector()
 
     youtube_targets: list[ProfileTarget] = []
+    feed_targets: list[ProfileTarget] = []
     web_targets: list[ProfileTarget] = []
     mock_targets: list[ProfileTarget] = []
 
@@ -60,18 +83,32 @@ def _build_connector(
                     url=t.url or f"{_MOCK_SITE_BASE_URL}/{t.handle.lstrip('@')}",
                 )
             )
-        elif _has_http_url(t.url) or t.platform in {
-            "linkedin",
-            "x",
-            "instagram",
-            "tiktok",
-            "threads",
-            "web",
-        }:
+        elif t.platform.lower() in _FEED_PLATFORMS or (
+            _has_http_url(t.url)
+            and any(p in (t.url or "").lower() for p in ("instagram.com", "linkedin.com", "tiktok.com", "threads.net", "x.com", "twitter.com"))
+        ):
             url = t.url or t.handle
             if not url.startswith("http"):
                 url = f"https://{url}"
-            web_targets.append(ProfileTarget(handle=t.handle, platform=t.platform, url=url))
+            platform = t.platform.lower() if t.platform else "web"
+            if platform == "twitter":
+                platform = "x"
+            if "instagram.com" in url.lower():
+                platform = "instagram"
+            elif "linkedin.com" in url.lower():
+                platform = "linkedin"
+            elif "tiktok.com" in url.lower():
+                platform = "tiktok"
+            elif "threads.net" in url.lower():
+                platform = "threads"
+            elif "x.com" in url.lower() or "twitter.com" in url.lower():
+                platform = "x"
+            feed_targets.append(ProfileTarget(handle=t.handle, platform=platform, url=url))
+        elif _has_http_url(t.url) or t.platform in {"web"}:
+            url = t.url or t.handle
+            if not url.startswith("http"):
+                url = f"https://{url}"
+            web_targets.append(ProfileTarget(handle=t.handle, platform=t.platform or "web", url=url))
         else:
             mock_targets.append(
                 ProfileTarget(
@@ -81,7 +118,7 @@ def _build_connector(
                 )
             )
 
-    if body.connector == "social_profile" and not youtube_targets and not web_targets and not mock_targets:
+    if body.connector == "social_profile" and not youtube_targets and not feed_targets and not web_targets and not mock_targets:
         mock_targets = [
             ProfileTarget(
                 handle=t.handle,
@@ -93,6 +130,7 @@ def _build_connector(
 
     connectors: list[Connector] = []
     record_left = body.record
+    window = body.resolved_window()
 
     if youtube_targets or body.connector == "youtube":
         targets = youtube_targets or [
@@ -103,12 +141,28 @@ def _build_connector(
             YouTubeConnector(
                 run_id,
                 targets,
-                window=body.resolved_window(),
+                window=window,
                 api_key=settings.youtube_api_key,
+                headless=body.headless,
+                record=record_left and not feed_targets and not web_targets and not mock_targets,
+                event_bus=event_bus,
+                object_store=object_store,
+            )
+        )
+        if record_left and not feed_targets and not web_targets and not mock_targets:
+            record_left = False
+
+    if feed_targets and body.connector != "youtube":
+        connectors.append(
+            SocialFeedConnector(
+                run_id,
+                feed_targets,
+                window=window,
                 headless=body.headless,
                 record=record_left and not web_targets and not mock_targets,
                 event_bus=event_bus,
                 object_store=object_store,
+                platform_sessions=body.platform_sessions,
             )
         )
         if record_left and not web_targets and not mock_targets:
@@ -124,6 +178,7 @@ def _build_connector(
                 record=record_left and not mock_targets,
                 event_bus=event_bus,
                 object_store_root=settings.object_store_root,
+                platform_sessions=body.platform_sessions,
             )
         )
         if record_left and not mock_targets:
@@ -178,6 +233,9 @@ async def execute_run(
     async with factory() as session:
         run = await session.get(IngestionRun, run_id)
         assert run is not None
+        if run.status == RunStatus.CANCELLED:
+            await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+            return
         run.status = RunStatus.RUNNING
         await session.commit()
 
@@ -202,18 +260,57 @@ async def execute_run(
 
             run = await session.get(IngestionRun, run_id)
             assert run is not None
+            if run.status == RunStatus.CANCELLED:
+                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+                return
             run.status = RunStatus.DONE
             run.result = payload
             run.recording_key = recording_key
             await session.commit()
             await event_bus.close_run(run_id, status="done")
+        except asyncio.CancelledError:
+            run = await session.get(IngestionRun, run_id)
+            if run is not None and run.status not in {RunStatus.CANCELLED, RunStatus.DONE}:
+                run.status = RunStatus.CANCELLED
+                run.error_detail = "cancelled by operator"
+                await session.commit()
+                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+            raise
         except Exception as exc:  # noqa: BLE001
             run = await session.get(IngestionRun, run_id)
             assert run is not None
+            if run.status == RunStatus.CANCELLED:
+                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+                return
             run.status = RunStatus.ERROR
             run.error_detail = str(exc)
             await session.commit()
             await event_bus.close_run(run_id, status="error", detail=str(exc))
+
+
+async def cancel_run(
+    session: AsyncSession,
+    run_id: str,
+    event_bus: AgentEventBus,
+) -> IngestionRun:
+    """Mark a pending/running scout cancelled and interrupt its asyncio task if alive."""
+    run = await session.get(IngestionRun, run_id)
+    if run is None:
+        raise KeyError(run_id)
+    if run.status in {RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED}:
+        return run
+
+    run.status = RunStatus.CANCELLED
+    run.error_detail = "cancelled by operator"
+    await session.commit()
+    await session.refresh(run)
+
+    task = get_active_run_task(run_id)
+    if task is not None and not task.done():
+        task.cancel()
+
+    await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+    return run
 
 
 async def _archive_recording(

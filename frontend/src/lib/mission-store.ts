@@ -115,6 +115,41 @@ export type MissionTargetPreview = {
   role: "brand" | "rival";
 };
 
+/** Platforms that need a Connect session before Start Scout (not YouTube/yt-dlp or mock). */
+export const CONNECT_SKIP_PLATFORMS = new Set(["youtube", "mock", "web"]);
+
+export const PLATFORM_LABELS: Record<string, string> = {
+  linkedin: "LinkedIn",
+  x: "X",
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  threads: "Threads",
+  mock: "Mock feed",
+  web: "Web",
+};
+
+export const PLATFORM_HOME: Record<string, string> = {
+  linkedin: "https://www.linkedin.com/login",
+  x: "https://x.com/i/flow/login",
+  instagram: "https://www.instagram.com/accounts/login/",
+  tiktok: "https://www.tiktok.com/login",
+  threads: "https://www.threads.net/login",
+};
+
+/** Unique Playwright platforms from Context links that must be connected. */
+export function requiredConnectPlatforms(targets: MissionTargetPreview[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of targets) {
+    const p = t.platform.toLowerCase();
+    if (CONNECT_SKIP_PLATFORMS.has(p) || seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
+}
+
 function ensureHttp(url: string): string {
   return url.startsWith("http") ? url : `https://${url}`;
 }

@@ -68,9 +68,13 @@ describe("api client", () => {
   it("throws when the gateway returns a non-OK status", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 503 }),
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: "down" }),
+      }),
     );
 
-    await expect(getLatestDigest()).rejects.toThrow(/503/);
+    await expect(getLatestDigest()).rejects.toThrow(/down/);
   });
 });

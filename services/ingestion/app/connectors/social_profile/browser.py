@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import base64
+import logging
 import tempfile
 from pathlib import Path
 from types import TracebackType
+from typing import Any, cast
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+
+from app.connectors.session_cookies import sanitize_playwright_cookies
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserSession:
@@ -14,9 +20,16 @@ class BrowserSession:
     per-context video capture -- written on context close, no extra deps.
     """
 
-    def __init__(self, *, headless: bool = True, record: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        headless: bool = True,
+        record: bool = False,
+        cookies: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._headless = headless
         self._record = record
+        self._cookies = cookies or []
         self._video_dir: Path | None = None
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -35,8 +48,29 @@ class BrowserSession:
             )
         else:
             self._context = await self._browser.new_context()
+        await self._inject_cookies(self._cookies)
         self.page = await self._context.new_page()
         return self
+
+    async def _inject_cookies(self, cookies: list[dict[str, Any]]) -> None:
+        assert self._context is not None
+        cleaned = sanitize_playwright_cookies(cookies)
+        if not cleaned:
+            return
+        try:
+            await self._context.add_cookies(cast(Any, cleaned))
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("bulk add_cookies failed (%s); retrying one-by-one", exc)
+
+        ok = 0
+        for cookie in cleaned:
+            try:
+                await self._context.add_cookies(cast(Any, [cookie]))
+                ok += 1
+            except Exception:  # noqa: BLE001
+                logger.debug("skipping invalid cookie %s", cookie.get("name"), exc_info=True)
+        logger.info("injected %s/%s connect-session cookies", ok, len(cleaned))
 
     async def __aexit__(
         self,

@@ -22,7 +22,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error(`${init?.method ?? "GET"} ${path} failed: ${response.status}`);
+    let detail = `${init?.method ?? "GET"} ${path} failed: ${response.status}`;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      // keep status text
+    }
+    throw new Error(detail);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -74,6 +81,10 @@ export function startIngestionRun(body: IngestionRunCreate): Promise<IngestionRu
 
 export function getIngestionRun(runId: string): Promise<IngestionRun> {
   return request<IngestionRun>(`/ingestion/runs/${runId}`);
+}
+
+export function cancelIngestionRun(runId: string): Promise<IngestionRun> {
+  return request<IngestionRun>(`/ingestion/runs/${runId}/cancel`, { method: "POST" });
 }
 
 export function listIngestionPosts(): Promise<CompetitorPost[]> {
@@ -128,6 +139,44 @@ export function upsertConnection(
 export function deleteConnection(platform: string, workspaceId = "default"): Promise<void> {
   return request<void>(`/connections/${platform}?workspace_id=${encodeURIComponent(workspaceId)}`, {
     method: "DELETE",
+  });
+}
+
+export type ConnectSession = {
+  session_id: string;
+  platform: string;
+  status: "awaiting_login" | "ready" | "completed" | "cancelled" | "expired" | "error";
+  login_url: string;
+  detail?: string | null;
+  agent_online?: boolean;
+};
+
+export function startConnectSession(
+  platform: string,
+  workspaceId = "default",
+): Promise<ConnectSession> {
+  return request<ConnectSession>(`/connections/${platform}/sessions`, {
+    method: "POST",
+    body: JSON.stringify({ workspace_id: workspaceId }),
+  });
+}
+
+export function getConnectSession(platform: string, sessionId: string): Promise<ConnectSession> {
+  return request<ConnectSession>(`/connections/${platform}/sessions/${sessionId}`);
+}
+
+export function completeConnectSession(
+  platform: string,
+  sessionId: string,
+): Promise<ConnectionStatus> {
+  return request<ConnectionStatus>(`/connections/${platform}/sessions/${sessionId}/complete`, {
+    method: "POST",
+  });
+}
+
+export function cancelConnectSession(platform: string, sessionId: string): Promise<void> {
+  return request<void>(`/connections/${platform}/sessions/${sessionId}/cancel`, {
+    method: "POST",
   });
 }
 

@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     generation_service_url: str = "http://localhost:8003"
     compliance_service_url: str = "http://localhost:8004"
     connection_vault_key: str | None = None
+    # Host-side headed Playwright agent (must run outside Docker on macOS/Windows).
+    connect_agent_url: str = "http://host.docker.internal:8765"
 
 
 settings = Settings()

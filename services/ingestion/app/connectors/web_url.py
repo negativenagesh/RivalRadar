@@ -13,12 +13,14 @@ import random
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from agent_events import AgentEvent, AgentEventBus
 from agent_events.schema import StepType
 
 from app.connectors.base import RawAccount, RawPost
+from app.connectors.session_cookies import cookies_from_sessions
 from app.connectors.social_profile.browser import BrowserSession
 from app.connectors.social_profile.targets import ProfileTarget
 
@@ -38,6 +40,7 @@ class WebUrlConnector:
         event_bus: AgentEventBus | None = None,
         human_pause: bool = True,
         object_store_root: str | None = None,
+        platform_sessions: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._run_id = run_id
         self._targets = targets
@@ -47,6 +50,7 @@ class WebUrlConnector:
         self._event_bus = event_bus
         self._human_pause = human_pause
         self._object_store_root = object_store_root
+        self._platform_sessions = platform_sessions or {}
         self._session: BrowserSession | None = None
         self._sequence = 0
         self._accounts: list[RawAccount] = []
@@ -82,8 +86,17 @@ class WebUrlConnector:
     async def _ensure_loaded(self) -> None:
         if self._loaded:
             return
+        platforms = {t.platform.lower() for t in self._targets if t.platform}
+        cookies = cookies_from_sessions(self._platform_sessions, platforms=platforms)
+        if cookies:
+            await self._emit(
+                "action",
+                {"detail": f"connect_session cookies={len(cookies)} platforms={sorted(platforms)}"},
+            )
         self._session = await BrowserSession(
-            headless=self._headless, record=self._record
+            headless=self._headless,
+            record=self._record,
+            cookies=cookies,
         ).__aenter__()
         assert self._session.page is not None
         for i, target in enumerate(self._targets):
