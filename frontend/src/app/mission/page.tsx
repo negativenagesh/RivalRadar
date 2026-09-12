@@ -123,7 +123,13 @@ export default function MissionPage() {
   useEffect(() => {
     const status = live.run?.status;
     if (status !== "done" && status !== "cancelled" && status !== "error") return;
-    void refreshFindings();
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) void refreshFindings();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [live.run?.status, refreshFindings]);
 
   const missionTargets = useMemo(() => buildMissionTargets(mission), [mission]);
