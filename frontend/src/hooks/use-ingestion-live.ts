@@ -15,7 +15,8 @@ export type ScoutFrame = {
 
 function slimEvent(event: AgentEvent): AgentEvent {
   if (event.step_type !== "screenshot") return event;
-  const { jpeg_b64: _jpeg, ...rest } = event.payload;
+  const rest = { ...event.payload };
+  delete rest.jpeg_b64;
   return {
     ...event,
     payload: { ...rest, has_frame: true },
@@ -139,7 +140,10 @@ export function useIngestionLive(runId: string | null) {
       });
     }, 800);
 
-    void refreshRun();
+    // Defer so we don't setState synchronously inside the effect body (eslint).
+    void Promise.resolve().then(() => {
+      if (!cancelled) void refreshRun();
+    });
 
     return () => {
       cancelled = true;
