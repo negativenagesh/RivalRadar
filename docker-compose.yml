@@ -102,6 +102,7 @@ services:
       <<: *common-env
       DATABASE_URL: postgresql+asyncpg://rivalradar:rivalradar@postgres:5432/rivalradar
       REDIS_URL: redis://redis:6379/0
+      INGESTION_SERVICE_URL: http://ingestion:8000
       INTELLIGENCE_SERVICE_URL: http://intelligence:8000
       GENERATION_SERVICE_URL: http://generation:8000
       COMPLIANCE_SERVICE_URL: http://compliance:8000
@@ -112,6 +113,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ingestion:
+        condition: service_started
       intelligence:
         condition: service_started
       generation:
@@ -125,9 +128,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
     restart: unless-stopped
-    environment:
-      NEXT_PUBLIC_GATEWAY_URL: http://localhost:8000
     ports:
       - "3000:3000"
     depends_on:

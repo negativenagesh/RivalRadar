@@ -38,6 +38,14 @@ async def generate_draft_content(
         return result
 
 
+async def generate_creative_content(body: dict[str, Any]) -> dict[str, Any]:
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=90.0) as client:
+        response = await client.post("/creative/generate", json=body)
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        return result
+
+
 async def check_compliance(text: str) -> dict[str, Any]:
     async with httpx.AsyncClient(base_url=settings.compliance_service_url, timeout=30.0) as client:
         response = await client.post("/compliance/check", json={"text": text})
@@ -60,3 +68,33 @@ async def fetch_ingestion_run(run_id: str) -> dict[str, Any]:
         response.raise_for_status()
         result: dict[str, Any] = response.json()
         return result
+
+
+async def fetch_ingestion_posts() -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
+        response = await client.get("/posts")
+        response.raise_for_status()
+        result: list[dict[str, Any]] = response.json()
+        return result
+
+
+async def fetch_ingestion_accounts() -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
+        response = await client.get("/accounts")
+        response.raise_for_status()
+        result: list[dict[str, Any]] = response.json()
+        return result
+
+
+async def fetch_ingestion_recording(run_id: str) -> httpx.Response:
+    """Return the raw streaming response from ingestion (caller must close)."""
+    client = httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=60.0)
+    request = client.build_request("GET", f"/ingest/runs/{run_id}/recording")
+    response = await client.send(request, stream=True)
+    if response.status_code >= 400:
+        await response.aclose()
+        await client.aclose()
+        response.raise_for_status()
+    # Attach client so the route can close both after streaming.
+    response.extensions["rivalradar_client"] = client
+    return response
