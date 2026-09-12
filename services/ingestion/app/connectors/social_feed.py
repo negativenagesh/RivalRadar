@@ -1,8 +1,8 @@
 """Per-post social feed scout (Instagram, LinkedIn, X).
 
 OSS-first (Instaloader / gallery-dl / linkedin_scraper), Playwright fallback.
-TikTok is skipped by product request. Each platform runs in its own budgeted
-task so one hang cannot stall the others.
+TikTok is skipped by product request. Targets run sequentially with a per-target
+budget so cookie/browser tools do not contend with each other.
 """
 
 from __future__ import annotations
@@ -138,27 +138,36 @@ class SocialFeedConnector:
             "action",
             {
                 "detail": (
-                    f"scouting_parallel platforms={platforms} budget_s={_PLATFORM_BUDGET_S} "
+                    f"scouting_sequential platforms={platforms} "
+                    f"targets={len(self._targets)} budget_s={_PLATFORM_BUDGET_S} "
                     f"oss=instaloader,gallery-dl,linkedin_scraper"
                 )
             },
         )
 
-        results = await asyncio.gather(
-            *(
-                self._scout_target_isolated(target, record=(i == 0 and self._record))
-                for i, target in enumerate(self._targets)
-            ),
-            return_exceptions=True,
-        )
-        for target, result in zip(self._targets, results, strict=True):
-            if isinstance(result, Exception):
-                platform = normalize_platform(target.platform or "web")
+        # One target at a time — parallel Chromium/Instaloader/gallery-dl fights
+        # Connect cookies and produces interleaved event-log noise.
+        for i, target in enumerate(self._targets):
+            platform = normalize_platform(target.platform or "web")
+            await self._emit(
+                "action",
+                {
+                    "detail": (
+                        f"scout_next platform={platform} "
+                        f"target={i + 1}/{len(self._targets)} handle={target.handle}"
+                    )
+                },
+            )
+            try:
+                await self._scout_target_isolated(
+                    target, record=(i == 0 and self._record)
+                )
+            except Exception as exc:  # noqa: BLE001
                 await self._emit(
                     "error",
-                    {"detail": f"scout_target failed {platform}: {result}"},
+                    {"detail": f"scout_target failed {platform}: {exc}"},
                 )
-                logger.exception("scout_target failed for %s", target.handle, exc_info=result)
+                logger.exception("scout_target failed for %s", target.handle)
 
         self._loaded = True
         if not self._sources_used:
@@ -177,7 +186,7 @@ class SocialFeedConnector:
                 {
                     "detail": (
                         f"platform_budget_exceeded {platform} "
-                        f"after {_PLATFORM_BUDGET_S}s — continuing other platforms"
+                        f"after {_PLATFORM_BUDGET_S}s — continuing next target"
                     )
                 },
             )
@@ -194,6 +203,8 @@ class SocialFeedConnector:
                 {"detail": f"oss_try platform={platform} window={self._window.date_from}→{self._window.date_to}"},
             )
             account, posts = await self._oss_fetch(platform, handle=handle, url=url)
+            if not posts:
+                raise RuntimeError("oss returned 0 posts in date window")
             async with self._lock:
                 self._accounts.append(account)
                 self._posts.extend(posts)
