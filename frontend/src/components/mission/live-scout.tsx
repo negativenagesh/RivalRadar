@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { ingestionRecordingUrl } from "@/lib/api";
 import {
   PLATFORM_LABELS,
+  requiredConnectPlatforms,
   type MissionTargetPreview,
 } from "@/lib/mission-store";
 import type { AgentEvent, IngestionRun } from "@/lib/types";
@@ -193,7 +194,10 @@ export function LiveScout({
   const recordingReady = Boolean(run?.recording_key) && status === "done";
   const [replayOpen, setReplayOpen] = useState(false);
   const [lightbox, setLightbox] = useState<Shot | null>(null);
-  const [connectionsReady, setConnectionsReady] = useState(false);
+  const requiredPlatforms = useMemo(() => requiredConnectPlatforms(targets), [targets]);
+  const [connectionsReady, setConnectionsReady] = useState(
+    () => requiredConnectPlatforms(targets).length === 0,
+  );
   const [missingPlatforms, setMissingPlatforms] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const shots = useMemo(() => shotsFromEvents(events, targets), [events, targets]);
@@ -220,8 +224,12 @@ export function LiveScout({
     [],
   );
 
-  const scoutLocked = !connectionsReady;
-  const scoutBusy = starting || status === "running" || status === "pending";
+  // Prefer Connect Center gate; until it reports, only lock when Connect is required.
+  const scoutLocked = requiredPlatforms.length > 0 ? !connectionsReady : false;
+  // Only block while we are POSTing a new run. A stuck prior run in localStorage
+  // (pending/running after refresh) must not permanently disable Start Scout.
+  const priorActive = status === "running" || status === "pending";
+  const scoutBusy = starting;
 
   const enterFullscreen = useCallback(() => {
     const el = videoRef.current;
@@ -234,7 +242,11 @@ export function LiveScout({
     if (ev.step_type === "action") {
       return String(ev.payload.detail ?? ev.payload.action ?? ev.payload.extracted ?? "");
     }
-    if (ev.step_type === "status") return String(ev.payload.status ?? "");
+    if (ev.step_type === "status") {
+      const st = String(ev.payload.status ?? "");
+      const detail = ev.payload.detail ? ` · ${String(ev.payload.detail)}` : "";
+      return `${st}${detail}`;
+    }
     if (ev.step_type === "error") return String(ev.payload.detail ?? "");
     if (ev.step_type === "log") return String(ev.payload.message ?? "");
     if (ev.step_type === "screenshot") {
@@ -369,6 +381,11 @@ export function LiveScout({
             YouTube / yt-dlp does not need a Connect widget.
           </p>
         )}
+        {priorActive && !scoutBusy && !scoutLocked && (
+          <p className="font-ui max-w-xl rounded-2xl border border-border/50 bg-card/30 px-4 py-2 text-sm text-muted-foreground">
+            A previous scout is still marked {status}. You can start a fresh run anytime.
+          </p>
+        )}
         <div className="flex flex-wrap items-center justify-center gap-4">
           <Button
             size="lg"
@@ -381,7 +398,13 @@ export function LiveScout({
                 : undefined
             }
           >
-            {scoutBusy ? "Scouting…" : scoutLocked ? "Connect platforms to unlock" : "Start Scout"}
+            {scoutBusy
+              ? "Starting…"
+              : scoutLocked
+                ? "Connect platforms to unlock"
+                : priorActive
+                  ? "Re-run Scout"
+                  : "Start Scout"}
           </Button>
           <label className="font-ui flex items-center gap-2 text-sm">
             <input
@@ -404,6 +427,11 @@ export function LiveScout({
       {error && (
         <p className="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
+        </p>
+      )}
+      {run?.status === "error" && run.error_detail && (
+        <p className="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          Scout failed: {run.error_detail}
         </p>
       )}
 

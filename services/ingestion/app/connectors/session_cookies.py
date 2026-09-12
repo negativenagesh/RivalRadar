@@ -16,6 +16,14 @@ _PLATFORM_DOMAINS: dict[str, str] = {
     "meta": ".facebook.com",
 }
 
+_SAMESITE_MAP = {
+    "strict": "Strict",
+    "lax": "Lax",
+    "none": "None",
+    "no_restriction": "None",
+    "unspecified": "Lax",
+}
+
 
 def cookies_from_sessions(
     platform_sessions: dict[str, Any],
@@ -33,7 +41,66 @@ def cookies_from_sessions(
         default_domain = _PLATFORM_DOMAINS.get(key, f".{key}.com")
         raw = secret.get("cookies", secret)
         out.extend(_normalize_cookies(raw, default_domain=default_domain))
-    return out
+    return sanitize_playwright_cookies(out)
+
+
+def sanitize_playwright_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop / repair fields that make Chromium Storage.setCookies fail."""
+    cleaned: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in cookies:
+        item = _sanitize_one(raw)
+        if item is None:
+            continue
+        key = (item["name"], str(item.get("domain") or item.get("url") or ""), str(item.get("path") or "/"))
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(item)
+    return cleaned
+
+
+def _sanitize_one(raw: dict[str, Any]) -> dict[str, Any] | None:
+    name = str(raw.get("name") or "").strip()
+    if not name or raw.get("value") is None:
+        return None
+    value = str(raw["value"])
+    cookie: dict[str, Any] = {"name": name, "value": value}
+
+    url = raw.get("url")
+    domain = raw.get("domain")
+    path = str(raw.get("path") or "/")
+
+    if isinstance(url, str) and url.startswith(("http://", "https://")):
+        # Prefer url-only form — avoids domain/path mismatches from dumps.
+        cookie["url"] = url.split("#", 1)[0]
+    elif isinstance(domain, str) and domain.strip():
+        d = domain.strip()
+        # Chromium rejects bare hostnames without a path.
+        cookie["domain"] = d
+        cookie["path"] = path if path.startswith("/") else f"/{path}"
+    else:
+        return None
+
+    expires = raw.get("expires")
+    if isinstance(expires, (int, float)) and expires > 0:
+        cookie["expires"] = float(expires)
+
+    if "httpOnly" in raw:
+        cookie["httpOnly"] = bool(raw["httpOnly"])
+    if "secure" in raw:
+        cookie["secure"] = bool(raw["secure"])
+
+    same = raw.get("sameSite")
+    if isinstance(same, str) and same.strip():
+        mapped = _SAMESITE_MAP.get(same.strip().lower(), same.strip())
+        if mapped in {"Strict", "Lax", "None"}:
+            cookie["sameSite"] = mapped
+            if mapped == "None":
+                cookie["secure"] = True
+
+    # Session cookies from dumps sometimes set expires=-1; omit entirely.
+    return cookie
 
 
 def _normalize_cookies(raw: Any, *, default_domain: str) -> list[dict[str, Any]]:
@@ -41,20 +108,16 @@ def _normalize_cookies(raw: Any, *, default_domain: str) -> list[dict[str, Any]]
         cookies: list[dict[str, Any]] = []
         for item in raw:
             if isinstance(item, dict) and item.get("name") and item.get("value") is not None:
-                cookie = {
-                    "name": str(item["name"]),
-                    "value": str(item["value"]),
-                    "domain": str(item.get("domain") or default_domain),
-                    "path": str(item.get("path") or "/"),
-                }
-                if item.get("url"):
-                    cookie["url"] = str(item["url"])
-                    cookie.pop("domain", None)
-                cookies.append(cookie)
+                cookies.append(dict(item))
             elif isinstance(item, str) and "=" in item:
                 name, value = item.split("=", 1)
                 cookies.append(
-                    {"name": name.strip(), "value": value.strip(), "domain": default_domain, "path": "/"}
+                    {
+                        "name": name.strip(),
+                        "value": value.strip(),
+                        "domain": default_domain,
+                        "path": "/",
+                    }
                 )
         return cookies
     if isinstance(raw, str) and "=" in raw:
@@ -73,7 +136,6 @@ def _normalize_cookies(raw: Any, *, default_domain: str) -> list[dict[str, Any]]
             )
         return cookies
     if isinstance(raw, dict):
-        # Flat name→value map (excluding metadata keys)
         skip = {"cookies", "note", "oauth_placeholder", "source", "auth_type"}
         cookies = []
         for name, value in raw.items():

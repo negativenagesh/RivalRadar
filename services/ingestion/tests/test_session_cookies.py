@@ -1,4 +1,4 @@
-from app.connectors.session_cookies import cookies_from_sessions
+from app.connectors.session_cookies import cookies_from_sessions, sanitize_playwright_cookies
 
 
 def test_cookies_from_sessions_list_and_flat() -> None:
@@ -23,3 +23,34 @@ def test_cookies_skips_other_platforms() -> None:
         platforms={"instagram"},
     )
     assert cookies == []
+
+
+def test_sanitize_drops_invalid_fields() -> None:
+    cleaned = sanitize_playwright_cookies(
+        [
+            {
+                "name": "sessionid",
+                "value": "abc",
+                "domain": ".instagram.com",
+                "path": "/",
+                "expires": -1,
+                "sameSite": "no_restriction",
+                "partitionKey": {"topLevelSite": "https://instagram.com"},
+                "size": 12,
+            },
+            {"name": "bad", "value": "x"},  # no domain/url
+            {
+                "name": "auth",
+                "value": "1",
+                "url": "https://www.linkedin.com/",
+                "sameSite": "Lax",
+            },
+        ]
+    )
+    assert len(cleaned) == 2
+    ig = next(c for c in cleaned if c["name"] == "sessionid")
+    assert "expires" not in ig
+    assert ig["sameSite"] == "None"
+    assert ig["secure"] is True
+    assert "partitionKey" not in ig
+    assert next(c for c in cleaned if c["name"] == "auth")["url"].startswith("https://")
