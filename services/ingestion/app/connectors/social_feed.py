@@ -18,7 +18,7 @@ from agent_events.schema import StepType
 
 from app.connectors.base import RawAccount, RawPost
 from app.connectors.media_download import download_media_to_store, store_bytes
-from app.connectors.session_cookies import cookies_from_sessions
+from app.connectors.session_cookies import cookies_from_sessions, storage_state_from_sessions
 from app.connectors.social_feed_parse import (
     collect_post_urls,
     normalize_platform,
@@ -98,15 +98,23 @@ class SocialFeedConnector:
             return
         platforms = {normalize_platform(t.platform) for t in self._targets if t.platform}
         cookies = cookies_from_sessions(self._platform_sessions, platforms=platforms)
-        if cookies:
+        storage_state = storage_state_from_sessions(self._platform_sessions, platforms=platforms)
+        if cookies or storage_state:
             await self._emit(
                 "action",
-                {"detail": f"connect_session cookies={len(cookies)} platforms={sorted(platforms)}"},
+                {
+                    "detail": (
+                        f"connect_session cookies={len(cookies)} "
+                        f"storage_state={'yes' if storage_state else 'no'} "
+                        f"platforms={sorted(platforms)}"
+                    )
+                },
             )
         self._session = await BrowserSession(
             headless=self._headless,
             record=self._record,
             cookies=cookies,
+            storage_state=storage_state,
         ).__aenter__()
         assert self._session.page is not None
         for target in self._targets:

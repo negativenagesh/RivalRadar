@@ -41,7 +41,36 @@ def cookies_from_sessions(
         default_domain = _PLATFORM_DOMAINS.get(key, f".{key}.com")
         raw = secret.get("cookies", secret)
         out.extend(_normalize_cookies(raw, default_domain=default_domain))
+        state = secret.get("storage_state")
+        if isinstance(state, dict):
+            state_cookies = state.get("cookies")
+            if isinstance(state_cookies, list):
+                out.extend(_normalize_cookies(state_cookies, default_domain=default_domain))
     return sanitize_playwright_cookies(out)
+
+
+def storage_state_from_sessions(
+    platform_sessions: dict[str, Any],
+    *,
+    platforms: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Return a single Playwright storage_state when exactly one platform has one.
+
+    Multi-platform scouts rely on flattened cookies instead.
+    """
+    found: list[dict[str, Any]] = []
+    for platform, secret in platform_sessions.items():
+        key = platform.lower()
+        if platforms is not None and key not in platforms:
+            continue
+        if not isinstance(secret, dict):
+            continue
+        state = secret.get("storage_state")
+        if isinstance(state, dict) and state:
+            found.append(state)
+    if len(found) == 1:
+        return found[0]
+    return None
 
 
 def sanitize_playwright_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:

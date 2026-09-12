@@ -1,11 +1,7 @@
 """RivalRadar Connect Agent — opens a real browser for platform login.
 
-Default path: Docker Compose service with Xvfb + noVNC (starts with the backend).
-Optional host path for a native Mac window:
-
-  cd services/connect-agent
-  uv sync && uv run playwright install chromium
-  uv run uvicorn app.main:app --host 127.0.0.1 --port 8765
+Default: Docker Compose with persistent Chromium profiles + noVNC.
+Profiles keep you signed in across reconnects.
 """
 
 from __future__ import annotations
@@ -18,13 +14,15 @@ from pydantic import BaseModel, Field
 
 from app.browser import manager
 
-app = FastAPI(title="RivalRadar Connect Agent", version="0.2.0")
+app = FastAPI(title="RivalRadar Connect Agent", version="0.3.0")
 
 
 class StartBody(BaseModel):
     session_id: str
     platform: str
     login_url: str
+    cookies: list[dict[str, Any]] = Field(default_factory=list)
+    storage_state: dict[str, Any] | None = None
 
 
 class SessionStatus(BaseModel):
@@ -38,6 +36,7 @@ class SessionStatus(BaseModel):
 
 class CookiesBody(BaseModel):
     cookies: list[dict[str, Any]] = Field(default_factory=list)
+    storage_state: dict[str, Any] | None = None
 
 
 def _viewer_url() -> str | None:
@@ -57,7 +56,13 @@ async def health() -> dict[str, str | None]:
 @app.post("/sessions", response_model=SessionStatus)
 async def start_session(body: StartBody) -> SessionStatus:
     try:
-        live = await manager.start(body.session_id, body.platform, body.login_url)
+        live = await manager.start(
+            body.session_id,
+            body.platform,
+            body.login_url,
+            cookies=body.cookies or None,
+            storage_state=body.storage_state,
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to open browser: {exc}") from exc
     return SessionStatus(
@@ -88,12 +93,17 @@ async def get_session(session_id: str) -> SessionStatus:
 @app.post("/sessions/{session_id}/cookies", response_model=CookiesBody)
 async def dump_cookies(session_id: str) -> CookiesBody:
     try:
-        cookies = await manager.dump_cookies(session_id)
+        payload = await manager.dump_session(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return CookiesBody(cookies=cookies)
+    cookies = payload.get("cookies")
+    storage_state = payload.get("storage_state")
+    return CookiesBody(
+        cookies=[c for c in cookies if isinstance(c, dict)] if isinstance(cookies, list) else [],
+        storage_state=storage_state if isinstance(storage_state, dict) else None,
+    )
 
 
 @app.post("/sessions/{session_id}/close", status_code=204)

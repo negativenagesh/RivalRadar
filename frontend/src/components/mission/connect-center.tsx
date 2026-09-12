@@ -179,8 +179,9 @@ export function ConnectCenter({
         </p>
         <h3 className="font-display text-xl font-bold">Connect Center</h3>
         <p className="font-accent text-sm italic text-muted-foreground">
-          Click Connect — we open a browser tab for that platform (noVNC). Sign in there. Hit
-          I&apos;ve logged in. RivalRadar captures the session automatically (never a password).
+          Click Connect once per platform — we keep a Docker browser profile + encrypted
+          cookies so you stay signed in. Soft reconnect usually just confirms; only re-login
+          if a platform signed you out.
         </p>
       </div>
 
@@ -252,8 +253,10 @@ export function ConnectCenter({
                 </p>
                 <p className={`font-ui text-[11px] ${statusTone(status)}`}>
                   {connected
-                    ? "Connected · browser session saved for scout"
-                    : "Not connected · required for Start Scout"}
+                    ? "Connected · session saved (profile + cookies) for scout"
+                    : status === "needs_reconnect"
+                      ? "Session expired · reconnect to refresh cookies"
+                      : "Not connected · required for Start Scout"}
                 </p>
               </div>
               {connected ? (

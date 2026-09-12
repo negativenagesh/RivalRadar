@@ -37,7 +37,9 @@ ENV PATH="/build/services/connect-agent/.venv/bin:$PATH" \
 
 RUN playwright install --with-deps chromium \
     && chmod +x /entrypoint.sh \
-    && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix \
+    && mkdir -p /tmp/.X11-unix /data/profiles \
+    && chmod 1777 /tmp/.X11-unix \
+    && chmod -R a+rwX /data/profiles \
     && chmod -R a+rX /opt/ms-playwright
 
 EXPOSE 8765 7900

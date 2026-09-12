@@ -1,4 +1,8 @@
-from app.connectors.session_cookies import cookies_from_sessions, sanitize_playwright_cookies
+from app.connectors.session_cookies import (
+    cookies_from_sessions,
+    sanitize_playwright_cookies,
+    storage_state_from_sessions,
+)
 
 
 def test_cookies_from_sessions_list_and_flat() -> None:
@@ -54,3 +58,15 @@ def test_sanitize_drops_invalid_fields() -> None:
     assert ig["secure"] is True
     assert "partitionKey" not in ig
     assert next(c for c in cleaned if c["name"] == "auth")["url"].startswith("https://")
+
+
+def test_storage_state_from_sessions_single() -> None:
+    state = {"cookies": [{"name": "a", "value": "1", "domain": ".x.com", "path": "/"}], "origins": []}
+    assert storage_state_from_sessions({"x": {"storage_state": state}}, platforms={"x"}) == state
+    assert (
+        storage_state_from_sessions(
+            {"x": {"storage_state": state}, "linkedin": {"storage_state": state}},
+            platforms={"x", "linkedin"},
+        )
+        is None
+    )
