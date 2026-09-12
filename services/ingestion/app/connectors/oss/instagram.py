@@ -28,6 +28,21 @@ class InstaloaderError(RuntimeError):
     pass
 
 
+def fail_fast_rate_controller(context: Any) -> Any:
+    """Refuse Instaloader's 11-minute 429 sleeps so OSS can fall back to browser."""
+    import instaloader
+
+    class _FailFast(instaloader.RateController):
+        def sleep(self, secs: float) -> None:
+            if secs > 5:
+                raise InstaloaderError(
+                    f"instagram asked to wait {secs:.0f}s — falling back to browser"
+                )
+            super().sleep(min(float(secs), 1.0))
+
+    return _FailFast(context)
+
+
 @dataclass
 class _Draft:
     post: RawPost
@@ -116,8 +131,9 @@ def _fetch_sync(
         save_metadata=True,
         compress_json=False,
         post_metadata_txt_pattern="",
-        max_connection_attempts=2,
+        max_connection_attempts=1,
         quiet=True,
+        rate_controller=fail_fast_rate_controller,
     )
     _apply_cookies(L, cookies)
     L.dirname_pattern = str(out_dir / "{target}")

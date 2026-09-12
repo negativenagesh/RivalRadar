@@ -11,8 +11,7 @@ from urllib.parse import urlparse
 from playwright.async_api import Page
 
 from app.connectors.base import RawAccount, RawPost
-from app.connectors.media_download import download_media_to_store
-from app.connectors.oss.netscape import cookie_value
+from app.connectors.media_download import download_media_to_store, download_via_page
 from app.connectors.session_cookies import cookies_from_sessions
 from app.date_window import DateWindow
 from app.objectstore import ObjectStore
@@ -34,6 +33,25 @@ def _company_slug(url: str, handle: str) -> str:
     return handle.lstrip("@").split("/")[0]
 
 
+def _linkedin_media_headers(platform_sessions: dict[str, Any]) -> dict[str, str]:
+    cookies = cookies_from_sessions(platform_sessions, platforms={"linkedin"})
+    if not cookies:
+        return {"Referer": "https://www.linkedin.com/"}
+    cookie_header = "; ".join(
+        f"{c.get('name')}={c.get('value')}"
+        for c in cookies
+        if c.get("name") and c.get("value")
+    )
+    return {
+        "Referer": "https://www.linkedin.com/",
+        "Cookie": cookie_header,
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+    }
+
+
 def _parse_relative_date(raw: str | None) -> datetime | None:
     if not raw:
         return None
@@ -44,7 +62,10 @@ def _parse_relative_date(raw: str | None) -> datetime | None:
         return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         pass
-    m = re.match(r"(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks|mo|mon|month|months|y|yr|year|years)\b", text)
+    m = re.match(
+        r"(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks|mo|mon|month|months|y|yr|year|years)\b",
+        text,
+    )
     if not m:
         if "just now" in text or text == "now":
             return now
@@ -87,18 +108,10 @@ async def fetch_linkedin_company_posts(
     if not cookies:
         raise LinkedInScraperError("no linkedin connect cookies")
 
-    # Ensure li_at is present (BrowserSession already injected cookies; reinforce)
-    li_at = cookie_value(cookies, "li_at")
-    if li_at:
-        try:
-            from linkedin_scraper import login_with_cookie
-
-            await login_with_cookie(page, li_at)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("linkedin login_with_cookie soft-fail: %s", exc)
-
     slug = _company_slug(url, handle)
     company_url = url if "/company/" in url else f"https://www.linkedin.com/company/{slug}"
+    # Cookies are already on the Playwright context from Connect. Skip
+    # login_with_cookie — it does an extra /feed hop (up to 60s) before scrape.
     scraper = CompanyPostsScraper(page)
     try:
         raw_posts = await scraper.scrape(company_url, limit=max_posts)
@@ -115,14 +128,11 @@ async def fetch_linkedin_company_posts(
     for item in raw_posts:
         posted = _parse_relative_date(getattr(item, "posted_date", None))
         if posted is None:
-            posted = datetime.now(UTC)
-            uncertain = True
-        else:
-            uncertain = False
-            if posted.tzinfo is None:
-                posted = posted.replace(tzinfo=UTC)
-            if not window.contains(posted):
-                continue
+            continue
+        if posted.tzinfo is None:
+            posted = posted.replace(tzinfo=UTC)
+        if not window.contains(posted):
+            continue
 
         urn = getattr(item, "urn", None) or ""
         post_url = getattr(item, "linkedin_url", None) or (
@@ -138,16 +148,31 @@ async def fetch_linkedin_company_posts(
         image_url: str | None = media_urls[0] if media_urls else None
 
         if object_store and media_urls:
-            key = await download_media_to_store(
+            key = await download_via_page(
                 object_store,
+                page=page,
                 run_id=run_id,
                 post_id=external,
                 url=media_urls[0],
             )
+            if not key:
+                key = await download_media_to_store(
+                    object_store,
+                    run_id=run_id,
+                    post_id=external,
+                    url=media_urls[0],
+                    headers=_linkedin_media_headers(platform_sessions),
+                )
             if key:
                 media_keys = [key]
                 image_url = f"/ingestion/media/{key}"
 
+        likes = int(getattr(item, "reactions_count", None) or 0)
+        comments = int(getattr(item, "comments_count", None) or 0)
+        shares = int(getattr(item, "reposts_count", None) or 0)
+        caption = (getattr(item, "text", None) or "")[:2000].strip()
+        if not caption or caption.lower() in {"sign up | linkedin", "log in | linkedin"}:
+            caption = f"LinkedIn {slug}"
         themes = [
             "linkedin",
             "source:linkedin_scraper",
@@ -155,8 +180,6 @@ async def fetch_linkedin_company_posts(
             f"date_from:{window.date_from.isoformat()}",
             f"date_to:{window.date_to.isoformat()}",
         ]
-        if uncertain:
-            themes.append("posted_at_uncertain")
 
         posts.append(
             RawPost(
@@ -164,11 +187,11 @@ async def fetch_linkedin_company_posts(
                 external_post_id=external,
                 format="founder_post",
                 theme_tags=themes,
-                caption=(getattr(item, "text", None) or "")[:2000] or f"LinkedIn {slug}",
+                caption=caption or f"LinkedIn {slug}",
                 image_url=image_url,
-                likes=int(getattr(item, "reactions_count", None) or 0),
-                comments=int(getattr(item, "comments_count", None) or 0),
-                shares=int(getattr(item, "reposts_count", None) or 0),
+                likes=likes,
+                comments=comments,
+                shares=shares,
                 views=0,
                 posted_at=posted.isoformat().replace("+00:00", "Z"),
                 media_urls=media_urls,

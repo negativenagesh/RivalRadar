@@ -12,6 +12,7 @@ from app.connectors.oss.common import (
     username_from_target,
     ytdlp_yyyymmdd,
 )
+from app.connectors.oss.instagram import InstaloaderError, fail_fast_rate_controller
 from app.connectors.oss.linkedin import _parse_relative_date
 from app.connectors.oss.netscape import cookie_value, write_netscape_cookies
 from app.date_window import DateWindow
@@ -44,9 +45,10 @@ def test_netscape_cookie_file(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "auth_token" in text
     assert "li_at" in text
-    assert cookie_value(
-        [{"name": "li_at", "value": "tok", "domain": ".linkedin.com"}], "li_at"
-    ) == "tok"
+    assert (
+        cookie_value([{"name": "li_at", "value": "tok", "domain": ".linkedin.com"}], "li_at")
+        == "tok"
+    )
 
 
 def test_username_and_handle_parsing() -> None:
@@ -60,3 +62,15 @@ def test_linkedin_relative_dates() -> None:
     assert _parse_relative_date("3d") is not None
     assert _parse_relative_date("just now") is not None
     assert _parse_relative_date("") is None
+
+
+def test_instaloader_fail_fast_refuses_long_sleep() -> None:
+    class _Ctx:
+        pass
+
+    ctl = fail_fast_rate_controller(_Ctx())
+    try:
+        ctl.sleep(666)
+        raise AssertionError("expected InstaloaderError")
+    except InstaloaderError as exc:
+        assert "666" in str(exc)

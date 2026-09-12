@@ -124,7 +124,7 @@ def _fetch_sync(
     ]
     import subprocess
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, check=False)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25, check=False)
     if proc.returncode not in (0, 1):  # 1 = partial
         err = (proc.stderr or proc.stdout or "gallery-dl failed")[:500]
         if "AuthRequired" in err or "authenticated cookies" in err:
@@ -168,7 +168,11 @@ def _fetch_sync(
             caption = str(item.get("content") or item.get("description") or item.get("text") or "")[
                 :2000
             ]
-            post_url = str(item.get("post_url") or item.get("url") or f"https://x.com/{username}/status/{tweet_id}")
+            post_url = str(
+                item.get("post_url")
+                or item.get("url")
+                or f"https://x.com/{username}/status/{tweet_id}"
+            )
             media_path = pick_media_file(meta_path.parent, stem_hints=[tweet_id, meta_path.stem])
             raw = RawPost(
                 account_handle=account["handle"],

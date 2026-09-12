@@ -11,6 +11,7 @@ export type ScoutFrame = {
   platform: string;
   label: string;
   url: string;
+  mime?: string;
 };
 
 function slimEvent(event: AgentEvent): AgentEvent {
@@ -66,6 +67,23 @@ export function useIngestionLive(runId: string | null) {
     [runId],
   );
 
+  const primeRun = useCallback((id: string, status: IngestionRunStatus = "pending") => {
+    setEvents([]);
+    setFrames([]);
+    setLatestScreenshot(null);
+    setConnected(false);
+    setRun({
+      id,
+      connector_type: "auto",
+      status,
+      record: false,
+      recording_key: null,
+      error_detail: null,
+      result: null,
+      created_at: new Date().toISOString(),
+    });
+  }, []);
+
   useEffect(() => {
     if (!runId) return;
 
@@ -119,6 +137,7 @@ export function useIngestionLive(runId: string | null) {
               platform: String(event.payload.platform ?? "scout"),
               label: String(event.payload.label ?? event.payload.url ?? `frame ${prev.length + 1}`),
               url: String(event.payload.url ?? ""),
+              mime: typeof event.payload.mime === "string" ? event.payload.mime : "jpeg",
             },
           ]);
         }
@@ -165,5 +184,6 @@ export function useIngestionLive(runId: string | null) {
     done,
     refreshRun,
     markOptimistic,
+    primeRun,
   };
 }

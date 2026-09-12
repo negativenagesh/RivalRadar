@@ -21,6 +21,7 @@ import {
   listIngestionPosts,
   startIngestionRun,
 } from "@/lib/api";
+import { filterFindingsPosts } from "@/lib/findings-filter";
 import {
   DEFAULT_MISSION,
   buildDiscoveryReport,
@@ -120,39 +121,41 @@ export default function MissionPage() {
   }, []);
 
   useEffect(() => {
-    if (!live.done || live.run?.status !== "done") return;
+    const status = live.run?.status;
+    if (status !== "done" && status !== "cancelled" && status !== "error") return;
     let cancelled = false;
-    void (async () => {
-      try {
-        const [p, a] = await Promise.all([listIngestionPosts(), listIngestionAccounts()]);
-        if (cancelled) return;
-        setPosts(p);
-        setAccounts(a);
-      } catch {
-        if (!cancelled) {
-          setPosts([]);
-          setAccounts([]);
-        }
-      }
-    })();
+    void Promise.resolve().then(() => {
+      if (!cancelled) void refreshFindings();
+    });
     return () => {
       cancelled = true;
     };
-  }, [live.done, live.run?.status]);
+  }, [live.run?.status, refreshFindings]);
+
+  const missionTargets = useMemo(() => buildMissionTargets(mission), [mission]);
+
+  const visiblePosts = useMemo(
+    () =>
+      filterFindingsPosts(posts, accounts, {
+        targets: missionTargets,
+        dateFrom: mission.dateFrom,
+        dateTo: mission.dateTo,
+        lookbackDays: mission.lookbackDays,
+      }).map((row) => row.post),
+    [posts, accounts, missionTargets, mission.dateFrom, mission.dateTo, mission.lookbackDays],
+  );
 
   const report = useMemo(() => {
     return buildDiscoveryReport({
       brand: mission.brand,
       competitors: mission.competitors,
-      posts,
+      posts: visiblePosts,
       permissions: mission.permissions,
       lookbackDays: mission.lookbackDays,
     });
-  }, [mission, posts]);
+  }, [mission, visiblePosts]);
 
-  const missionTargets = useMemo(() => buildMissionTargets(mission), [mission]);
-
-  const topCaption = posts[0]?.caption ?? "";
+  const topCaption = visiblePosts[0]?.caption ?? "";
 
   function applyGate(issues: FieldIssue[]): boolean {
     if (!issues.length) {
@@ -178,7 +181,7 @@ export default function MissionPage() {
       scrollToTop();
       return;
     }
-    const issues = canReachStep(target, mission, posts.length, live.run?.status);
+    const issues = canReachStep(target, mission, visiblePosts.length, live.run?.status);
     if (!applyGate(issues)) return;
     setStep(target);
     scrollToTop();
@@ -199,7 +202,7 @@ export default function MissionPage() {
       return;
     }
     if (step === 2) {
-      if (!applyGate(validateFindings(posts.length))) return;
+      if (!applyGate(validateFindings(visiblePosts.length))) return;
       setStep(3);
       scrollToTop();
     }
@@ -209,12 +212,15 @@ export default function MissionPage() {
     if (!runId) return;
     setScoutError(null);
     setKilling(true);
-    live.markOptimistic("cancelled", "cancelled by operator");
+    live.markOptimistic("cancelled", "stopped by operator");
     try {
       await cancelIngestionRun(runId);
       await live.refreshRun();
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
+      await refreshFindings();
+      await live.refreshRun();
     } catch (err) {
-      setScoutError(err instanceof Error ? err.message : "Failed to kill scout");
+      setScoutError(err instanceof Error ? err.message : "Failed to stop scout");
       await live.refreshRun();
     } finally {
       setKilling(false);
@@ -222,12 +228,13 @@ export default function MissionPage() {
   }
 
   async function handleStartScout() {
-    if (!applyGate(validateContext(mission))) return;
+    if (!applyGate(validateContext(mission))) {
+      setScoutError("Finish Context (brand + rival) before starting scout.");
+      return;
+    }
     setScoutError(null);
     setStarting(true);
     try {
-      // Gate connections before killing any in-flight run — otherwise cancel
-      // succeeds, start aborts, and the UI sits on "killed / Re-run".
       const connections = await listConnections();
       if (!applyGate(validateConnections(missionTargets, connections))) {
         setScoutError(
@@ -237,7 +244,7 @@ export default function MissionPage() {
       }
 
       if (runId && (live.run?.status === "running" || live.run?.status === "pending")) {
-        live.markOptimistic("cancelled", "cancelled by operator");
+        live.markOptimistic("cancelled", "stopped by operator");
         try {
           await cancelIngestionRun(runId);
         } catch {
@@ -247,6 +254,7 @@ export default function MissionPage() {
 
       const body = missionToIngestionPayload(mission);
       const created = await startIngestionRun(body);
+      live.primeRun(created.run_id, created.status === "running" ? "running" : "pending");
       patch({ lastRunId: created.run_id });
       setGateIssue(null);
     } catch (err) {
@@ -325,6 +333,7 @@ export default function MissionPage() {
             <FindingsGrid
               posts={posts}
               accounts={accounts}
+              targets={missionTargets}
               loading={loadingPosts}
               lookbackDays={mission.lookbackDays}
               dateFrom={mission.dateFrom}

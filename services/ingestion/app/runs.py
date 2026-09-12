@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 
-from agent_events import AgentEventBus
+from agent_events import AgentEvent, AgentEventBus
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,10 +18,12 @@ from app.connectors.social_profile import ProfileTarget, SocialProfileConnector
 from app.connectors.web_url import WebUrlConnector
 from app.connectors.youtube import YouTubeConnector
 from app.db import async_session_factory as default_session_factory
-from app.ingest import run_ingestion
+from app.ingest import buffer_counts, persist_raw_buffers, run_ingestion
 from app.models import IngestionRun, RunStatus
 from app.objectstore import LocalDiskObjectStore, ObjectStore
 from app.schemas import IngestionRunCreate, IngestionRunResult
+
+logger = logging.getLogger(__name__)
 
 _MOCK_SITE_BASE_URL = "http://localhost:8000/mock-site/profile"
 _FEED_PLATFORMS = {"instagram", "linkedin", "x", "tiktok", "threads", "twitter", "facebook"}
@@ -85,7 +88,17 @@ def _build_connector(
             )
         elif t.platform.lower() in _FEED_PLATFORMS or (
             _has_http_url(t.url)
-            and any(p in (t.url or "").lower() for p in ("instagram.com", "linkedin.com", "tiktok.com", "threads.net", "x.com", "twitter.com"))
+            and any(
+                p in (t.url or "").lower()
+                for p in (
+                    "instagram.com",
+                    "linkedin.com",
+                    "tiktok.com",
+                    "threads.net",
+                    "x.com",
+                    "twitter.com",
+                )
+            )
         ):
             url = t.url or t.handle
             if not url.startswith("http"):
@@ -108,7 +121,9 @@ def _build_connector(
             url = t.url or t.handle
             if not url.startswith("http"):
                 url = f"https://{url}"
-            web_targets.append(ProfileTarget(handle=t.handle, platform=t.platform or "web", url=url))
+            web_targets.append(
+                ProfileTarget(handle=t.handle, platform=t.platform or "web", url=url)
+            )
         else:
             mock_targets.append(
                 ProfileTarget(
@@ -118,7 +133,13 @@ def _build_connector(
                 )
             )
 
-    if body.connector == "social_profile" and not youtube_targets and not feed_targets and not web_targets and not mock_targets:
+    if (
+        body.connector == "social_profile"
+        and not youtube_targets
+        and not feed_targets
+        and not web_targets
+        and not mock_targets
+    ):
         mock_targets = [
             ProfileTarget(
                 handle=t.handle,
@@ -238,17 +259,44 @@ async def execute_run(
             return
         run.status = RunStatus.RUNNING
         await session.commit()
+        await event_bus.publish(
+            AgentEvent(
+                run_id=run_id,
+                agent_id="ingestion",
+                service="ingestion",
+                step_type="status",
+                payload={"status": "running"},
+                sequence=0,
+            )
+        )
 
         connector = _build_connector(run_id, body, event_bus, object_store=store)
+
+        async def _checkpoint() -> None:
+            try:
+                await persist_raw_buffers(session, connector)
+            except Exception:  # noqa: BLE001
+                logger.exception("checkpoint persist failed for %s", run_id)
+
+        for child in getattr(connector, "_connectors", None) or [connector]:
+            setter = getattr(child, "set_checkpoint", None)
+            if callable(setter):
+                setter(_checkpoint)
+
         try:
             result = await run_ingestion(session, connector)
             recording_key = await _archive_recording(run_id, connector, store)
-            sources = list(getattr(connector, "sources_used", None) or getattr(connector, "sources_used", []) or [])
+            sources = list(
+                getattr(connector, "sources_used", None)
+                or getattr(connector, "sources_used", [])
+                or []
+            )
             shots = list(getattr(connector, "screenshot_keys", []) or [])
             window = body.resolved_window()
+            acc_n, post_n = buffer_counts(connector)
             enriched = IngestionRunResult(
-                accounts_ingested=result.accounts_ingested,
-                posts_ingested=result.posts_ingested,
+                accounts_ingested=acc_n or result.accounts_ingested,
+                posts_ingested=post_n or result.posts_ingested,
                 posts_skipped_duplicate=result.posts_skipped_duplicate,
                 lookback_days=window.span_days,
                 date_from=window.date_from.isoformat(),
@@ -261,7 +309,9 @@ async def execute_run(
             run = await session.get(IngestionRun, run_id)
             assert run is not None
             if run.status == RunStatus.CANCELLED:
-                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+                await event_bus.close_run(
+                    run_id, status="cancelled", detail="cancelled by operator"
+                )
                 return
             run.status = RunStatus.DONE
             run.result = payload
@@ -269,18 +319,39 @@ async def execute_run(
             await session.commit()
             await event_bus.close_run(run_id, status="done")
         except asyncio.CancelledError:
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                logger.debug("rollback after cancel failed", exc_info=True)
+            persisted = 0
+            try:
+                persisted = await persist_raw_buffers(session, connector)
+                logger.info("persisted %s posts after cancel %s", persisted, run_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("persist after cancel failed for %s", run_id)
             run = await session.get(IngestionRun, run_id)
-            if run is not None and run.status not in {RunStatus.CANCELLED, RunStatus.DONE}:
+            if run is not None:
                 run.status = RunStatus.CANCELLED
                 run.error_detail = "cancelled by operator"
+                if persisted and not run.result:
+                    window = body.resolved_window()
+                    run.result = IngestionRunResult(
+                        accounts_ingested=0,
+                        posts_ingested=persisted,
+                        posts_skipped_duplicate=0,
+                        lookback_days=window.span_days,
+                        date_from=window.date_from.isoformat(),
+                        date_to=window.date_to.isoformat(),
+                    ).model_dump()
                 await session.commit()
-                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
             raise
         except Exception as exc:  # noqa: BLE001
             run = await session.get(IngestionRun, run_id)
             assert run is not None
             if run.status == RunStatus.CANCELLED:
-                await event_bus.close_run(run_id, status="cancelled", detail="cancelled by operator")
+                await event_bus.close_run(
+                    run_id, status="cancelled", detail="cancelled by operator"
+                )
                 return
             run.status = RunStatus.ERROR
             run.error_detail = str(exc)

@@ -143,11 +143,11 @@ export function validateScout(
       fieldId: "scout-start",
       message: "Start a scout run before leaving this step",
     });
-  } else if (runStatus && runStatus !== "done") {
+  } else if (runStatus === "running" || runStatus === "pending") {
     issues.push({
       step: 1,
       fieldId: "scout-start",
-      message: "Wait for the scout run to finish before continuing",
+      message: "Scout is still running — Stop Scout, then Continue to Findings",
     });
   }
   return issues;
