@@ -168,10 +168,13 @@ async def collect_post_urls(
                 continue
             if platform == "instagram" and "/p/" not in abs_url and "/reel/" not in abs_url and "/tv/" not in abs_url:
                 continue
-            if platform == "linkedin":
-                # Prefer concrete post/update URLs over "recent-activity" listing pages
-                if "recent-activity" in abs_url and "/posts/" not in abs_url and "activity" not in abs_url:
-                    continue
+            if (
+                platform == "linkedin"
+                and "recent-activity" in abs_url
+                and "/posts/" not in abs_url
+                and "activity" not in abs_url
+            ):
+                continue
             if abs_url in seen:
                 continue
             seen.add(abs_url)

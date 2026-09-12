@@ -14,7 +14,6 @@ from app.connectors.base import RawAccount, RawPost
 from app.connectors.media_download import store_bytes
 from app.connectors.oss.common import (
     content_type_for,
-    instaloader_post_filter,
     pick_media_file,
     username_from_target,
 )
@@ -107,7 +106,6 @@ def _fetch_sync(
         raise InstaloaderError("instaloader not installed") from exc
 
     username = username_from_target(handle, url)
-    post_filter_expr = instaloader_post_filter(window)
 
     L = instaloader.Instaloader(
         download_pictures=True,
@@ -136,11 +134,6 @@ def _fetch_sync(
         platform="instagram",
     )
 
-    try:
-        filt = instaloader.filter_from_string(post_filter_expr)
-    except Exception as exc:  # noqa: BLE001
-        raise InstaloaderError(f"bad post filter: {exc}") from exc
-
     drafts: list[_Draft] = []
     for post in profile.get_posts():
         if len(drafts) >= max_posts:
@@ -148,7 +141,7 @@ def _fetch_sync(
         posted = post.date_utc.replace(tzinfo=UTC)
         if posted.date() < window.date_from:
             break
-        if not filt(post) or not window.contains(posted):
+        if not window.contains(posted):
             continue
 
         shortcode = post.shortcode
