@@ -7,6 +7,7 @@ import {
   Syne,
 } from "next/font/google";
 import "./globals.css";
+import { AppProviders } from "@/components/app-providers";
 
 const syne = Syne({
   variable: "--font-display",
@@ -52,7 +53,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`dark ${syne.variable} ${bricolage.variable} ${space.variable} ${fraunces.variable} ${archivo.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-background font-[family-name:var(--font-body)] text-foreground">
-        {children}
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );
