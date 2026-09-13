@@ -5,6 +5,16 @@ from typing import Protocol
 from pydantic import BaseModel
 
 
+class LLMProviderError(Exception):
+    """Vendor/API failure translated for HTTP handlers (never leak raw SDK traces)."""
+
+    def __init__(self, detail: str, *, status_code: int = 502, retry_after: int | None = None) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.status_code = status_code
+        self.retry_after = retry_after
+
+
 class Message(BaseModel):
     role: str
     content: str

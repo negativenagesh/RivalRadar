@@ -19,6 +19,7 @@ class FakeLLMProvider:
         self.raise_on_generate_image = raise_on_generate_image
         self.last_messages: list[Message] | None = None
         self.last_image_brief: str | None = None
+        self.complete_calls = 0
 
     async def complete(
         self,
@@ -28,6 +29,7 @@ class FakeLLMProvider:
         max_tokens: int = 1024,
         reasoning_effort: str | None = None,
     ) -> str:
+        self.complete_calls += 1
         self.last_messages = messages
         return self.completion
 
