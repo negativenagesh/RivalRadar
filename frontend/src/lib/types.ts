@@ -230,6 +230,7 @@ export type CreativeResult = {
   image_concept: string | null;
   image_mime_type: string | null;
   image_data_base64: string | null;
+  image_error?: string | null;
   why_slaps?: string | null;
   overlay_text?: string | null;
   hashtags?: string[];
