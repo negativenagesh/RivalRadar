@@ -49,11 +49,13 @@ class IntelRequest(BaseModel):
     forbidden_claims: str = ""
 
 
+def _as_list(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _str_list(value: object, limit: int = 8) -> list[str]:
-    if not isinstance(value, list):
-        return []
     out: list[str] = []
-    for item in value:
+    for item in _as_list(value):
         text = str(item).strip()
         if text:
             out.append(text)
@@ -71,12 +73,12 @@ def _bullets(lines: list[str], empty: str) -> str:
 def facts_to_markdown(facts: dict[str, Any], brand_name: str) -> str:
     window = facts.get("window") or {}
     label = window.get("label") if isinstance(window, dict) else None
-    companies = facts.get("companies") if isinstance(facts.get("companies"), list) else []
-    mix = facts.get("formatMix") if isinstance(facts.get("formatMix"), list) else []
+    companies = _as_list(facts.get("companies"))
+    mix = _as_list(facts.get("formatMix"))
     winning = _str_list(facts.get("winningBecause"), 8)
     leaking = _str_list(facts.get("leakingBecause"), 8)
-    top = facts.get("topPosts") if isinstance(facts.get("topPosts"), list) else []
-    sniper = facts.get("sniperQueue") if isinstance(facts.get("sniperQueue"), list) else []
+    top = _as_list(facts.get("topPosts"))
+    sniper = _as_list(facts.get("sniperQueue"))
 
     company_lines: list[str] = []
     for row in companies[:8]:
@@ -175,8 +177,8 @@ def facts_to_markdown(facts: dict[str, Any], brand_name: str) -> str:
 
 
 def _fallback_reports(facts: dict[str, Any], brand_name: str) -> list[IntelSection]:
-    mix = facts.get("formatMix") if isinstance(facts.get("formatMix"), list) else []
-    sniper = facts.get("sniperQueue") if isinstance(facts.get("sniperQueue"), list) else []
+    mix = _as_list(facts.get("formatMix"))
+    sniper = _as_list(facts.get("sniperQueue"))
     mix_lines = []
     for row in mix[:10]:
         if isinstance(row, dict):
@@ -287,15 +289,7 @@ def fallback_intel(facts: dict[str, Any], brand_name: str) -> IntelReport:
 
 
 def _nonzero(value: object) -> bool:
-    if value is None:
-        return False
-    if value == "":
-        return False
-    if value == []:
-        return False
-    if value == {}:
-        return False
-    return True
+    return value not in (None, "", [], {})
 
 
 def _merge_intel(fallback: IntelReport, data: dict[str, Any]) -> IntelReport:

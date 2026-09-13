@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
+from typing import cast
 
+from app.connectors.base import RawPost
 from app.connectors.social_feed import _post_permalink, _profile_entry_url
 from app.connectors.social_feed_parse import (
     _is_nav_destroy,
@@ -122,19 +124,25 @@ def test_linkedin_activity_snowflake_posted_at() -> None:
 def test_post_permalink_ignores_company_pages() -> None:
     assert (
         _post_permalink(
-            {
-                "theme_tags": [
-                    "linkedin",
-                    "link:https://www.linkedin.com/feed/update/urn:li:activity:1",
-                ]
-            },  # type: ignore[arg-type]
+            cast(
+                RawPost,
+                {
+                    "theme_tags": [
+                        "linkedin",
+                        "link:https://www.linkedin.com/feed/update/urn:li:activity:1",
+                    ]
+                },
+            ),
             "linkedin",
         )
         == "https://www.linkedin.com/feed/update/urn:li:activity:1"
     )
     assert (
         _post_permalink(
-            {"theme_tags": ["linkedin", "link:https://www.linkedin.com/company/pixisai"]},  # type: ignore[arg-type]
+            cast(
+                RawPost,
+                {"theme_tags": ["linkedin", "link:https://www.linkedin.com/company/pixisai"]},
+            ),
             "linkedin",
         )
         is None
