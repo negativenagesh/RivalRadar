@@ -1,4 +1,5 @@
 import type {
+  CommentDropResult,
   CompetitorAccount,
   CompetitorPost,
   ConnectionStatus,
@@ -9,23 +10,58 @@ import type {
   IngestionRun,
   IngestionRunCreate,
   IngestionRunCreated,
+  IntelReport,
   PipelineRun,
   PipelineRunCreated,
 } from "./types";
+import { loadGeminiKey } from "./gemini-key";
 
 export const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${GATEWAY_URL}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-    cache: "no-store",
-  });
+function errorDetail(body: { detail?: unknown }, fallback: string): string {
+  const detail = body.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item) return String((item as { msg: unknown }).msg);
+        return "";
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  return fallback;
+}
+
+async function request<T>(path: string, init?: RequestInit & { gemini?: boolean }): Promise<T> {
+  const { gemini: attachGemini, ...rest } = init ?? {};
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(rest.headers as Record<string, string> | undefined),
+  };
+  if (attachGemini) {
+    const gemini = loadGeminiKey();
+    if (gemini) headers["X-Gemini-Key"] = gemini;
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${GATEWAY_URL}${path}`, {
+      ...rest,
+      headers,
+      cache: "no-store",
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "network error";
+    throw new Error(
+      `Gateway unreachable (${reason}). Is it running at ${GATEWAY_URL}? Rebuild gateway + generation if /intel/report 404s.`,
+    );
+  }
   if (!response.ok) {
     let detail = `${init?.method ?? "GET"} ${path} failed: ${response.status}`;
     try {
       const body = (await response.json()) as { detail?: unknown };
-      if (typeof body.detail === "string") detail = body.detail;
+      detail = errorDetail(body, detail);
     } catch {
       // keep status text
     }
@@ -110,6 +146,32 @@ export function ingestionLiveWsUrl(runId: string): string {
 
 export function generateCreative(body: CreativeRequest): Promise<CreativeResult> {
   return request<CreativeResult>("/creative/generate", {
+    method: "POST",
+    body: JSON.stringify(body),
+    gemini: true,
+  });
+}
+
+export function generateIntelReport(body: {
+  facts: unknown;
+  brand_name: string;
+  voice_notes?: string;
+  forbidden_claims?: string;
+}): Promise<IntelReport> {
+  return request<IntelReport>("/intel/report", {
+    method: "POST",
+    body: JSON.stringify(body),
+    gemini: true,
+  });
+}
+
+export function dropSocialComment(body: {
+  platform: string;
+  url: string;
+  text: string;
+  approved: boolean;
+}): Promise<CommentDropResult> {
+  return request<CommentDropResult>("/social/comment", {
     method: "POST",
     body: JSON.stringify(body),
   });

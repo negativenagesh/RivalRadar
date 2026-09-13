@@ -23,7 +23,7 @@ from agent_events import AgentEvent, AgentEventBus
 from agent_events.schema import StepType
 
 from app.connectors.base import RawAccount, RawPost
-from app.connectors.media_download import download_media_to_store, download_via_page
+from app.connectors.media_download import download_media_to_store, download_via_page, store_bytes
 from app.connectors.oss.instagram import InstaloaderError, fetch_instagram_instaloader
 from app.connectors.oss.linkedin import LinkedInScraperError, fetch_linkedin_company_posts
 from app.connectors.oss.x_gallery import GalleryDlError, fetch_x_gallery_dl
@@ -32,6 +32,7 @@ from app.connectors.social_feed_parse import (
     collect_post_urls,
     normalize_platform,
     parse_post_page,
+    posted_at_from_url,
     settle_page,
 )
 from app.connectors.social_profile.browser import BrowserSession
@@ -43,12 +44,13 @@ logger = logging.getLogger(__name__)
 
 _AGENT_ID = "ingestion.socialfeed"
 _SERVICE = "ingestion"
-_MAX_POSTS = 25
-_PLATFORM_BUDGET_S = 75
-_OSS_BUDGET_S = 22
+_MAX_POSTS = 40
+_PLATFORM_BUDGET_S = 120
+_OSS_BUDGET_S = 50
+_LINKEDIN_OSS_BUDGET_S = 80
 _GOTO_MS = 20_000
 _HEARTBEAT_S = 3
-_COLLECT_BUDGET_S = 25
+_COLLECT_BUDGET_S = 40
 _SKIP_PLATFORMS = {"tiktok"}
 
 
@@ -261,7 +263,7 @@ class SocialFeedConnector:
                 )
             },
         )
-        for p in posts[:8]:
+        for p in posts:
             await self._emit(
                 "action",
                 {
@@ -378,10 +380,16 @@ class SocialFeedConnector:
                             object_store=self._object_store,
                             max_posts=_MAX_POSTS,
                         ),
-                        timeout=_OSS_BUDGET_S,
+                        timeout=_LINKEDIN_OSS_BUDGET_S,
                     )
                     if posts:
                         await self._commit_oss_posts(account, posts, platform=platform)
+                        await self._hydrate_missing_media(
+                            session,
+                            posts,
+                            platform=platform,
+                            handle=handle,
+                        )
                         oss_ok = True
                     else:
                         await self._emit(
@@ -394,7 +402,7 @@ class SocialFeedConnector:
                         {
                             "detail": (
                                 f"oss_fallback platform=linkedin "
-                                f"reason=timed out after {_OSS_BUDGET_S}s"
+                                f"reason=timed out after {_LINKEDIN_OSS_BUDGET_S}s"
                             )
                         },
                     )
@@ -492,7 +500,7 @@ class SocialFeedConnector:
                     platform=platform,
                     profile_url=url,
                     limit=_MAX_POSTS,
-                    max_scrolls=4,
+                    max_scrolls=8,
                 ),
                 timeout=_COLLECT_BUDGET_S,
             )
@@ -556,13 +564,28 @@ class SocialFeedConnector:
             await self._emit("error", {"detail": f"post nav failed {post_url}: {exc}"})
             return False
 
+        url_date = posted_at_from_url(platform, post_url)
+        if url_date is not None:
+            if url_date.tzinfo is None:
+                url_date = url_date.replace(tzinfo=UTC)
+            if not self._window.contains(url_date):
+                await self._emit(
+                    "action",
+                    {"detail": f"skipped_post reason=outside_window {post_url[:120]}"},
+                )
+                return False
         await self._pause(short=True)
         try:
-            parsed = await parse_post_page(page, platform=platform, post_url=post_url)
+            parsed = await parse_post_page(
+                page,
+                platform=platform,
+                post_url=post_url,
+                skip_time_wait=url_date is not None,
+            )
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"parse_post failed {post_url}: {exc}"})
             return False
-        posted_at: datetime | None = parsed.get("posted_at")
+        posted_at: datetime | None = parsed.get("posted_at") or url_date
         if posted_at is None:
             await self._emit(
                 "action",
@@ -631,7 +654,9 @@ class SocialFeedConnector:
                 "has_media": bool(media_keys or media_urls),
             },
         )
-        await self._emit_post_screenshot(session, platform=platform, url=post_url, handle=handle)
+        await self._emit_post_screenshot(
+            session, platform=platform, url=post_url, handle=handle, post=post
+        )
         if media_keys:
             await self._emit_stored_media_frame(post, platform=platform)
         return True
@@ -677,6 +702,7 @@ class SocialFeedConnector:
         platform: str,
         url: str,
         handle: str,
+        post: RawPost | None = None,
     ) -> None:
         try:
             await self._emit("action", {"detail": f"screenshot platform={platform} kind=post"})
@@ -690,11 +716,83 @@ class SocialFeedConnector:
                     "mime": "jpeg",
                     "platform": platform,
                     "url": url,
+                    "handle": handle,
                     "label": f"{handle} post",
                 },
             )
+            if post is not None and self._object_store is not None and not post.get("media_keys"):
+                key = await store_bytes(
+                    self._object_store,
+                    run_id=self._run_id,
+                    post_id=str(post["external_post_id"]),
+                    data=base64.b64decode(jpeg),
+                    content_type="image/jpeg",
+                )
+                if key:
+                    post["media_keys"] = [key]
+                    post["image_url"] = f"/ingestion/media/{key}"
         except Exception:  # noqa: BLE001
             logger.debug("post screenshot skipped", exc_info=True)
+
+    async def _hydrate_missing_media(
+        self,
+        session: BrowserSession,
+        posts: list[RawPost],
+        *,
+        platform: str,
+        handle: str,
+    ) -> None:
+        """Visit in-window posts that OSS stored without downloaded media."""
+        if session.page is None:
+            return
+        page = session.page
+        filled = 0
+        for post in posts:
+            if filled >= 15:
+                break
+            if post.get("media_keys"):
+                continue
+            link = _post_permalink(post, platform)
+            if not link:
+                continue
+            await self._emit("nav", {"url": link, "platform": platform, "phase": "post"})
+            try:
+                await page.goto(link, wait_until="domcontentloaded", timeout=_GOTO_MS)
+                await settle_page(page, quiet_ms=120)
+            except Exception as exc:  # noqa: BLE001
+                await self._emit("error", {"detail": f"hydrate nav failed {link}: {exc}"})
+                continue
+            media_url: str | None = None
+            try:
+                parsed = await parse_post_page(
+                    page, platform=platform, post_url=link, skip_time_wait=True
+                )
+                raw = parsed.get("media_url")
+                if isinstance(raw, str) and raw.startswith("http"):
+                    media_url = raw
+            except Exception:  # noqa: BLE001
+                logger.debug("hydrate parse failed", exc_info=True)
+            if media_url and self._object_store is not None:
+                key = await self._download_post_media(
+                    session,
+                    post_id=str(post["external_post_id"]),
+                    media_url=media_url,
+                )
+                if key:
+                    post["media_keys"] = [key]
+                    post["image_url"] = f"/ingestion/media/{key}"
+                    urls = [u for u in (post.get("media_urls") or []) if u]
+                    if media_url not in urls:
+                        post["media_urls"] = [media_url, *urls]
+                    await self._emit_stored_media_frame(post, platform=platform)
+                    filled += 1
+                    continue
+            await self._emit_post_screenshot(
+                session, platform=platform, url=link, handle=handle, post=post
+            )
+            filled += 1
+        if filled:
+            await self._flush_checkpoint()
 
     async def _emit_stored_media_frame(self, post: RawPost, *, platform: str) -> None:
         if self._object_store is None:
@@ -720,6 +818,7 @@ class SocialFeedConnector:
             mime = "webp"
         elif key.endswith(".gif"):
             mime = "gif"
+        handle = str(post.get("account_handle") or "")
         await self._emit(
             "screenshot",
             {
@@ -727,7 +826,8 @@ class SocialFeedConnector:
                 "mime": mime,
                 "platform": platform,
                 "url": next((t[5:] for t in post.get("theme_tags") or [] if t.startswith("link:")), ""),
-                "label": f"{post['external_post_id']} media",
+                "handle": handle,
+                "label": f"{handle or post['external_post_id']} media",
             },
         )
 
@@ -766,6 +866,26 @@ def _profile_entry_url(target: ProfileTarget, platform: str) -> str:
         path = f"{path}/posts"
         return parsed._replace(path=path).geturl()
     return url
+
+
+def _post_permalink(post: RawPost, platform: str) -> str | None:
+    platform = normalize_platform(platform)
+    for tag in post.get("theme_tags") or []:
+        if not str(tag).startswith("link:"):
+            continue
+        href = str(tag)[5:].strip()
+        if not href.startswith("http"):
+            continue
+        low = href.lower()
+        if platform == "linkedin" and (
+            "/feed/update/" in low or "/posts/" in low or "activity:" in low
+        ):
+            return href
+        if platform in {"x", "twitter"} and "/status/" in low:
+            return href
+        if platform == "instagram" and ("/p/" in low or "/reel/" in low or "/tv/" in low):
+            return href
+    return None
 
 
 def _handle_for(target: ProfileTarget, url: str) -> str:

@@ -45,7 +45,7 @@ async def fetch_x_gallery_dl(
     window: DateWindow,
     platform_sessions: dict[str, Any],
     object_store: ObjectStore | None,
-    max_posts: int = 25,
+    max_posts: int = 40,
 ) -> tuple[RawAccount, list[RawPost]]:
     cookies = cookies_from_sessions(platform_sessions, platforms={"x", "twitter"})
     if not cookies:
@@ -124,7 +124,7 @@ def _fetch_sync(
     ]
     import subprocess
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25, check=False)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45, check=False)
     if proc.returncode not in (0, 1):  # 1 = partial
         err = (proc.stderr or proc.stdout or "gallery-dl failed")[:500]
         if "AuthRequired" in err or "authenticated cookies" in err:

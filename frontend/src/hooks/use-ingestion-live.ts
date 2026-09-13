@@ -12,6 +12,7 @@ export type ScoutFrame = {
   label: string;
   url: string;
   mime?: string;
+  handle?: string;
 };
 
 function slimEvent(event: AgentEvent): AgentEvent {
@@ -137,6 +138,7 @@ export function useIngestionLive(runId: string | null) {
               platform: String(event.payload.platform ?? "scout"),
               label: String(event.payload.label ?? event.payload.url ?? `frame ${prev.length + 1}`),
               url: String(event.payload.url ?? ""),
+              handle: typeof event.payload.handle === "string" ? event.payload.handle : undefined,
               mime: typeof event.payload.mime === "string" ? event.payload.mime : "jpeg",
             },
           ]);

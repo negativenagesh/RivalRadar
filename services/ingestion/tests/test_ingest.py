@@ -77,3 +77,123 @@ async def test_persist_raw_buffers_without_fetch(session: AsyncSession) -> None:
     assert post.image_url is not None and len(post.image_url) <= 500
     assert post.media_keys == ["media/run/post.jpg"]
 
+
+def _post(
+    *,
+    handle: str,
+    external_post_id: str,
+    platform: str,
+    posted_at: str = "2026-09-12T12:00:00Z",
+) -> RawPost:
+    return RawPost(
+        account_handle=handle,
+        external_post_id=external_post_id,
+        format="founder_post",
+        theme_tags=[platform, "source:test", f"link:https://example.com/{external_post_id}"],
+        caption=f"{platform} post",
+        image_url=None,
+        likes=1,
+        comments=0,
+        shares=0,
+        posted_at=posted_at,
+        views=0,
+        media_urls=[],
+        media_keys=[],
+    )
+
+
+async def test_same_handle_creates_per_platform_accounts(session: AsyncSession) -> None:
+    class _Both:
+        _accounts = [
+            RawAccount(handle="@pixisai", display_name="Pixis YouTube", platform="youtube"),
+            RawAccount(handle="@pixisai", display_name="Pixis LinkedIn", platform="linkedin"),
+        ]
+        _posts = [
+            _post(handle="@pixisai", external_post_id="yt-pixis-1", platform="youtube"),
+            _post(
+                handle="@pixisai",
+                external_post_id="linkedin:urn:li:activity:1",
+                platform="linkedin",
+            ),
+        ]
+
+    created = await persist_raw_buffers(session, _Both())
+    assert created == 2
+    accounts = (await session.scalars(select(CompetitorAccount))).all()
+    assert {(a.handle, a.platform) for a in accounts} == {
+        ("@pixisai", "youtube"),
+        ("@pixisai", "linkedin"),
+    }
+    by_platform = {a.platform: a.id for a in accounts}
+    posts = (await session.scalars(select(CompetitorPost))).all()
+    by_id = {p.external_post_id: p for p in posts}
+    assert by_id["yt-pixis-1"].account_id == by_platform["youtube"]
+    assert by_id["linkedin:urn:li:activity:1"].account_id == by_platform["linkedin"]
+
+
+async def test_linkedin_post_does_not_attach_to_youtube_account(session: AsyncSession) -> None:
+    class _YtThenLi:
+        _accounts = [
+            RawAccount(handle="@pixisai", display_name="Pixis YouTube", platform="youtube"),
+        ]
+        _posts = [
+            _post(
+                handle="@pixisai",
+                external_post_id="linkedin:urn:li:activity:9",
+                platform="linkedin",
+            ),
+        ]
+
+    created = await persist_raw_buffers(session, _YtThenLi())
+    assert created == 1
+    accounts = (await session.scalars(select(CompetitorAccount))).all()
+    assert {(a.handle, a.platform) for a in accounts} == {
+        ("@pixisai", "youtube"),
+        ("@pixisai", "linkedin"),
+    }
+    by_platform = {a.platform: a.id for a in accounts}
+    post = (
+        await session.scalars(
+            select(CompetitorPost).where(CompetitorPost.external_post_id == "linkedin:urn:li:activity:9")
+        )
+    ).one()
+    assert post.account_id == by_platform["linkedin"]
+
+
+async def test_persist_fills_media_on_existing_post(session: AsyncSession) -> None:
+    class _First:
+        _accounts = [RawAccount(handle="@pixisai", display_name="Pixis", platform="linkedin")]
+        _posts = [
+            _post(handle="@pixisai", external_post_id="linkedin:urn:li:activity:2", platform="linkedin")
+        ]
+
+    class _Hydrated:
+        _accounts = [RawAccount(handle="@pixisai", display_name="Pixis", platform="linkedin")]
+        _posts = [
+            RawPost(
+                account_handle="@pixisai",
+                external_post_id="linkedin:urn:li:activity:2",
+                format="founder_post",
+                theme_tags=["linkedin", "source:test"],
+                caption="linkedin post",
+                image_url="/ingestion/media/media/run/post.jpg",
+                likes=1,
+                comments=0,
+                shares=0,
+                posted_at="2026-09-12T12:00:00Z",
+                views=0,
+                media_urls=["https://cdn.example/img.jpg"],
+                media_keys=["media/run/post.jpg"],
+            )
+        ]
+
+    assert await persist_raw_buffers(session, _First()) == 1
+    assert await persist_raw_buffers(session, _Hydrated()) == 0
+    post = (
+        await session.scalars(
+            select(CompetitorPost).where(CompetitorPost.external_post_id == "linkedin:urn:li:activity:2")
+        )
+    ).one()
+    assert post.media_keys == ["media/run/post.jpg"]
+    assert post.image_url == "/ingestion/media/media/run/post.jpg"
+

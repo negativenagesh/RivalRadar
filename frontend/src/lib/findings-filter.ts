@@ -1,3 +1,4 @@
+import { ingestionMediaUrl } from "./api";
 import type { CompetitorAccount, CompetitorPost } from "./types";
 import { MOCK_HANDLES, type MissionTargetPreview } from "./mission-store";
 
@@ -19,8 +20,42 @@ export type FindingsRow = {
   views: number;
 };
 
+export function postVisualUrl(post: CompetitorPost): string | null {
+  const key = post.media_keys?.[0];
+  if (key) return ingestionMediaUrl(key);
+  const url = post.image_url || post.media_urls?.[0] || null;
+  if (!url) return null;
+  if (url.includes("/screenshots/")) return null;
+  if (url.startsWith("http") || url.startsWith("data:") || url.startsWith("/ingestion/media/")) {
+    if (url.startsWith("/")) {
+      const base = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+      return `${base.replace(/\/$/, "")}${url}`;
+    }
+    return url;
+  }
+  const base = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+  return `${base.replace(/\/$/, "")}${url.startsWith("/") ? url : `/${url}`}`;
+}
+
 function isoDay(iso: string): string {
   return iso.slice(0, 10);
+}
+
+/** LinkedIn activity IDs encode Unix ms in the high bits. Prefer that over scrape-time posted_at. */
+export function linkedinActivityDay(post: CompetitorPost): string | null {
+  const blob = `${post.external_post_id} ${themeList(post).join(" ")} ${post.theme_tags || ""}`;
+  const match = blob.match(/(\d{18,})/);
+  if (!match) return null;
+  let tsMs = 0;
+  try {
+    tsMs = Number(BigInt(match[1]) >> BigInt(22));
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(tsMs) || tsMs < 1_500_000_000_000 || tsMs > 2_200_000_000_000) return null;
+  const d = new Date(tsMs);
+  if (d.getUTCFullYear() < 2018 || d.getUTCFullYear() > 2035) return null;
+  return d.toISOString().slice(0, 10);
 }
 
 export function missionWindow(
@@ -50,11 +85,41 @@ export function normalizeHandle(raw: string): string {
 }
 
 function samePlatform(accountPlatform: string, targetPlatform: string): boolean {
-  const a = accountPlatform.toLowerCase();
-  const t = targetPlatform.toLowerCase();
-  if (a === t) return true;
-  if ((a === "x" && t === "twitter") || (a === "twitter" && t === "x")) return true;
-  return false;
+  const a = accountPlatform.toLowerCase() === "twitter" ? "x" : accountPlatform.toLowerCase();
+  const t = targetPlatform.toLowerCase() === "twitter" ? "x" : targetPlatform.toLowerCase();
+  return a === t;
+}
+
+const THEME_PLATFORMS = new Set([
+  "instagram",
+  "linkedin",
+  "x",
+  "twitter",
+  "youtube",
+  "tiktok",
+  "threads",
+  "mock",
+]);
+
+export function themePlatform(post: CompetitorPost): string | null {
+  for (const t of themeList(post)) {
+    const token = t.split(":")[0]?.trim().toLowerCase() ?? "";
+    if (THEME_PLATFORMS.has(token)) {
+      return token === "twitter" ? "x" : token;
+    }
+  }
+  return null;
+}
+
+function compactHandle(raw: string): string {
+  return normalizeHandle(raw).replace(/[-_.]/g, "");
+}
+
+function handlesMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  return compactHandle(a) === compactHandle(b);
 }
 
 export function isJunkCaption(caption: string): boolean {
@@ -121,10 +186,16 @@ export function postMetrics(post: CompetitorPost): {
 export function watchUrl(post: CompetitorPost, platform: string): string | null {
   const themes = themeList(post);
   const link = themes.find((t) => t.startsWith("link:"));
-  if (link) {
-    const href = link.slice("link:".length).trim();
-    if (href.startsWith("http")) return href;
-  }
+  const href = link ? link.slice("link:".length).trim() : "";
+  if (href.startsWith("http") && isPostPermalink(platform, href)) return href;
+
+  const reconstructed = reconstructedPermalink(post, platform);
+  if (reconstructed) return reconstructed;
+  if (href.startsWith("http")) return href;
+  return null;
+}
+
+function reconstructedPermalink(post: CompetitorPost, platform: string): string | null {
   const id = post.external_post_id || "";
   if (platform === "youtube" && id && !id.startsWith("web-") && !id.includes(":")) {
     return `https://www.youtube.com/watch?v=${id}`;
@@ -152,13 +223,33 @@ export function accountMatchesTarget(
 ): boolean {
   if (!account) return false;
   if (!samePlatform(account.platform, target.platform)) return false;
-  const ah = normalizeHandle(account.handle);
+  return handlesAlign(account.handle, target);
+}
+
+function handlesAlign(handle: string, target: MissionTargetPreview): boolean {
+  const ah = normalizeHandle(handle);
   const th = normalizeHandle(target.handleOrUrl);
   const url = normalizeHandle(target.url || "");
   if (!ah || !th) return false;
-  if (ah === th) return true;
-  if (url && (url === ah || url.includes(ah) || ah.includes(url))) return true;
-  if (ah.includes(th) || th.includes(ah)) return true;
+  if (handlesMatch(ah, th)) return true;
+  if (url && (handlesMatch(url, ah) || url.includes(ah) || ah.includes(url))) return true;
+  return false;
+}
+
+export function postMatchesTarget(
+  post: CompetitorPost,
+  account: CompetitorAccount | undefined,
+  target: MissionTargetPreview,
+): boolean {
+  const platform = themePlatform(post) || account?.platform || "";
+  if (!samePlatform(platform, target.platform)) return false;
+  if (account && handlesAlign(account.handle, target)) return true;
+  const th = normalizeHandle(target.handleOrUrl);
+  const urlH = normalizeHandle(target.url || "");
+  const href = (watchUrl(post, platform) || "").toLowerCase();
+  const blob = `${href} ${themeList(post).join(" ")}`.toLowerCase();
+  if (th && blob.includes(th)) return true;
+  if (urlH && blob.includes(urlH)) return true;
   return false;
 }
 
@@ -185,9 +276,10 @@ export function filterFindingsPosts(
 
   const rows: FindingsRow[] = [];
   for (const post of posts) {
-    const day = isoDay(post.posted_at);
-    if (day < window.from || day > window.to) continue;
     const themes = themeList(post);
+    const snowDay = linkedinActivityDay(post);
+    const day = snowDay || isoDay(post.posted_at);
+    if (day < window.from || day > window.to) continue;
     if (themes.includes("posted_at_uncertain")) continue;
     if (themes.some((t) => t.startsWith("shot:screenshots"))) continue;
     if (isJunkCaption(post.caption || "")) continue;
@@ -195,10 +287,16 @@ export function filterFindingsPosts(
     const account = byId[post.account_id];
     if (account && !allowMock && isMockHandle(account.handle)) continue;
 
-    const target = realTargets.find((t) => accountMatchesTarget(account, t));
+    const target = realTargets.find((t) => postMatchesTarget(post, account, t));
     if (!target) continue;
 
-    const platform = (account?.platform || target.platform || "other").toLowerCase();
+    const platformRaw = (
+      themePlatform(post) ||
+      account?.platform ||
+      target.platform ||
+      "other"
+    ).toLowerCase();
+    const platform = platformRaw === "twitter" ? "x" : platformRaw;
     if (platform === "youtube" && !themes.some((t) => t.startsWith("date_from:"))) continue;
     const metrics = postMetrics(post);
     const href = watchUrl(post, platform);
@@ -214,4 +312,62 @@ export function filterFindingsPosts(
     });
   }
   return rows;
+}
+
+export type FindingsLane = {
+  platform: string;
+  empty: boolean;
+  days: { day: string; rows: FindingsRow[] }[];
+};
+
+export type FindingsCompanyColumn = {
+  company: string;
+  role: "brand" | "rival";
+  lanes: FindingsLane[];
+};
+
+export function findingsBoard(
+  rows: FindingsRow[],
+  targets: MissionTargetPreview[],
+): { brand: FindingsCompanyColumn[]; rivals: FindingsCompanyColumn[] } {
+  const real = targets.filter((t) => t.platform !== "web" && t.platform !== "mock");
+
+  function columns(role: "brand" | "rival"): FindingsCompanyColumn[] {
+    const labels: string[] = [];
+    for (const t of real) {
+      if (t.role !== role) continue;
+      if (!labels.includes(t.label)) labels.push(t.label);
+    }
+    return labels.map((company) => {
+      const plats: string[] = [];
+      for (const t of real) {
+        if (t.role !== role || t.label !== company) continue;
+        const p = t.platform.toLowerCase() === "twitter" ? "x" : t.platform.toLowerCase();
+        if (!plats.includes(p)) plats.push(p);
+      }
+      const companyRows = rows.filter((r) => r.role === role && r.company === company);
+      return {
+        company,
+        role,
+        lanes: plats.map((platform) => {
+          const laneRows = companyRows.filter((r) => samePlatform(r.platform, platform));
+          const daysMap = new Map<string, FindingsRow[]>();
+          for (const row of laneRows) {
+            const list = daysMap.get(row.day) ?? [];
+            list.push(row);
+            daysMap.set(row.day, list);
+          }
+          const days = [...daysMap.entries()]
+            .sort((a, b) => b[0].localeCompare(a[0]))
+            .map(([day, rs]) => ({
+              day,
+              rows: [...rs].sort((a, b) => b.likes + b.comments - (a.likes + a.comments)),
+            }));
+          return { platform, empty: laneRows.length === 0, days };
+        }),
+      };
+    });
+  }
+
+  return { brand: columns("brand"), rivals: columns("rival") };
 }

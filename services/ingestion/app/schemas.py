@@ -112,3 +112,17 @@ class IngestionRunRead(BaseModel):
 class YoutubeStatusRead(BaseModel):
     api_key_configured: bool
     preferred_source: Literal["youtube_api", "yt_dlp"]
+
+
+class SocialCommentRequest(BaseModel):
+    platform: str
+    url: str
+    text: str
+    approved: bool = False
+    platform_sessions: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class SocialCommentResult(BaseModel):
+    ok: bool
+    detail: str
+    screenshot_jpeg_b64: str | None = None

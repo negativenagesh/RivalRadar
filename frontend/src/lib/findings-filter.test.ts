@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   accountMatchesTarget,
   filterFindingsPosts,
+  findingsBoard,
   isJunkCaption,
+  linkedinActivityDay,
   missionWindow,
   normalizeHandle,
   postMetrics,
+  postVisualUrl,
   watchUrl,
 } from "./findings-filter";
 import type { CompetitorAccount, CompetitorPost } from "./types";
@@ -87,7 +90,15 @@ describe("filterFindingsPosts", () => {
         }),
         post({ id: "old", account_id: "a1", posted_at: "2026-08-01T00:00:00Z" }),
         post({ id: "mock", account_id: "a3", posted_at: "2026-09-11T00:00:00Z", caption: "jacket drop" }),
-        post({ id: "other", account_id: "a4", posted_at: "2026-09-11T00:00:00Z", caption: "old video" }),
+        post({
+          id: "other",
+          account_id: "a4",
+          posted_at: "2026-09-11T00:00:00Z",
+          caption: "old video",
+          theme_tags: "youtube,source:yt_dlp",
+          themes: ["youtube", "source:yt_dlp"],
+          external_post_id: "abc123vid",
+        }),
       ],
       accounts,
       {
@@ -101,6 +112,51 @@ describe("filterFindingsPosts", () => {
     expect(rows.find((r) => r.post.id === "in")?.company).toBe("Pixis");
     expect(rows.find((r) => r.post.id === "in")?.role).toBe("brand");
     expect(rows.find((r) => r.post.id === "ig")?.role).toBe("rival");
+  });
+
+  it("uses LinkedIn activity snowflake dates instead of scrape time", () => {
+    expect(
+      linkedinActivityDay(
+        post({
+          id: "june",
+          account_id: "a1",
+          external_post_id: "linkedin:urn:li:activity:7477400820427251712",
+          posted_at: "2026-09-13T11:00:00Z",
+        }),
+      ),
+    ).toBe("2026-06-29");
+    const rows = filterFindingsPosts(
+      [
+        post({
+          id: "old-li",
+          account_id: "a1",
+          external_post_id: "linkedin:urn:li:activity:7477400820427251712",
+          posted_at: "2026-09-13T11:00:00Z",
+          theme_tags:
+            "linkedin,link:https://www.linkedin.com/feed/update/urn:li:activity:7477400820427251712",
+          themes: [
+            "linkedin",
+            "link:https://www.linkedin.com/feed/update/urn:li:activity:7477400820427251712",
+          ],
+        }),
+        post({
+          id: "in-li",
+          account_id: "a1",
+          external_post_id: "linkedin:urn:li:activity:7504186055726764032",
+          posted_at: "2026-09-13T11:00:00Z",
+          theme_tags:
+            "linkedin,link:https://www.linkedin.com/feed/update/urn:li:activity:7504186055726764032",
+          themes: [
+            "linkedin",
+            "link:https://www.linkedin.com/feed/update/urn:li:activity:7504186055726764032",
+          ],
+        }),
+      ],
+      accounts,
+      { targets: [pixisLi], dateFrom: "2026-09-11", dateTo: "2026-09-13", lookbackDays: 3 },
+    );
+    expect(rows.map((r) => r.post.id)).toEqual(["in-li"]);
+    expect(rows[0]?.day).toBe("2026-09-11");
   });
 
   it("drops profile screenshots, login walls, and undated YouTube dumps", () => {
@@ -174,6 +230,64 @@ describe("filterFindingsPosts", () => {
     expect(rows[0].likes).toBe(40);
     expect(rows[0].href).toContain("watch?v=hr8nxJib32Q");
   });
+
+  it("maps LinkedIn posts even when the account row is YouTube with the same handle", () => {
+    const rows = filterFindingsPosts(
+      [
+        post({
+          id: "misattached",
+          account_id: "a4",
+          external_post_id: "linkedin:urn:li:activity:747400820427357712",
+          caption: "Pixis LinkedIn drop",
+          themes: [
+            "linkedin",
+            "source:linkedin_scraper",
+            "link:https://www.linkedin.com/feed/update/urn:li:activity:747400820427357712",
+          ],
+          theme_tags: "linkedin,source:linkedin_scraper",
+        }),
+      ],
+      accounts,
+      {
+        targets: [pixisLi, smartlyIg],
+        dateFrom: "2026-09-10",
+        dateTo: "2026-09-12",
+        lookbackDays: 3,
+      },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].company).toBe("Pixis");
+    expect(rows[0].role).toBe("brand");
+    expect(rows[0].platform).toBe("linkedin");
+  });
+
+  it("builds company vs rivalry lanes so empty platforms still show", () => {
+    const rows = filterFindingsPosts(
+      [post({ id: "in", account_id: "a1", posted_at: "2026-09-11T00:00:00Z" })],
+      accounts,
+      {
+        targets: [
+          pixisLi,
+          { ...pixisLi, platform: "x", handleOrUrl: "Pixis_AI", url: "https://x.com/Pixis_AI" },
+          smartlyIg,
+        ],
+        dateFrom: "2026-09-10",
+        dateTo: "2026-09-12",
+        lookbackDays: 3,
+      },
+    );
+    const board = findingsBoard(rows, [
+      pixisLi,
+      { ...pixisLi, platform: "x", handleOrUrl: "Pixis_AI", url: "https://x.com/Pixis_AI" },
+      smartlyIg,
+    ]);
+    expect(board.brand).toHaveLength(1);
+    expect(board.brand[0].lanes.map((l) => l.platform)).toEqual(["linkedin", "x"]);
+    expect(board.brand[0].lanes.find((l) => l.platform === "linkedin")?.empty).toBe(false);
+    expect(board.brand[0].lanes.find((l) => l.platform === "x")?.empty).toBe(true);
+    expect(board.rivals[0].company).toBe("Smartly");
+    expect(board.rivals[0].lanes[0].empty).toBe(true);
+  });
 });
 
 describe("helpers", () => {
@@ -225,10 +339,44 @@ describe("helpers", () => {
         "x",
       ),
     ).toBe("https://x.com/i/status/1896962592331219042");
+    expect(
+      watchUrl(
+        post({
+          id: "li1",
+          account_id: "a",
+          external_post_id: "linkedin:urn:li:activity:747400820427357712",
+          themes: ["linkedin", "link:https://www.linkedin.com/company/pixisai"],
+          theme_tags: "linkedin,link:https://www.linkedin.com/company/pixisai",
+        }),
+        "linkedin",
+      ),
+    ).toBe("https://www.linkedin.com/feed/update/urn:li:activity:747400820427357712");
   });
 
   it("flags junk captions", () => {
     expect(isJunkCaption("Sign Up | LinkedIn")).toBe(true);
     expect(isJunkCaption("Launch day at Pixis")).toBe(false);
+  });
+
+  it("prefers stored media keys over remote URLs", () => {
+    expect(
+      postVisualUrl(
+        post({
+          id: "m1",
+          account_id: "a",
+          image_url: "https://cdn.example/hotlink.jpg",
+          media_keys: ["media/run/post.jpg"],
+        }),
+      ),
+    ).toContain("/ingestion/media/media/run/post.jpg");
+    expect(
+      postVisualUrl(
+        post({
+          id: "shot",
+          account_id: "a",
+          image_url: "/ingestion/runs/abc/screenshots/1.jpg",
+        }),
+      ),
+    ).toBeNull();
   });
 });

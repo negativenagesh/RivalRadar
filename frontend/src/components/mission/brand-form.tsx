@@ -1,11 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "motion/react";
-import { Globe2, Plus, Sparkles, Trash2, Zap } from "lucide-react";
+import { Globe2, KeyRound, Plus, Sparkles, Trash2, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SocialLinkFields } from "@/components/mission/social-icons";
+import { useGeminiKey } from "@/components/gemini-key-provider";
 import type { BrandProfile, CompetitorProfile } from "@/lib/types";
 import { newCompetitor } from "@/lib/mission-store";
 import { cn } from "@/lib/utils";
@@ -71,6 +73,61 @@ function GlassPanel({
       <div className="pointer-events-none absolute -bottom-24 -left-16 size-40 rounded-full bg-primary/0 blur-3xl transition-all duration-700 group-hover/panel:bg-primary/10" />
       <div className="relative">{children}</div>
     </motion.section>
+  );
+}
+
+function GeminiKillswitch() {
+  const gemini = useGeminiKey();
+  const [draft, setDraft] = useState("");
+
+  return (
+    <GlassPanel delay={0.05} className={gemini.ready ? undefined : "border-destructive/50"}>
+      <div className="mb-4">
+        <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+          <KeyRound className="size-3.5" />
+          Gemini killswitch
+        </p>
+        <h2 className="mt-2 text-2xl font-bold tracking-tight">Your key. Your tokens.</h2>
+        <p className="mt-1 max-w-md text-sm text-muted-foreground">
+          Paste a Gemini API key so Report, memes, and comment sniper can run. Stored in this
+          browser only — we will not use the server .env.
+        </p>
+      </div>
+      {gemini.ready ? (
+        <p className="mb-3 rounded-2xl border border-primary/30 bg-primary/10 px-3 py-2 font-mono text-sm text-primary">
+          live {gemini.masked}
+        </p>
+      ) : (
+        <p className="mb-3 animate-pulse rounded-2xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          Warning: no Gemini key. The war room stays dark until you paste one.
+        </p>
+      )}
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          type="password"
+          autoComplete="off"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="AIza…"
+          className={`${inputClass} font-mono`}
+        />
+        <Button
+          type="button"
+          onClick={() => {
+            gemini.setKey(draft);
+            setDraft("");
+          }}
+          disabled={!draft.trim()}
+        >
+          Save
+        </Button>
+        {gemini.ready && (
+          <Button type="button" variant="outline" onClick={() => gemini.clear()}>
+            Clear
+          </Button>
+        )}
+      </div>
+    </GlassPanel>
   );
 }
 
@@ -141,6 +198,8 @@ export function BrandForm({
           </Field>
         </div>
       </GlassPanel>
+
+      <GeminiKillswitch />
 
       <GlassPanel delay={0.08}>
         <SocialLinkFields

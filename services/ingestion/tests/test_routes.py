@@ -77,3 +77,17 @@ async def test_list_accounts_and_posts_after_ingestion(client: AsyncClient) -> N
     posts = posts_response.json()
     assert len(posts) == 10
     assert all("engagement_score" in p for p in posts)
+
+
+async def test_social_comment_requires_approval(client: AsyncClient) -> None:
+    response = await client.post(
+        "/social/comment",
+        json={
+            "platform": "linkedin",
+            "url": "https://www.linkedin.com/feed/update/urn:li:activity:1",
+            "text": "sharp take",
+            "approved": False,
+        },
+    )
+    assert response.status_code == 400
+    assert "approval" in response.json()["detail"]

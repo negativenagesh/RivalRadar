@@ -68,7 +68,7 @@ async def fetch_instagram_instaloader(
     window: DateWindow,
     platform_sessions: dict[str, Any],
     object_store: ObjectStore | None,
-    max_posts: int = 25,
+    max_posts: int = 40,
 ) -> tuple[RawAccount, list[RawPost]]:
     cookies = cookies_from_sessions(platform_sessions, platforms={"instagram"})
     if not cookies:

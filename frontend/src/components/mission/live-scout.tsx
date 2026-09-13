@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Circle,
   Download,
@@ -14,11 +14,16 @@ import { ConnectCenter } from "@/components/mission/connect-center";
 import { Button } from "@/components/ui/button";
 import { ingestionRecordingUrl } from "@/lib/api";
 import {
+  filterFindingsPosts,
+  postVisualUrl,
+} from "@/lib/findings-filter";
+import {
   PLATFORM_LABELS,
   requiredConnectPlatforms,
   type MissionTargetPreview,
 } from "@/lib/mission-store";
-import type { AgentEvent, IngestionRun } from "@/lib/types";
+import { dmyToIso, isoToDmy, showCustomDateFields } from "@/lib/date-display";
+import type { AgentEvent, CompetitorAccount, CompetitorPost, IngestionRun } from "@/lib/types";
 
 const LOOKBACK_PRESETS = [1, 3, 7, 14] as const;
 
@@ -31,16 +36,24 @@ const SOURCE_LABELS: Record<string, string> = {
 
 type Shot = {
   id: string;
-  b64: string;
+  b64?: string;
+  src?: string;
   platform: string;
   label: string;
   url: string;
   company: string;
+  handle?: string;
   mime?: string;
 };
 
 function frameSrc(b64: string, mime?: string): string {
   return `data:image/${mime || "jpeg"};base64,${b64}`;
+}
+
+function shotSrc(shot: Shot): string {
+  if (shot.src) return shot.src;
+  if (shot.b64) return frameSrc(shot.b64, shot.mime);
+  return "";
 }
 
 function platformName(key: string): string {
@@ -98,6 +111,35 @@ function TargetChip({ t }: { t: MissionTargetPreview }) {
   );
 }
 
+function sameScoutPlatform(a: string, b: string): boolean {
+  const x = a.toLowerCase() === "twitter" ? "x" : a.toLowerCase();
+  const y = b.toLowerCase() === "twitter" ? "x" : b.toLowerCase();
+  return x === y;
+}
+
+function targetHandle(t: MissionTargetPreview): string {
+  return t.handleOrUrl.replace(/^@/, "").toLowerCase();
+}
+
+export function matchShotToTarget(
+  shot: { platform: string; label: string; url: string; handle?: string; company?: string },
+  targets: MissionTargetPreview[],
+): MissionTargetPreview | undefined {
+  const handle = (shot.handle || "").replace(/^@/, "").toLowerCase();
+  const blob = `${shot.label} ${shot.url} ${shot.handle ?? ""}`.toLowerCase();
+  return (
+    targets.find((t) => {
+      if (!sameScoutPlatform(t.platform, shot.platform)) return false;
+      const h = targetHandle(t);
+      if (handle && (handle === h || handle.includes(h) || h.includes(handle))) return true;
+      return Boolean(h && blob.includes(h));
+    }) ||
+    targets.find((t) => t.url && shot.url && (shot.url.includes(t.url) || t.url.includes(shot.url))) ||
+    targets.find((t) => sameScoutPlatform(t.platform, shot.platform) && t.label === shot.company) ||
+    targets.find((t) => sameScoutPlatform(t.platform, shot.platform))
+  );
+}
+
 function shotsFromEvents(events: AgentEvent[], targets: MissionTargetPreview[]): Shot[] {
   return events
     .filter((e) => e.step_type === "screenshot" && typeof e.payload.jpeg_b64 === "string")
@@ -105,21 +147,15 @@ function shotsFromEvents(events: AgentEvent[], targets: MissionTargetPreview[]):
       const platform = String(e.payload.platform ?? "scout");
       const label = String(e.payload.label ?? e.payload.url ?? `frame ${i + 1}`);
       const url = String(e.payload.url ?? "");
-      const match =
-        targets.find((t) => t.url && url && (url.includes(t.url) || t.url.includes(url))) ||
-        targets.find(
-          (t) =>
-            t.platform.toLowerCase() === platform.toLowerCase() &&
-            (label.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, "")) ||
-              url.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, ""))),
-        ) ||
-        targets.find((t) => t.platform.toLowerCase() === platform.toLowerCase());
+      const handle = typeof e.payload.handle === "string" ? e.payload.handle : undefined;
+      const match = matchShotToTarget({ platform, label, url, handle }, targets);
       return {
         id: `${e.sequence}-${i}`,
         b64: String(e.payload.jpeg_b64),
         platform,
         label,
         url,
+        handle,
         company: match?.label ?? String(e.payload.company ?? "Scout"),
         mime: String(e.payload.mime ?? "jpeg"),
       };
@@ -127,24 +163,80 @@ function shotsFromEvents(events: AgentEvent[], targets: MissionTargetPreview[]):
 }
 
 function shotsFromFrames(
-  frames: { id: string; b64: string; platform: string; label: string; url: string; mime?: string }[],
+  frames: {
+    id: string;
+    b64: string;
+    platform: string;
+    label: string;
+    url: string;
+    mime?: string;
+    handle?: string;
+  }[],
   targets: MissionTargetPreview[],
 ): Shot[] {
   return frames.map((f) => {
-    const match =
-      targets.find((t) => t.url && f.url && (f.url.includes(t.url) || t.url.includes(f.url))) ||
-      targets.find(
-        (t) =>
-          t.platform.toLowerCase() === f.platform.toLowerCase() &&
-          (f.label.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, "")) ||
-            f.url.toLowerCase().includes(t.handleOrUrl.toLowerCase().replace(/^@/, ""))),
-      ) ||
-      targets.find((t) => t.platform.toLowerCase() === f.platform.toLowerCase());
+    const match = matchShotToTarget(f, targets);
     return {
       ...f,
       company: match?.label ?? "Scout",
     };
   });
+}
+
+export function shotsForTarget(shots: Shot[], target: MissionTargetPreview): Shot[] {
+  const h = targetHandle(target);
+  return shots.filter((s) => {
+    if (!sameScoutPlatform(s.platform, target.platform)) return false;
+    const shotHandle = (s.handle || "").replace(/^@/, "").toLowerCase();
+    if (shotHandle && (shotHandle === h || shotHandle.includes(h) || h.includes(shotHandle))) {
+      return true;
+    }
+    const blob = `${s.label} ${s.url}`.toLowerCase();
+    if (h && blob.includes(h)) return true;
+    if (s.company.toLowerCase() === target.label.toLowerCase() && !shotHandle) return true;
+    return false;
+  });
+}
+
+export type TargetLaneStatus = {
+  state: "queued" | "live" | "done";
+  found: number;
+  ingested: number | null;
+};
+
+export function targetLaneStatus(events: AgentEvent[], target: MissionTargetPreview): TargetLaneStatus {
+  const h = targetHandle(target);
+  const p = target.platform.toLowerCase() === "twitter" ? "x" : target.platform.toLowerCase();
+  let state: TargetLaneStatus["state"] = "queued";
+  let found = 0;
+  let ingested: number | null = null;
+  let active = false;
+  for (const ev of events) {
+    const d = String(ev.payload?.detail ?? "");
+    const next = /scout_next platform=(\S+).*?\bhandle=([^\s]+)/.exec(d);
+    if (next) {
+      const np = next[1].toLowerCase() === "twitter" ? "x" : next[1].toLowerCase();
+      const nh = next[2].replace(/^@/, "").toLowerCase();
+      if (active && state === "live") state = "done";
+      active = np === p && nh === h;
+      if (active) {
+        state = "live";
+        ingested = null;
+        found = 0;
+      }
+      continue;
+    }
+    if (!active) continue;
+    const fp = /found_posts count=(\d+) platform=(\S+)/.exec(d);
+    if (fp) found = Number(fp[1]);
+    const ip = /ingested_posts count=(\d+) platform=(\S+)/.exec(d);
+    if (ip) {
+      ingested = Number(ip[1]);
+      state = "done";
+      active = false;
+    }
+  }
+  return { state, found, ingested };
 }
 
 
@@ -195,6 +287,57 @@ export function scoutActionLabel(input: {
   return "Start Scout";
 }
 
+function shotsFromPosts(
+  posts: CompetitorPost[],
+  accounts: CompetitorAccount[],
+  targets: MissionTargetPreview[],
+  lookback: { dateFrom: string | null; dateTo: string | null; lookbackDays: number },
+): Shot[] {
+  const rows = filterFindingsPosts(posts, accounts, {
+    targets,
+    dateFrom: lookback.dateFrom,
+    dateTo: lookback.dateTo,
+    lookbackDays: lookback.lookbackDays,
+  });
+  const out: Shot[] = [];
+  for (const row of rows) {
+    const src = postVisualUrl(row.post) ?? undefined;
+    out.push({
+      id: `post-${row.post.id}`,
+      src,
+      platform: row.platform,
+      label: (row.post.caption.split("\n")[0] || row.company).slice(0, 90),
+      url: row.href || "",
+      company: row.company,
+    });
+  }
+  return out;
+}
+
+function mergeShots(live: Shot[], persisted: Shot[]): Shot[] {
+  const seen = new Set<string>();
+  const out: Shot[] = [];
+  const keyOf = (s: Shot) => (s.url ? s.url.split("?")[0] : s.id);
+  const livePosts = live.filter((s) => {
+    if (!s.url) return Boolean(s.b64 || s.src);
+    const u = s.url.toLowerCase();
+    return (
+      /\/status\/\d+/.test(u) ||
+      /\/(p|reel|tv)\//.test(u) ||
+      u.includes("/feed/update/") ||
+      u.includes("/posts/") ||
+      u.includes("activity:")
+    );
+  });
+  for (const s of [...persisted, ...livePosts]) {
+    const key = keyOf(s);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
 export function LiveScout({
   recordSession,
   onRecordChange,
@@ -215,6 +358,8 @@ export function LiveScout({
   latestScreenshot,
   run,
   error,
+  posts = [],
+  accounts = [],
 }: {
   recordSession: boolean;
   onRecordChange: (v: boolean) => void;
@@ -231,28 +376,51 @@ export function LiveScout({
   runId: string | null;
   connected: boolean;
   events: AgentEvent[];
-  frames?: { id: string; b64: string; platform: string; label: string; url: string; mime?: string }[];
+  frames?: { id: string; b64: string; platform: string; label: string; url: string; mime?: string; handle?: string }[];
   latestScreenshot: string | null;
   run: IngestionRun | null;
   error: string | null;
+  posts?: CompetitorPost[];
+  accounts?: CompetitorAccount[];
 }) {
   const status = run?.status;
   const recordingReady = Boolean(run?.recording_key) && status === "done";
   const [replayOpen, setReplayOpen] = useState(false);
   const [lightbox, setLightbox] = useState<Shot | null>(null);
+  const [customOpen, setCustomOpen] = useState(() => Boolean(dateFrom || dateTo));
+  const [fromDraft, setFromDraft] = useState(() => isoToDmy(dateFrom));
+  const [toDraft, setToDraft] = useState(() => isoToDmy(dateTo));
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightbox(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
   const requiredPlatforms = useMemo(() => requiredConnectPlatforms(targets), [targets]);
   const [connectionsReady, setConnectionsReady] = useState(
     () => requiredConnectPlatforms(targets).length === 0,
   );
   const [missingPlatforms, setMissingPlatforms] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const shots = useMemo(
+  const liveShots = useMemo(
     () =>
       frames && frames.length > 0
         ? shotsFromFrames(frames, targets)
         : shotsFromEvents(events, targets),
     [frames, events, targets],
   );
+  const persistedShots = useMemo(
+    () =>
+      shotsFromPosts(posts, accounts, targets, {
+        dateFrom,
+        dateTo,
+        lookbackDays,
+      }),
+    [posts, accounts, targets, dateFrom, dateTo, lookbackDays],
+  );
+  const shots = useMemo(() => mergeShots(liveShots, persistedShots), [liveShots, persistedShots]);
   const ytdlpIntel = useMemo(() => ytdlpIntelFromEvents(events), [events]);
   const logEvents = useMemo(() => operatorLogEvents(events), [events]);
 
@@ -312,7 +480,7 @@ export function LiveScout({
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-8 text-center">
+    <div className="mx-auto w-full space-y-8 text-center">
       <div className="space-y-3">
         <p className="font-ui text-xs font-semibold uppercase tracking-[0.28em] text-primary">
           operator console
@@ -332,11 +500,14 @@ export function LiveScout({
               key={d}
               type="button"
               onClick={() => {
+                setCustomOpen(false);
+                setFromDraft("");
+                setToDraft("");
                 onCustomRangeChange(null, null);
                 onLookbackChange(d);
               }}
               className={
-                !dateFrom && lookbackDays === d
+                !dateFrom && !customOpen && lookbackDays === d
                   ? "font-ui rounded-full border border-primary bg-primary/20 px-4 py-2 text-sm font-bold text-primary"
                   : "font-ui rounded-full border border-border/60 px-4 py-2 text-sm text-muted-foreground hover:border-primary/40"
               }
@@ -344,36 +515,77 @@ export function LiveScout({
               {d}d
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => {
+              setFromDraft(isoToDmy(dateFrom));
+              setToDraft(isoToDmy(dateTo));
+              setCustomOpen(true);
+            }}
+            className={
+              customOpen || dateFrom
+                ? "font-ui rounded-full border border-primary bg-primary/20 px-4 py-2 text-sm font-bold text-primary"
+                : "font-ui rounded-full border border-border/60 px-4 py-2 text-sm text-muted-foreground hover:border-primary/40"
+            }
+          >
+            Custom
+          </button>
         </div>
-        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-          <label className="font-ui text-xs text-muted-foreground">
-            From
-            <input
-              type="date"
-              value={dateFrom ?? ""}
-              onChange={(e) => onCustomRangeChange(e.target.value || null, dateTo)}
-              className="ml-2 rounded-lg border border-border/60 bg-background px-2 py-1 text-sm text-foreground"
-            />
-          </label>
-          <label className="font-ui text-xs text-muted-foreground">
-            To
-            <input
-              type="date"
-              value={dateTo ?? ""}
-              onChange={(e) => onCustomRangeChange(dateFrom, e.target.value || null)}
-              className="ml-2 rounded-lg border border-border/60 bg-background px-2 py-1 text-sm text-foreground"
-            />
-          </label>
-          {(dateFrom || dateTo) && (
-            <button
-              type="button"
-              className="font-ui text-xs text-primary underline"
-              onClick={() => onCustomRangeChange(null, null)}
-            >
-              Clear custom
-            </button>
-          )}
-        </div>
+        {showCustomDateFields(customOpen, dateFrom, dateTo) && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              <label className="font-ui text-xs text-muted-foreground">
+                From
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="dd/mm/yyyy"
+                  value={fromDraft}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setFromDraft(next);
+                    const iso = dmyToIso(next);
+                    if (iso || next === "") onCustomRangeChange(iso, dateTo);
+                  }}
+                  className="ml-2 w-32 rounded-lg border border-border/60 bg-background px-2 py-1 text-sm text-foreground"
+                />
+              </label>
+              <label className="font-ui text-xs text-muted-foreground">
+                To
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="dd/mm/yyyy"
+                  value={toDraft}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setToDraft(next);
+                    const iso = dmyToIso(next);
+                    if (iso || next === "") onCustomRangeChange(dateFrom, iso);
+                  }}
+                  className="ml-2 w-32 rounded-lg border border-border/60 bg-background px-2 py-1 text-sm text-foreground"
+                />
+              </label>
+              {(dateFrom || dateTo) && (
+                <button
+                  type="button"
+                  className="font-ui text-xs text-primary underline"
+                  onClick={() => {
+                    onCustomRangeChange(null, null);
+                    setFromDraft("");
+                    setToDraft("");
+                    setCustomOpen(false);
+                  }}
+                >
+                  Clear custom
+                </button>
+              )}
+            </div>
+            <p className="font-accent text-xs italic text-muted-foreground">
+              Scout + Findings + Report all use this window.
+            </p>
+          </div>
+        )}
       </div>
 
       <ConnectCenter targets={targets} onGateChange={onGateChange} />
@@ -581,35 +793,63 @@ export function LiveScout({
         </div>
       )}
 
-{shots.length > 0 && (
+      {shots.length > 0 && (
         <div className="space-y-4 text-left">
-          <h3 className="font-display text-center text-2xl font-bold">Screenshot reel</h3>
-          <p className="font-accent text-center text-sm italic text-muted-foreground">
-            One-by-one captures — company + platform on each tile. Tap to expand.
-          </p>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-            {shots.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => setLightbox(s)}
-                className="group overflow-hidden rounded-2xl border border-border/50 bg-card/30 text-left transition hover:-translate-y-0.5 hover:border-primary/50"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={frameSrc(s.b64, s.mime)}
-                  alt={`${s.company} ${s.platform}`}
-                  className="aspect-video w-full object-cover"
-                />
-                <div className="font-ui space-y-0.5 p-2.5 text-[10px]">
-                  <p className="font-display truncate text-xs font-bold">{s.company}</p>
-                  <p className="font-semibold uppercase tracking-wide text-primary">
-                    {platformName(s.platform)}
-                  </p>
-                  <p className="truncate text-muted-foreground">{s.label}</p>
-                </div>
-              </button>
-            ))}
+          <div className="text-center">
+            <h3 className="font-display text-2xl font-bold">In-window posts</h3>
+            <p className="font-accent text-sm italic text-muted-foreground">
+              {shots.length} posts in this lookback — image expands here, title opens the post.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+            {shots.map((s) => {
+              const src = shotSrc(s);
+              return (
+                <article
+                  key={s.id}
+                  className="group overflow-hidden rounded-2xl border border-border/50 bg-card/30 text-left transition hover:-translate-y-0.5 hover:border-primary/50"
+                >
+                  <button
+                    type="button"
+                    onClick={() => src && setLightbox(s)}
+                    disabled={!src}
+                    className="relative aspect-square w-full overflow-hidden bg-black/40"
+                    aria-label={src ? "View image fullscreen" : s.label}
+                  >
+                    {src ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={src}
+                        alt={`${s.company} ${s.platform}`}
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <div className="font-shout flex h-full items-center justify-center px-2 text-center text-xs uppercase tracking-widest text-muted-foreground/50">
+                        {platformName(s.platform)}
+                      </div>
+                    )}
+                  </button>
+                  <div className="font-ui space-y-0.5 p-2.5 text-[10px]">
+                    <p className="font-display truncate text-xs font-bold">{s.company}</p>
+                    <p className="font-semibold uppercase tracking-wide text-primary">
+                      {platformName(s.platform)}
+                    </p>
+                    {s.url ? (
+                      <a
+                        href={s.url.startsWith("http") ? s.url : `https://${s.url}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="line-clamp-2 text-muted-foreground hover:text-primary hover:underline"
+                      >
+                        {s.label}
+                      </a>
+                    ) : (
+                      <p className="truncate text-muted-foreground">{s.label}</p>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </div>
       )}
@@ -682,7 +922,7 @@ export function LiveScout({
           <div className="max-w-5xl" onClick={(e) => e.stopPropagation()} role="presentation">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={frameSrc(lightbox.b64, lightbox.mime)}
+              src={shotSrc(lightbox)}
               alt={lightbox.label}
               className="max-h-[80vh] w-full rounded-2xl object-contain"
             />

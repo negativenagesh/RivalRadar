@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -26,9 +26,12 @@ class PostFormat(enum.StrEnum):
 
 class CompetitorAccount(Base):
     __tablename__ = "competitor_accounts"
+    __table_args__ = (
+        UniqueConstraint("handle", "platform", name="uq_account_handle_platform"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    handle: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    handle: Mapped[str] = mapped_column(String(100), index=True)
     display_name: Mapped[str] = mapped_column(String(200))
     platform: Mapped[str] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))

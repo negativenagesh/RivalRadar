@@ -1,4 +1,8 @@
-from app.connectors.social_feed import _profile_entry_url
+from datetime import UTC, datetime
+from typing import cast
+
+from app.connectors.base import RawPost
+from app.connectors.social_feed import _post_permalink, _profile_entry_url
 from app.connectors.social_feed_parse import (
     _is_nav_destroy,
     absolutize,
@@ -6,6 +10,7 @@ from app.connectors.social_feed_parse import (
     external_id_for,
     normalize_platform,
     parse_count,
+    posted_at_from_url,
 )
 from app.connectors.social_profile.targets import ProfileTarget
 
@@ -86,3 +91,59 @@ def test_linkedin_company_posts_entry_url() -> None:
         url="https://www.linkedin.com/company/pixisai/posts",
     )
     assert _profile_entry_url(already, "linkedin").endswith("/posts")
+
+
+def test_x_snowflake_posted_at_from_url() -> None:
+    dt = posted_at_from_url("x", "https://x.com/Pixis_AI/status/1896962592331219042")
+    assert dt is not None
+    assert dt.tzinfo is not None
+    assert dt.astimezone(UTC).date() == datetime(2025, 3, 4, tzinfo=UTC).date()
+    older = posted_at_from_url("x", "https://x.com/Pixis_AI/status/1513900064871424004")
+    assert older is not None
+    assert older.year == 2022
+    assert posted_at_from_url("instagram", "https://www.instagram.com/reel/DdJm8fIvN8b/") is None
+    assert posted_at_from_url("x", "https://x.com/Pixis_AI") is None
+
+
+def test_linkedin_activity_snowflake_posted_at() -> None:
+    dt = posted_at_from_url(
+        "linkedin",
+        "https://www.linkedin.com/feed/update/urn:li:activity:7504186055726764032",
+    )
+    assert dt is not None
+    assert dt.astimezone(UTC).date() == datetime(2026, 9, 11, tzinfo=UTC).date()
+    old = posted_at_from_url(
+        "linkedin",
+        "https://www.linkedin.com/feed/update/urn:li:activity:7477400820427251712",
+    )
+    assert old is not None
+    assert old.year == 2026
+    assert old.month == 6
+
+
+def test_post_permalink_ignores_company_pages() -> None:
+    assert (
+        _post_permalink(
+            cast(
+                RawPost,
+                {
+                    "theme_tags": [
+                        "linkedin",
+                        "link:https://www.linkedin.com/feed/update/urn:li:activity:1",
+                    ]
+                },
+            ),
+            "linkedin",
+        )
+        == "https://www.linkedin.com/feed/update/urn:li:activity:1"
+    )
+    assert (
+        _post_permalink(
+            cast(
+                RawPost,
+                {"theme_tags": ["linkedin", "link:https://www.linkedin.com/company/pixisai"]},
+            ),
+            "linkedin",
+        )
+        is None
+    )

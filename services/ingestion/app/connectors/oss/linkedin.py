@@ -13,6 +13,7 @@ from playwright.async_api import Page
 from app.connectors.base import RawAccount, RawPost
 from app.connectors.media_download import download_media_to_store, download_via_page
 from app.connectors.session_cookies import cookies_from_sessions
+from app.connectors.social_feed_parse import posted_at_from_linkedin_activity
 from app.date_window import DateWindow
 from app.objectstore import ObjectStore
 
@@ -55,13 +56,24 @@ def _linkedin_media_headers(platform_sessions: dict[str, Any]) -> dict[str, str]
 def _parse_relative_date(raw: str | None) -> datetime | None:
     if not raw:
         return None
-    text = raw.strip().lower()
+    text = raw.strip()
     now = datetime.now(UTC)
     # Absolute ISO
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     except ValueError:
         pass
+    cleaned = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text, flags=re.I)
+    for fmt in ("%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%b %d", "%B %d"):
+        try:
+            parsed = datetime.strptime(cleaned, fmt)
+            if parsed.year == 1900:
+                parsed = parsed.replace(year=now.year)
+            return parsed.replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    text = text.lower()
     m = re.match(
         r"(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks|mo|mon|month|months|y|yr|year|years)\b",
         text,
@@ -96,7 +108,7 @@ async def fetch_linkedin_company_posts(
     window: DateWindow,
     platform_sessions: dict[str, Any],
     object_store: ObjectStore | None,
-    max_posts: int = 25,
+    max_posts: int = 40,
 ) -> tuple[RawAccount, list[RawPost]]:
     """Use linkedin_scraper's CompanyPostsScraper on an authenticated Playwright page."""
     try:
@@ -126,18 +138,19 @@ async def fetch_linkedin_company_posts(
 
     posts: list[RawPost] = []
     for item in raw_posts:
-        posted = _parse_relative_date(getattr(item, "posted_date", None))
+        urn = getattr(item, "urn", None) or ""
+        post_url = getattr(item, "linkedin_url", None) or (
+            f"https://www.linkedin.com/feed/update/{urn}" if urn else company_url
+        )
+        posted = posted_at_from_linkedin_activity(str(urn) or str(post_url)) or _parse_relative_date(
+            getattr(item, "posted_date", None)
+        )
         if posted is None:
             continue
         if posted.tzinfo is None:
             posted = posted.replace(tzinfo=UTC)
         if not window.contains(posted):
             continue
-
-        urn = getattr(item, "urn", None) or ""
-        post_url = getattr(item, "linkedin_url", None) or (
-            f"https://www.linkedin.com/feed/update/{urn}" if urn else company_url
-        )
         external = f"linkedin:{urn or post_url}"[:100]
         external = re.sub(r"[^\w.:-]+", "-", external)[:100]
 
