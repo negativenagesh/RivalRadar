@@ -19,6 +19,7 @@ class FakeLLMProvider:
         self.raise_on_generate_image = raise_on_generate_image
         self.last_messages: list[Message] | None = None
         self.last_image_brief: str | None = None
+        self.last_aspect_ratio: str | None = None
         self.complete_calls = 0
 
     async def complete(
@@ -47,7 +48,9 @@ class FakeLLMProvider:
         brief: str,
         *,
         style_hints: list[str] | None = None,
+        aspect_ratio: str | None = None,
     ) -> ImageResult:
+        self.last_aspect_ratio = aspect_ratio
         if self.raise_on_generate_image:
             raise RuntimeError("simulated image generation failure")
         return ImageResult(mime_type=self.image_mime_type, data=self.image_bytes)

@@ -14,7 +14,7 @@ from app.agents.prompts import (
     IMAGE_NEGATIVES,
     MEME_LORD,
 )
-from llm_provider import LLMProvider, Message
+from llm_provider import LLMProvider, LLMProviderError, Message
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class CreativeResponse(BaseModel):
     image_concept: str | None = None
     image_mime_type: str | None = None
     image_data_base64: str | None = None
+    image_error: str | None = None
     why_slaps: str | None = None
     overlay_text: str | None = None
     hashtags: list[str] = Field(default_factory=list)
@@ -54,16 +55,26 @@ def _spice_label(spice: int) -> str:
     return {1: "wholesome hype", 2: "witty", 3: "witty", 4: "petty", 5: "unhinged-but-safe"}[n]
 
 
-async def _maybe_image(provider: LLMProvider, brief: str, brand: str) -> tuple[str | None, str | None]:
+async def _maybe_image(
+    provider: LLMProvider,
+    brief: str,
+    brand: str,
+    *,
+    aspect_ratio: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
     try:
         image = await provider.generate_image(
             brief,
-            style_hints=[brand, "electric lime accents", "dark editorial", IMAGE_NEGATIVES],
+            style_hints=[brand, "electric lime accents", "dark editorial"],
+            aspect_ratio=aspect_ratio,
         )
-        return image.mime_type, base64.b64encode(image.data).decode("ascii")
+        return image.mime_type, base64.b64encode(image.data).decode("ascii"), None
+    except LLMProviderError as exc:
+        logger.warning("creative generate_image failed; caption-only: %s", exc.detail)
+        return None, None, exc.detail
     except Exception:  # noqa: BLE001
-        logger.warning("creative generate_image failed; concept-only", exc_info=True)
-        return None, None
+        logger.warning("creative generate_image failed; caption-only", exc_info=True)
+        return None, None, "Nano Banana 2 did not return an image. Try Generate again."
 
 
 async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> CreativeResponse:
@@ -151,7 +162,9 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
         )
         # Reuse the director's image_brief — a second text complete() burns free-tier RPM.
         concept = image_brief or caption or "lime-on-black editorial still"
-        mime, b64 = await _maybe_image(provider, brief, request.brand_name)
+        mime, b64, image_error = await _maybe_image(
+            provider, brief, request.brand_name, aspect_ratio=crop
+        )
         raw_tags = data.get("hashtags")
         tags = [str(t) for t in raw_tags][:3] if isinstance(raw_tags, list) else []
         return CreativeResponse(
@@ -160,6 +173,7 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
             image_concept=concept,
             image_mime_type=mime,
             image_data_base64=b64,
+            image_error=image_error,
             why_slaps=str(data.get("why_slaps") or "") or None,
             overlay_text=str(data.get("overlay_text") or "") or None,
             hashtags=tags,
@@ -176,11 +190,14 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
         brief,
         style_hints=[request.brand_name, "electric lime accents", "dark editorial"],
     )
-    mime, b64 = await _maybe_image(provider, brief, request.brand_name)
+    mime, b64, image_error = await _maybe_image(
+        provider, brief, request.brand_name, aspect_ratio="1:1"
+    )
     return CreativeResponse(
         kind="image",
         text=concept.strip(),
         image_concept=concept.strip(),
         image_mime_type=mime,
         image_data_base64=b64,
+        image_error=image_error,
     )

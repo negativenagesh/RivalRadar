@@ -71,6 +71,7 @@ class LLMProvider(Protocol):
         brief: str,
         *,
         style_hints: list[str] | None = None,
+        aspect_ratio: str | None = None,
     ) -> ImageResult:
         """Return actual generated image bytes for the given brief."""
         ...

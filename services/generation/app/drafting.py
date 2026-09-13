@@ -42,7 +42,7 @@ async def draft_response(
     image_mime_type: str | None = None
     image_data_base64: str | None = None
     try:
-        image = await provider.generate_image(image_brief, style_hints=style_hints)
+        image = await provider.generate_image(image_brief, style_hints=style_hints, aspect_ratio="1:1")
         image_mime_type = image.mime_type
         image_data_base64 = base64.b64encode(image.data).decode("ascii")
     except Exception:

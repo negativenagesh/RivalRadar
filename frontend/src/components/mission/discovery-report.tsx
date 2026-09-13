@@ -558,6 +558,16 @@ export function DiscoveryReport({
                   />
                 </button>
               )}
+              {!studioSrc && studioOut.image_error && (
+                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {studioOut.image_error}
+                </p>
+              )}
+              {!studioSrc && !studioOut.image_error && (
+                <p className="text-xs text-muted-foreground">
+                  No PNG this round — caption still usable. Try Generate again.
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => void copyText(studioOut.text)}>
                   <Copy className="size-3.5" />

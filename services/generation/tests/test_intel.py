@@ -72,3 +72,18 @@ async def test_generate_studio_creative_parses_json() -> None:
     assert result.why_slaps
     assert result.image_data_base64
     assert provider.complete_calls == 1
+    assert provider.last_aspect_ratio == "4:5"
+
+
+async def test_studio_surfaces_image_error_when_nano_banana_fails() -> None:
+    provider = FakeLLMProvider(
+        completion='{"caption":"ok","overlay_text":"go","why_slaps":"receipt","hashtags":[],"image_brief":"lime"}',
+        raise_on_generate_image=True,
+    )
+    result = await generate_creative(
+        CreativeRequest(kind="studio", brand_name="Pixis", format="meme", platform="instagram"),
+        provider,
+    )
+    assert result.image_data_base64 is None
+    assert result.image_error
+    assert "Nano Banana" in (result.image_error or "")
