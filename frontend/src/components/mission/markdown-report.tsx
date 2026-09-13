@@ -198,6 +198,7 @@ export function MarkdownReport({
             </List>
           );
         }
+        if (block.type !== "p") return null;
         return (
           <p key={i} className="text-sm leading-relaxed text-muted-foreground">
             {renderInline(block.text)}
