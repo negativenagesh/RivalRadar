@@ -149,10 +149,8 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
             f"{image_brief}\nAspect {crop}. Single frame. Overlay: "
             f"{data.get('overlay_text') or 'none'}. {IMAGE_NEGATIVES}"
         )
-        concept = await provider.generate_image_concept(
-            brief,
-            style_hints=[request.brand_name, "electric lime accents", "dark editorial"],
-        )
+        # Reuse the director's image_brief — a second text complete() burns free-tier RPM.
+        concept = image_brief or caption or "lime-on-black editorial still"
         mime, b64 = await _maybe_image(provider, brief, request.brand_name)
         raw_tags = data.get("hashtags")
         tags = [str(t) for t in raw_tags][:3] if isinstance(raw_tags, list) else []

@@ -71,3 +71,4 @@ async def test_generate_studio_creative_parses_json() -> None:
     assert result.overlay_text == "ship the boring"
     assert result.why_slaps
     assert result.image_data_base64
+    assert provider.complete_calls == 1

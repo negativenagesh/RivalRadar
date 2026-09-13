@@ -5,7 +5,7 @@ from app.drafting import draft_response
 from app.intel import IntelReport, IntelRequest, generate_intel
 from app.schemas import DraftRequest, DraftResponse
 from app.voice.retrieval import load_corpus
-from llm_provider import LLMProvider, get_llm_provider, provider_from_key
+from llm_provider import LLMProvider, LLMProviderError, get_llm_provider, provider_from_key
 
 router = APIRouter()
 
@@ -23,6 +23,13 @@ def operator_provider(x_gemini_key: str | None = Header(default=None, alias="X-G
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _llm_http(exc: LLMProviderError) -> HTTPException:
+    headers: dict[str, str] | None = (
+        {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    )
+    return HTTPException(status_code=exc.status_code, detail=exc.detail, headers=headers)
+
+
 @router.post("/drafts/generate", response_model=DraftResponse)
 async def generate_draft(
     request: DraftRequest,
@@ -37,7 +44,10 @@ async def creative_generate(
     request: CreativeRequest,
     provider: LLMProvider = Depends(operator_provider),
 ) -> CreativeResponse:
-    return await generate_creative(request, provider)
+    try:
+        return await generate_creative(request, provider)
+    except LLMProviderError as exc:
+        raise _llm_http(exc) from exc
 
 
 @router.post("/intel/report", response_model=IntelReport)
