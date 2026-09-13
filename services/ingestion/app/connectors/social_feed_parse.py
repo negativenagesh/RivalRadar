@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -33,6 +33,53 @@ _COUNT_RE = re.compile(
 )
 
 _NAV_DESTROY = ("execution context was destroyed", "most likely because of a navigation", "frame was detached")
+_TWITTER_EPOCH_MS = 1_288_834_974_657
+
+
+_LI_ACTIVITY_RE = re.compile(
+    r"(?:urn:li:activity:|activity[:-]|/feed/update/urn:li:activity:)(\d{15,})"
+)
+
+
+def posted_at_from_linkedin_activity(raw: str) -> datetime | None:
+    """LinkedIn activity IDs encode Unix ms in the high bits (id >> 22)."""
+    if not raw:
+        return None
+    match = _LI_ACTIVITY_RE.search(raw) or re.search(r"(\d{18,})", raw)
+    if not match:
+        return None
+    try:
+        activity_id = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    ts_ms = activity_id >> 22
+    if ts_ms < 1_500_000_000_000 or ts_ms > 2_200_000_000_000:
+        return None
+    dt = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+    if dt.year < 2018 or dt.year > 2035:
+        return None
+    return dt
+
+
+def posted_at_from_url(platform: str, url: str) -> datetime | None:
+    """Derive a real timestamp from a post URL when the page hid <time datetime>.
+
+    X status IDs are Twitter snowflakes. LinkedIn activity URNs encode Unix ms.
+    Instagram shortcodes are not a reliable clock — those stay page-parsed only.
+    """
+    platform = normalize_platform(platform)
+    if platform == "linkedin":
+        return posted_at_from_linkedin_activity(url)
+    if platform not in {"x", "twitter"}:
+        return None
+    match = re.search(r"/status/(\d+)", url)
+    if not match:
+        return None
+    status_id = int(match.group(1))
+    if status_id < 1_000_000_000_000:
+        return None
+    ms = (status_id >> 22) + _TWITTER_EPOCH_MS
+    return datetime.fromtimestamp(ms / 1000, tz=UTC)
 
 
 def normalize_platform(platform: str) -> str:
@@ -231,9 +278,18 @@ async def collect_post_urls(
     return found
 
 
-async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[str, Any]:
+async def parse_post_page(
+    page: Page,
+    *,
+    platform: str,
+    post_url: str,
+    skip_time_wait: bool = False,
+) -> dict[str, Any]:
     """Extract caption, media URL, metrics, posted_at from an open post page."""
     platform = normalize_platform(platform)
+    if platform in {"instagram", "x"} and not skip_time_wait:
+        with contextlib.suppress(Exception):
+            await page.wait_for_selector("time[datetime], time", timeout=1200)
     try:
         data = await safe_evaluate(
             page,
@@ -242,7 +298,10 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
                 const el = document.querySelector(`meta[property="${prop}"], meta[name="${prop}"]`);
                 return el ? el.getAttribute('content') : null;
               };
-              const timeEl = document.querySelector('time[datetime]');
+              const timeDatetimes = Array.from(document.querySelectorAll('time[datetime]'))
+                .map(el => el.getAttribute('datetime'))
+                .filter(Boolean)
+                .slice(0, 8);
               const bodyText = document.body ? document.body.innerText.slice(0, 20000) : '';
               const imgCandidates = Array.from(document.querySelectorAll('article img, main img, img'))
                 .map(img => img.currentSrc || img.src)
@@ -256,13 +315,29 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
               const likeBtn = document.querySelector('[data-testid="like"], [data-testid="unlike"]');
               const replyBtn = document.querySelector('[data-testid="reply"]');
               const rtBtn = document.querySelector('[data-testid="retweet"]');
+              let takenAtUnix = null;
+              let jsonLdDate = null;
+              try {
+                const html = document.documentElement.innerHTML;
+                const taken = html.match(/"taken_at(?:_timestamp)?"\\s*:\\s*([0-9]{10})/);
+                if (taken) takenAtUnix = Number(taken[1]);
+                const ld = document.querySelector('script[type="application/ld+json"]');
+                if (ld && ld.textContent) {
+                  const parsed = JSON.parse(ld.textContent);
+                  const node = Array.isArray(parsed) ? parsed[0] : parsed;
+                  jsonLdDate = (node && (node.datePublished || node.uploadDate || node.dateCreated)) || null;
+                }
+              } catch (e) {}
               return {
                 ogTitle: meta('og:title'),
                 ogDesc: meta('og:description'),
                 ogImage: meta('og:image'),
                 ogVideo: meta('og:video') || meta('og:video:secure_url'),
                 published: meta('article:published_time') || meta('og:updated_time')
-                  || (timeEl ? timeEl.getAttribute('datetime') : null),
+                  || (timeDatetimes[0] || null),
+                timeDatetimes,
+                takenAtUnix,
+                jsonLdDate,
                 bodyText,
                 imgCandidates,
                 videoSrc,
@@ -337,6 +412,19 @@ async def parse_post_page(page: Page, *, platform: str, post_url: str) -> dict[s
         media_url = max((str(u) for u in imgs if isinstance(u, str)), key=len, default=None)
 
     posted_at = _parse_iso(data.get("published"))
+    if posted_at is None:
+        for stamp in data.get("timeDatetimes") or []:
+            posted_at = _parse_iso(stamp)
+            if posted_at:
+                break
+    if posted_at is None:
+        posted_at = _parse_iso(data.get("jsonLdDate"))
+    if posted_at is None:
+        unix = data.get("takenAtUnix")
+        if isinstance(unix, (int, float)) and unix > 1_000_000_000:
+            posted_at = datetime.fromtimestamp(float(unix), tz=UTC)
+    if posted_at is None:
+        posted_at = posted_at_from_url(platform, post_url)
     external_id = external_id_for(platform, post_url)
 
     return {

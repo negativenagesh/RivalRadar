@@ -4,7 +4,15 @@ import uuid
 from collections.abc import AsyncIterator
 
 from agent_events import AgentEventBus
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +20,9 @@ from starlette.websockets import WebSocketState
 
 from app.agent_events_bus import get_event_bus
 from app.clients import (
+    GEMINI_MISSING,
     cancel_ingestion_run,
+    drop_ingestion_comment,
     fetch_ingestion_accounts,
     fetch_ingestion_media,
     fetch_ingestion_posts,
@@ -22,6 +32,7 @@ from app.clients import (
     fetch_latest_digest,
     fetch_youtube_status,
     generate_creative_content,
+    generate_intel_report,
     trigger_digest_generation,
     trigger_ingestion_run,
 )
@@ -83,9 +94,84 @@ async def generate_drafts(
     return PipelineRunCreated(run_id=run.id, status=run.status)
 
 
+def _require_operator_gemini(x_gemini_key: str | None) -> str:
+    key = (x_gemini_key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail=GEMINI_MISSING)
+    return key
+
+
+def _platform_aliases(platform: str) -> set[str]:
+    plat = platform.lower().strip()
+    if plat in {"x", "twitter"}:
+        return {"x", "twitter"}
+    return {plat}
+
+
+async def _vaulted_sessions(
+    session: AsyncSession,
+    *,
+    workspace_id: str = "default",
+    platforms: set[str] | None = None,
+) -> dict[str, object]:
+    rows = await session.scalars(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == workspace_id,
+            PlatformConnection.status == "connected",
+        )
+    )
+    out: dict[str, object] = {}
+    for row in rows.all():
+        if platforms is not None and row.platform not in platforms:
+            continue
+        try:
+            out[row.platform] = decrypt_json(row.encrypted_blob)
+        except Exception:  # noqa: BLE001 - skip corrupt vault rows
+            continue
+    return out
+
+
 @router.post("/creative/generate")
-async def creative_generate(body: dict[str, object]) -> dict[str, object]:
-    return await generate_creative_content(body)
+async def creative_generate(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+) -> dict[str, object]:
+    key = _require_operator_gemini(x_gemini_key)
+    return await generate_creative_content(body, api_key=key)
+
+
+@router.post("/intel/report")
+async def intel_report(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+) -> dict[str, object]:
+    key = _require_operator_gemini(x_gemini_key)
+    return await generate_intel_report(body, api_key=key)
+
+
+@router.post("/social/comment")
+async def social_comment(
+    body: dict[str, object],
+    session: AsyncSession = Depends(get_session),
+    workspace_id: str = "default",
+) -> dict[str, object]:
+    if not body.get("approved"):
+        raise HTTPException(status_code=400, detail="human approval required")
+    platform = str(body.get("platform") or "").strip()
+    url = str(body.get("url") or "").strip()
+    text = str(body.get("text") or "").strip()
+    aliases = _platform_aliases(platform)
+    vault = await _vaulted_sessions(session, workspace_id=workspace_id, platforms=aliases)
+    if not vault:
+        raise HTTPException(status_code=400, detail=f"not connected to {platform or 'this platform'}")
+    payload = {
+        "platform": platform,
+        "url": url,
+        "text": text,
+        "approved": True,
+        "platform_sessions": vault,
+    }
+    return await drop_ingestion_comment(payload)
 
 
 @router.get("/pipeline-runs/{run_id}", response_model=PipelineRunRead)

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
 from app.agent_events_bus import get_event_bus
+from app.comment_drop import CommentDropError, drop_comment
 from app.config import settings
 from app.db import get_session
 from app.models import CompetitorAccount, CompetitorPost, IngestionRun
@@ -20,6 +21,8 @@ from app.schemas import (
     IngestionRunCreate,
     IngestionRunCreated,
     IngestionRunRead,
+    SocialCommentRequest,
+    SocialCommentResult,
     YoutubeStatusRead,
 )
 
@@ -154,3 +157,22 @@ async def get_media(media_key: str) -> StreamingResponse:
         ".gif": "image/gif",
     }.get(suffix, "application/octet-stream")
     return StreamingResponse(object_store.open(media_key), media_type=media_type)
+
+
+@router.post("/social/comment", response_model=SocialCommentResult)
+async def social_comment(body: SocialCommentRequest) -> SocialCommentResult:
+    try:
+        result = await drop_comment(
+            platform=body.platform,
+            url=body.url,
+            text=body.text,
+            approved=body.approved,
+            platform_sessions=body.platform_sessions,
+        )
+    except CommentDropError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SocialCommentResult(
+        ok=bool(result.get("ok")),
+        detail=str(result.get("detail") or "dropped"),
+        screenshot_jpeg_b64=result.get("screenshot_jpeg_b64"),
+    )

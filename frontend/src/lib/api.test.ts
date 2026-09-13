@@ -2,14 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   approveDraft,
+  generateCreative,
   generateDigest,
   getLatestDigest,
   listDrafts,
 } from "./api";
+import { GEMINI_KEY_STORAGE } from "./gemini-key";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 describe("api client", () => {
@@ -76,5 +79,27 @@ describe("api client", () => {
     );
 
     await expect(getLatestDigest()).rejects.toThrow(/down/);
+  });
+
+  it("surfaces Failed to fetch as a gateway unreachable error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(getLatestDigest()).rejects.toThrow(/Gateway unreachable/);
+  });
+
+  it("sends X-Gemini-Key only on Mission LLM routes", async () => {
+    window.localStorage.setItem(GEMINI_KEY_STORAGE, "AIzaSyDummyKey1234");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ kind: "studio", text: "caption" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await generateCreative({ kind: "studio", brand_name: "Pixis" });
+    expect(fetchMock.mock.calls[0][1].headers["X-Gemini-Key"]).toBe("AIzaSyDummyKey1234");
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue({ ok: true, json: async () => [] });
+    await listDrafts();
+    expect(fetchMock.mock.calls[0][1].headers["X-Gemini-Key"]).toBeUndefined();
   });
 });

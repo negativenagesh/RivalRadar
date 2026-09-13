@@ -62,6 +62,9 @@ def test_linkedin_relative_dates() -> None:
     assert _parse_relative_date("3d") is not None
     assert _parse_relative_date("just now") is not None
     assert _parse_relative_date("") is None
+    abs_dt = _parse_relative_date("Sep 11, 2026")
+    assert abs_dt is not None
+    assert abs_dt.date() == date(2026, 9, 11)
 
 
 def test_instaloader_fail_fast_refuses_long_sleep() -> None:

@@ -25,6 +25,7 @@ async def init_models() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_post_columns)
+        await conn.run_sync(_ensure_account_handle_platform)
     await _ensure_run_status_cancelled()
 
 
@@ -37,6 +38,20 @@ def _ensure_post_columns(sync_conn: Connection) -> None:
         "ALTER TABLE competitor_posts ADD COLUMN IF NOT EXISTS comment_sample JSON DEFAULT '[]'",
     ]
     for stmt in statements:
+        with suppress(Exception):
+            sync_conn.execute(text(stmt))
+
+
+def _ensure_account_handle_platform(sync_conn: Connection) -> None:
+    """Allow @pixisai on YouTube and LinkedIn at once. create_all does not drop uniques."""
+    for stmt in (
+        "ALTER TABLE competitor_accounts DROP CONSTRAINT IF EXISTS competitor_accounts_handle_key",
+        "DROP INDEX IF EXISTS competitor_accounts_handle_key",
+        # SQLAlchemy unique=True previously created this unique index.
+        "DROP INDEX IF EXISTS ix_competitor_accounts_handle",
+        "CREATE INDEX IF NOT EXISTS ix_competitor_accounts_handle ON competitor_accounts (handle)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_account_handle_platform ON competitor_accounts (handle, platform)",
+    ):
         with suppress(Exception):
             sync_conn.execute(text(stmt))
 

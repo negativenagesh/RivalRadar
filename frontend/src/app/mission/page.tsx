@@ -22,9 +22,9 @@ import {
   startIngestionRun,
 } from "@/lib/api";
 import { filterFindingsPosts } from "@/lib/findings-filter";
+import { buildIntelFacts } from "@/lib/intel-facts";
 import {
   DEFAULT_MISSION,
-  buildDiscoveryReport,
   buildMissionTargets,
   loadMission,
   missionToIngestionPayload,
@@ -47,6 +47,7 @@ import type {
   CreativePermissions,
   MissionState,
 } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export default function MissionPage() {
   const [step, setStep] = useState<MissionStep>(0);
@@ -122,40 +123,55 @@ export default function MissionPage() {
 
   useEffect(() => {
     const status = live.run?.status;
-    if (status !== "done" && status !== "cancelled" && status !== "error") return;
-    let cancelled = false;
-    void Promise.resolve().then(() => {
-      if (!cancelled) void refreshFindings();
-    });
-    return () => {
-      cancelled = true;
-    };
+    if (status !== "running" && status !== "pending") return;
+    const tick = window.setInterval(() => {
+      void refreshFindings();
+    }, 4000);
+    return () => window.clearInterval(tick);
   }, [live.run?.status, refreshFindings]);
+
+  useEffect(() => {
+    const status = live.run?.status;
+    if (status !== "done" && status !== "cancelled" && status !== "error") return;
+    const t = window.setTimeout(() => {
+      void refreshFindings();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [live.run?.status, refreshFindings]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    const t = window.setTimeout(() => {
+      void refreshFindings();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [storageReady, refreshFindings]);
 
   const missionTargets = useMemo(() => buildMissionTargets(mission), [mission]);
 
-  const visiblePosts = useMemo(
+  const visibleRows = useMemo(
     () =>
       filterFindingsPosts(posts, accounts, {
         targets: missionTargets,
         dateFrom: mission.dateFrom,
         dateTo: mission.dateTo,
         lookbackDays: mission.lookbackDays,
-      }).map((row) => row.post),
+      }),
     [posts, accounts, missionTargets, mission.dateFrom, mission.dateTo, mission.lookbackDays],
   );
 
-  const report = useMemo(() => {
-    return buildDiscoveryReport({
-      brand: mission.brand,
-      competitors: mission.competitors,
-      posts: visiblePosts,
-      permissions: mission.permissions,
-      lookbackDays: mission.lookbackDays,
-    });
-  }, [mission, visiblePosts]);
+  const visiblePosts = useMemo(() => visibleRows.map((row) => row.post), [visibleRows]);
 
-  const topCaption = visiblePosts[0]?.caption ?? "";
+  const facts = useMemo(
+    () =>
+      buildIntelFacts(visibleRows, {
+        brand: mission.brand,
+        dateFrom: mission.dateFrom,
+        dateTo: mission.dateTo,
+        lookbackDays: mission.lookbackDays,
+      }),
+    [visibleRows, mission.brand, mission.dateFrom, mission.dateTo, mission.lookbackDays],
+  );
 
   function applyGate(issues: FieldIssue[]): boolean {
     if (!issues.length) {
@@ -270,19 +286,26 @@ export default function MissionPage() {
       <NavBar />
       <MissionProgress step={step} onStepClick={goToStep} />
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
-        <div className="mb-10 text-center">
-          <p className="font-ui text-xs font-semibold uppercase tracking-[0.28em] text-primary">
-            Operator console
-          </p>
-          <h1 className="font-shout text-jumble-wild mt-3 text-5xl uppercase sm:text-6xl">
-            Mission <span className="text-primary">Control</span>
-          </h1>
-          <p className="font-accent mx-auto mt-4 max-w-2xl text-base italic text-muted-foreground sm:text-lg">
-            Feed the agent your brand + rivals, watch the live scout hop every platform, review
-            findings, then unlock what it can create.
-          </p>
-        </div>
+      <main
+        className={cn(
+          "mx-auto w-full flex-1",
+          step === 0 ? "max-w-6xl px-6 py-10" : "max-w-[1680px] px-4 py-8 sm:px-6",
+        )}
+      >
+        {step === 0 && (
+          <div className="mb-10 text-center">
+            <p className="font-ui text-xs font-semibold uppercase tracking-[0.28em] text-primary">
+              Operator console
+            </p>
+            <h1 className="font-shout text-jumble-wild mt-3 text-5xl uppercase sm:text-6xl">
+              Mission <span className="text-primary">Control</span>
+            </h1>
+            <p className="font-accent mx-auto mt-4 max-w-2xl text-base italic text-muted-foreground sm:text-lg">
+              Feed the agent your brand + rivals, watch the live scout hop every platform, review
+              findings, then unlock what it can create.
+            </p>
+          </div>
+        )}
 
         {gateWarning && (
           <div
@@ -324,6 +347,8 @@ export default function MissionPage() {
               latestScreenshot={live.latestScreenshot}
               run={live.run}
               error={scoutError}
+              posts={posts}
+              accounts={accounts}
             />
           </div>
         )}
@@ -344,12 +369,10 @@ export default function MissionPage() {
 
         {step === 3 && (
           <DiscoveryReport
-            report={report}
+            facts={facts}
             permissions={mission.permissions}
             onPermissionsChange={setPermissions}
-            brandName={mission.brand.displayName}
-            voiceNotes={mission.brand.voiceNotes}
-            competitorCaption={topCaption}
+            brand={mission.brand}
           />
         )}
 

@@ -1,4 +1,4 @@
 from llm_provider.base import ImageResult, LLMProvider, Message
-from llm_provider.factory import get_llm_provider
+from llm_provider.factory import get_llm_provider, provider_from_key
 
-__all__ = ["ImageResult", "LLMProvider", "Message", "get_llm_provider"]
+__all__ = ["ImageResult", "LLMProvider", "Message", "get_llm_provider", "provider_from_key"]

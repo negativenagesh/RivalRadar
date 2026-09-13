@@ -207,14 +207,21 @@ export type MissionState = {
   lastRunId: string | null;
 };
 
-export type CreativeKind = "image" | "comment" | "reply";
+export type CreativeKind = "image" | "comment" | "reply" | "studio";
 
 export type CreativeRequest = {
   kind: CreativeKind;
-  report_markdown: string;
+  report_markdown?: string;
   brand_name: string;
   voice_notes?: string;
   competitor_caption?: string;
+  forbidden_claims?: string;
+  platform?: string;
+  format?: string;
+  spice?: number;
+  tone?: string;
+  post_url?: string;
+  facts_json?: string;
 };
 
 export type CreativeResult = {
@@ -223,4 +230,38 @@ export type CreativeResult = {
   image_concept: string | null;
   image_mime_type: string | null;
   image_data_base64: string | null;
+  why_slaps?: string | null;
+  overlay_text?: string | null;
+  hashtags?: string[];
+};
+
+export type IntelPlay = {
+  title: string;
+  format: string;
+  platform: string;
+  why: string;
+};
+
+export type IntelSection = {
+  id: string;
+  title: string;
+  markdown: string;
+};
+
+export type IntelReport = {
+  scoreboard_blurb: string;
+  markdown: string;
+  reports: IntelSection[];
+  good_at: string[];
+  fumbling: string[];
+  why_engagement_mid: string[];
+  gaps: string[];
+  plays: IntelPlay[];
+  sniper_bait: { why: string; href: string; company: string }[];
+};
+
+export type CommentDropResult = {
+  ok: boolean;
+  detail: string;
+  screenshot_jpeg_b64?: string | null;
 };
