@@ -259,6 +259,8 @@ export type IntelReport = {
   gaps: string[];
   plays: IntelPlay[];
   sniper_bait: { why: string; href: string; company: string }[];
+  agents_used?: string[];
+  narration?: "agent" | "fallback";
 };
 
 export type CommentDropResult = {

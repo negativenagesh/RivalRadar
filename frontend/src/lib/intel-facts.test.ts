@@ -104,6 +104,12 @@ describe("buildIntelFacts", () => {
     expect(intel.fumbling.join(" ")).toMatch(/Zero in-window/i);
     expect(intel.markdown).toMatch(/# Intel brief/);
     expect(intel.markdown).toMatch(/## Sniper docket/);
-    expect(intel.reports.map((r) => r.id)).toEqual(["plays", "format", "sniper"]);
+    expect(intel.reports.map((r) => r.id)).toEqual([
+      "plays",
+      "format",
+      "sniper",
+      "platforms",
+      "competitive",
+    ]);
   });
 });

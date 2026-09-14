@@ -92,6 +92,9 @@ describe("DiscoveryReport war room", () => {
     expect(screen.getAllByText(/Intel brief/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/heat vs the room/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "This week's plays" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Platform evals" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Head-to-head" })).toBeInTheDocument();
+    expect(screen.getByText("War-room agents")).toBeInTheDocument();
     expect(screen.getByText("Comment sniper")).toBeInTheDocument();
     expect(screen.getByText(/human delays/i)).toBeInTheDocument();
   });

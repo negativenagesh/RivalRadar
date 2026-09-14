@@ -42,6 +42,12 @@ import type {
 
 const KEY_WARNING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip.";
 
+const AGENT_LABELS: Record<string, string> = {
+  intel_chief: "Intel Chief",
+  play_caller: "Play Caller",
+  platform_scout: "Platform Scout",
+};
+
 const PERM_OPTIONS: {
   key: keyof CreativePermissions;
   label: string;
@@ -141,6 +147,7 @@ export function DiscoveryReport({
   const [intelFetchError, setIntelFetchError] = useState<string | null>(null);
   const [intelForSig, setIntelForSig] = useState(factsSig);
   const [reportTab, setReportTab] = useState("brief");
+  const [intelTick, setIntelTick] = useState(0);
   if (intelForSig !== factsSig) {
     setIntelForSig(factsSig);
     setGeminiIntel(null);
@@ -148,7 +155,7 @@ export function DiscoveryReport({
     setReportTab("brief");
   }
   const intel = mergeIntel(facts, geminiIntel);
-  const usedFallback = geminiIntel === null;
+  const usedFallback = !geminiIntel || geminiIntel.narration === "fallback";
   const intelBusy = models.readyText && geminiIntel === null && intelFetchError === null;
   const intelError = !models.readyText ? KEY_WARNING : intelFetchError;
 
@@ -224,6 +231,8 @@ export function DiscoveryReport({
   useEffect(() => {
     if (!models.readyText) return;
     let cancelled = false;
+    setGeminiIntel(null);
+    setIntelFetchError(null);
     void generateIntelReport({
       facts,
       brand_name: brand.displayName || "the brand",
@@ -245,7 +254,15 @@ export function DiscoveryReport({
     return () => {
       cancelled = true;
     };
-  }, [facts, factsSig, models.readyText, brand.displayName, brand.voiceNotes, brand.forbiddenClaims]);
+  }, [
+    facts,
+    factsSig,
+    models.readyText,
+    brand.displayName,
+    brand.voiceNotes,
+    brand.forbiddenClaims,
+    intelTick,
+  ]);
 
   async function runStudio(spice = studioSpice) {
     if (!models.readyText) {
@@ -377,7 +394,7 @@ export function DiscoveryReport({
 
       <section className="relative space-y-4 text-left">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-display text-lg font-bold">Intel Chief</h3>
+          <h3 className="font-display text-lg font-bold">War-room agents</h3>
           <div className="flex items-center gap-2">
             {intelBusy && <Loader2 className="size-4 animate-spin text-primary" />}
             <span className="font-ui text-[10px] uppercase tracking-widest text-muted-foreground">
@@ -387,6 +404,14 @@ export function DiscoveryReport({
                   ? "offline · fact brief"
                   : `${models.textModel ?? "model"} live`}
             </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!models.readyText || intelBusy}
+              onClick={() => setIntelTick((n) => n + 1)}
+            >
+              Regenerate intel
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -402,12 +427,64 @@ export function DiscoveryReport({
             </Button>
           </div>
         </div>
+        <div className="flex flex-wrap gap-2">
+          {(["intel_chief", "play_caller", "platform_scout"] as const).map((id) => {
+            const live = (intel.agents_used ?? []).includes(id);
+            return (
+              <span
+                key={id}
+                className={
+                  live
+                    ? "font-ui rounded-full border border-primary/40 bg-primary/15 px-3 py-1 text-[11px] font-semibold text-primary"
+                    : "font-ui rounded-full border border-border/50 px-3 py-1 text-[11px] text-muted-foreground"
+                }
+              >
+                {AGENT_LABELS[id]}
+                {intelBusy ? " · writing" : live ? " · live" : " · standby"}
+              </span>
+            );
+          })}
+          <span className="font-ui rounded-full border border-border/50 px-3 py-1 text-[11px] text-muted-foreground">
+            Format Director · studio
+          </span>
+          <span className="font-ui rounded-full border border-border/50 px-3 py-1 text-[11px] text-muted-foreground">
+            Comment Sniper · approve-only
+          </span>
+        </div>
         {intelError && (
           <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {intelError}
           </p>
         )}
         <p className="font-accent text-lg italic text-foreground/90">{intel.scoreboard_blurb}</p>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(
+            [
+              ["Good at", intel.good_at],
+              ["Fumbling", intel.fumbling],
+              ["Why engagement is mid", intel.why_engagement_mid],
+              ["Gaps they own", intel.gaps],
+            ] as const
+          ).map(([title, lines]) => (
+            <div
+              key={title}
+              className="rounded-2xl border border-border/50 bg-card/20 px-4 py-3 text-left"
+            >
+              <p className="font-ui text-[10px] font-semibold uppercase tracking-widest text-primary">
+                {title}
+              </p>
+              <ul className="mt-2 space-y-1.5 text-sm text-muted-foreground">
+                {(lines.length ? lines : ["—"]).map((line) => (
+                  <li key={`${title}-${line}`} className="leading-snug">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
