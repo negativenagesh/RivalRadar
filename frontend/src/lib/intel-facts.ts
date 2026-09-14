@@ -240,6 +240,13 @@ export function factsToMarkdown(facts: IntelFacts): string {
   const mixLines = facts.formatMix.map(
     (row) => `**${row.format}** is ${row.pct}% of the window (${row.count} posts)`,
   );
+  const platformLines = facts.companies.flatMap((c) => {
+    const role = c.role === "brand" ? "you" : "rival";
+    return c.platforms.map(
+      (p) =>
+        `**${c.name}** (${role}) on **${p.platform}**: ${p.posts} posts · cadence ${p.cadencePerDay}/day · avg ${p.avgLikes}♡ / ${p.avgComments}💬 · comment-rate ${p.commentRate}%`,
+    );
+  });
   const receipts = facts.topPosts.map((row) => {
     const label = `${row.company} on ${row.platform}: ${row.likes}♡ / ${row.comments}💬 — ${row.caption.slice(0, 90)}`;
     return row.href ? `[${label}](${row.href})` : label;
@@ -249,20 +256,31 @@ export function factsToMarkdown(facts: IntelFacts): string {
     return row.href ? `[${label}](${row.href})` : label;
   });
   const mix = facts.formatMix[0];
+  const fumbling = facts.leakingBecause.slice(0, 3);
+  const whyMid = facts.leakingBecause.slice(1, 4);
+  const gaps = facts.leakingBecause.slice(2, 5);
   return [
     `# Intel brief — ${facts.brandName}`,
     "",
     `Window: **${facts.window.label}**. Numbers are from the scout, not vibes.`,
     "",
-    "## Scoreboard",
-    bullets(companyLines, "Zero in-window posts — scout this lookback first."),
+    "## Scoreboard read",
+    bullets(
+      companyLines.length
+        ? [
+            ...companyLines,
+            "This is the offline fact brief — paste a text model key so Intel Chief can evaluate, not just reprint.",
+          ]
+        : [],
+      "Zero in-window posts — scout this lookback first.",
+    ),
     "",
     "## What you're actually good at",
     bullets(facts.winningBecause, "Scout more; the board is still loading."),
     "",
     "## What you're fumbling",
     bullets(
-      facts.leakingBecause,
+      fumbling,
       facts.companies.length
         ? "No obvious leaks in this window — you're keeping pace."
         : "Not enough in-window posts to roast you yet.",
@@ -270,19 +288,20 @@ export function factsToMarkdown(facts: IntelFacts): string {
     "",
     "## Why engagement is mid",
     bullets(
-      facts.leakingBecause.slice(0, 4).length
-        ? facts.leakingBecause.slice(0, 4)
-        : facts.winningBecause.slice(0, 3),
+      whyMid.length ? whyMid : mixLines.slice(0, 2),
       "Need more in-window posts before we call the heat.",
     ),
     "",
     "## Gaps they own",
     bullets(
-      facts.leakingBecause.slice(-3).length ? facts.leakingBecause.slice(-3) : mixLines.slice(0, 3),
+      gaps.length ? gaps : platformLines.slice(0, 3),
       "No gap call until the mix fills in.",
     ),
     "",
-    "## Format mix",
+    "## Platform evals",
+    bullets(platformLines, "No platform stats in this window."),
+    "",
+    "## Format & creative read",
     bullets(mixLines, "No format mix yet — the window is empty."),
     "",
     "## This week's plays",
@@ -311,6 +330,13 @@ function fallbackReports(facts: IntelFacts): IntelReport["reports"] {
   const sniperLines = facts.sniperQueue.map((row) => {
     const line = `**${row.company}** on ${row.platform} · ${row.likes} likes / ${row.comments} comments`;
     return row.href ? `- [${line}](${row.href})` : `- ${line}`;
+  });
+  const platformLines = facts.companies.flatMap((c) => {
+    const role = c.role === "brand" ? "you" : "rival";
+    return c.platforms.map(
+      (p) =>
+        `- **${c.name}** (${role}) on **${p.platform}**: ${p.posts} posts · cadence ${p.cadencePerDay}/day · avg ${p.avgLikes}♡ / ${p.avgComments}💬`,
+    );
   });
   return [
     {
@@ -349,6 +375,26 @@ function fallbackReports(facts: IntelFacts): IntelReport["reports"] {
         "- YouTube comments stay out of scope.",
       ].join("\n"),
     },
+    {
+      id: "platforms",
+      title: "Platform evals",
+      markdown: [
+        "## Platform evals",
+        ...(platformLines.length ? platformLines : ["- No platform stats yet — scout first."]),
+        "- Treat each platform as its own arena: cadence, heat, and comment rate.",
+      ].join("\n"),
+    },
+    {
+      id: "competitive",
+      title: "Head-to-head",
+      markdown: [
+        `## Head-to-head — ${facts.brandName}`,
+        ...(platformLines.slice(0, 8).length
+          ? platformLines.slice(0, 8)
+          : ["- Need rival + brand posts in-window."]),
+        "- Steal the move that already has heat; don't invent a new language.",
+      ].join("\n"),
+    },
   ];
 }
 
@@ -366,8 +412,8 @@ export function fallbackIntel(facts: IntelFacts): IntelReport {
       : facts.companies.length
         ? ["No obvious leaks in this window — you're keeping pace."]
         : ["Not enough in-window posts to roast you yet."],
-    why_engagement_mid: leaking.slice(0, 3),
-    gaps: leaking.slice(-2),
+    why_engagement_mid: leaking.slice(1, 4).length ? leaking.slice(1, 4) : leaking.slice(0, 3),
+    gaps: leaking.slice(2, 5).length ? leaking.slice(2, 5) : leaking.slice(-2),
     plays: mix
       ? [
           {
@@ -386,6 +432,8 @@ export function fallbackIntel(facts: IntelFacts): IntelReport {
         href: item.href as string,
         company: item.company,
       })),
+    agents_used: [],
+    narration: "fallback",
   };
 }
 
@@ -399,7 +447,13 @@ export function mergeIntel(facts: IntelFacts, remote: Partial<IntelReport> | nul
     reports: remote.reports?.length ? remote.reports : fallback.reports,
     good_at: remote.good_at?.length ? remote.good_at : fallback.good_at,
     fumbling: remote.fumbling?.length ? remote.fumbling : fallback.fumbling,
+    why_engagement_mid: remote.why_engagement_mid?.length
+      ? remote.why_engagement_mid
+      : fallback.why_engagement_mid,
+    gaps: remote.gaps?.length ? remote.gaps : fallback.gaps,
     plays: remote.plays?.length ? remote.plays : fallback.plays,
     sniper_bait: remote.sniper_bait?.length ? remote.sniper_bait : fallback.sniper_bait,
+    agents_used: remote.agents_used?.length ? remote.agents_used : fallback.agents_used,
+    narration: remote.narration ?? fallback.narration,
   };
 }

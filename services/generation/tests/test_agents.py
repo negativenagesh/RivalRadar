@@ -5,6 +5,7 @@ from app.agents.prompts import (
     IMAGE_NEGATIVES,
     INTEL_CHIEF,
     MEME_LORD,
+    PLATFORM_SCOUT,
     PLAY_CALLER,
     VOICE_GUARD,
 )
@@ -13,12 +14,20 @@ from app.agents.prompts import (
 def test_intel_chief_does_not_invent_metrics() -> None:
     assert "NEVER invent metrics" in INTEL_CHIEF
     assert "JSON" in INTEL_CHIEF
+    assert "Platform evals" in INTEL_CHIEF
     assert "markdown" in INTEL_CHIEF.lower()
 
 
 def test_play_caller_writes_extra_markdown_reports() -> None:
     assert "reports" in PLAY_CALLER
     assert "markdown" in PLAY_CALLER
+
+
+def test_platform_scout_covers_every_platform() -> None:
+    assert "Platform Scout" in PLATFORM_SCOUT
+    assert "platforms" in PLATFORM_SCOUT
+    assert "competitive" in PLATFORM_SCOUT
+    assert "companies[].platforms" in PLATFORM_SCOUT
 
 
 def test_format_agents_include_voice_guard_rules() -> None:

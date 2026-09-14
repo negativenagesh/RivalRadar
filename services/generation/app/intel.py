@@ -2,13 +2,34 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+import logging
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from app.agents.parse import parse_json_object
-from app.agents.prompts import INTEL_CHIEF, PLAY_CALLER, PLAY_CALLER_HINT
+from app.agents.prompts import (
+    INTEL_CHIEF,
+    PLATFORM_SCOUT,
+    PLAY_CALLER,
+    PLAY_CALLER_HINT,
+)
 from llm_provider import LLMProvider, Message
+
+logger = logging.getLogger(__name__)
+
+_REQUIRED_HEADINGS = (
+    "scoreboard",
+    "good at",
+    "fumbling",
+    "engagement",
+    "gaps",
+    "platform",
+    "format",
+    "plays",
+    "receipts",
+    "sniper",
+)
 
 
 class IntelPlay(BaseModel):
@@ -40,6 +61,8 @@ class IntelReport(BaseModel):
     gaps: list[str] = Field(default_factory=list)
     plays: list[IntelPlay] = Field(default_factory=list)
     sniper_bait: list[SniperBait] = Field(default_factory=list)
+    agents_used: list[str] = Field(default_factory=list)
+    narration: Literal["agent", "fallback"] = "fallback"
 
 
 class IntelRequest(BaseModel):
@@ -70,6 +93,39 @@ def _bullets(lines: list[str], empty: str) -> str:
     return "\n".join(f"- {line}" for line in lines)
 
 
+def _platforms_in_facts(facts: dict[str, Any]) -> list[str]:
+    seen: list[str] = []
+    for company in _as_list(facts.get("companies")):
+        if not isinstance(company, dict):
+            continue
+        for row in _as_list(company.get("platforms")):
+            if not isinstance(row, dict):
+                continue
+            plat = str(row.get("platform") or "").strip().lower()
+            if plat and plat not in seen:
+                seen.append(plat)
+    return seen
+
+
+def _platform_eval_lines(facts: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for company in _as_list(facts.get("companies")):
+        if not isinstance(company, dict):
+            continue
+        name = str(company.get("name") or "unknown")
+        role = "you" if company.get("role") == "brand" else "rival"
+        for row in _as_list(company.get("platforms")):
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"**{name}** ({role}) on **{row.get('platform')}**: "
+                f"{row.get('posts', 0)} posts · cadence {row.get('cadencePerDay', 0)}/day · "
+                f"avg {row.get('avgLikes', 0)}♡ / {row.get('avgComments', 0)}💬 · "
+                f"comment-rate {row.get('commentRate', 0)}%"
+            )
+    return lines
+
+
 def facts_to_markdown(facts: dict[str, Any], brand_name: str) -> str:
     window = facts.get("window") or {}
     label = window.get("label") if isinstance(window, dict) else None
@@ -79,6 +135,7 @@ def facts_to_markdown(facts: dict[str, Any], brand_name: str) -> str:
     leaking = _str_list(facts.get("leakingBecause"), 8)
     top = _as_list(facts.get("topPosts"))
     sniper = _as_list(facts.get("sniperQueue"))
+    platform_lines = _platform_eval_lines(facts)
 
     company_lines: list[str] = []
     for row in companies[:8]:
@@ -127,33 +184,49 @@ def facts_to_markdown(facts: dict[str, Any], brand_name: str) -> str:
         play_fmt = str(mix[0].get("format") or play_fmt)
         play_pct = int(mix[0].get("pct") or 0)
 
+    # Keep section bullets distinct even in the offline fact brief.
+    fumbling = leaking[:3] or winning[:2]
+    why_mid = leaking[1:4] or mix_lines[:2] or fumbling[:2]
+    gaps = leaking[2:5] or platform_lines[:3] or mix_lines[:2]
+
     return "\n".join(
         [
             f"# Intel brief — {brand_name}",
             "",
             f"Window: **{label or 'this lookback'}**. Numbers are from the scout, not vibes.",
             "",
-            "## Scoreboard",
-            _bullets(company_lines, "Zero in-window posts — scout this lookback first."),
+            "## Scoreboard read",
+            _bullets(
+                [
+                    *company_lines,
+                    "This is the offline fact brief — paste a text model key so Intel Chief can evaluate, not just reprint.",
+                ]
+                if company_lines
+                else [],
+                "Zero in-window posts — scout this lookback first.",
+            ),
             "",
             "## What you're actually good at",
             _bullets(winning, "Scout more; the board is still loading."),
             "",
             "## What you're fumbling",
             _bullets(
-                leaking,
+                fumbling,
                 "No obvious leaks in this window — you're keeping pace."
                 if companies
                 else "Not enough in-window posts to roast you yet.",
             ),
             "",
             "## Why engagement is mid",
-            _bullets(leaking[:4] or winning[:3], "Need more in-window posts before we call the heat."),
+            _bullets(why_mid, "Need more in-window posts before we call the heat."),
             "",
             "## Gaps they own",
-            _bullets(leaking[-3:] or mix_lines[:3], "No gap call until the mix fills in."),
+            _bullets(gaps, "No gap call until the mix fills in."),
             "",
-            "## Format mix",
+            "## Platform evals",
+            _bullets(platform_lines, "No platform stats in this window."),
+            "",
+            "## Format & creative read",
             _bullets(mix_lines, "No format mix yet — the window is empty."),
             "",
             "## This week's plays",
@@ -195,6 +268,7 @@ def _fallback_reports(facts: dict[str, Any], brand_name: str) -> list[IntelSecti
             f"{row.get('likes', 0)} likes / {row.get('comments', 0)} comments"
         )
         sniper_lines.append(f"- [{line}]({href})" if href else f"- {line}")
+    platform_lines = [f"- {line}" for line in _platform_eval_lines(facts)]
     return [
         IntelSection(
             id="plays",
@@ -235,6 +309,28 @@ def _fallback_reports(facts: dict[str, Any], brand_name: str) -> list[IntelSecti
                     *(sniper_lines or ["- No rival permalinks in this window."]),
                     "- Human delays 10–15s. One hop. You approved this.",
                     "- YouTube comments stay out of scope.",
+                ]
+            ),
+        ),
+        IntelSection(
+            id="platforms",
+            title="Platform evals",
+            markdown="\n".join(
+                [
+                    "## Platform evals",
+                    *(platform_lines or ["- No platform stats yet — scout first."]),
+                    "- Treat each platform as its own arena: cadence, heat, and comment rate.",
+                ]
+            ),
+        ),
+        IntelSection(
+            id="competitive",
+            title="Head-to-head",
+            markdown="\n".join(
+                [
+                    f"## Head-to-head — {brand_name}",
+                    *(platform_lines[:8] or ["- Need rival + brand posts in-window."]),
+                    "- Steal the move that already has heat; don't invent a new language.",
                 ]
             ),
         ),
@@ -281,10 +377,12 @@ def fallback_intel(facts: dict[str, Any], brand_name: str) -> IntelReport:
             if companies
             else ["Not enough in-window posts to roast you yet."]
         ),
-        why_engagement_mid=leaking[:3],
-        gaps=leaking[-2:],
+        why_engagement_mid=leaking[1:4] or leaking[:3],
+        gaps=leaking[2:5] or leaking[-2:],
         plays=plays,
         sniper_bait=sniper,
+        agents_used=[],
+        narration="fallback",
     )
 
 
@@ -292,10 +390,53 @@ def _nonzero(value: object) -> bool:
     return value not in (None, "", [], {})
 
 
-def _merge_intel(fallback: IntelReport, data: dict[str, Any]) -> IntelReport:
+def _bullet_lines(markdown: str) -> list[str]:
+    return [
+        line.strip().lstrip("-* ").strip().lower()
+        for line in (markdown or "").splitlines()
+        if line.strip().startswith(("-", "*"))
+    ]
+
+
+def markdown_passes_quality(candidate: str, *, fallback: str, platforms: list[str]) -> bool:
+    """Reject empty / template-clone / thin agent output so we can retry or fall back."""
+    text = (candidate or "").strip()
+    if len(text) < 500:
+        return False
+    low = text.lower()
+    if not low.startswith("# intel brief"):
+        return False
+    heading_hits = sum(1 for needle in _REQUIRED_HEADINGS if needle in low)
+    if heading_hits < 6:
+        return False
+    bullets = _bullet_lines(text)
+    if len(bullets) < 16:
+        return False
+    unique = {b for b in bullets if len(b) > 12}
+    if len(unique) < 12:
+        return False
+    fb_bullets = set(_bullet_lines(fallback))
+    if fb_bullets:
+        overlap = len(unique & fb_bullets) / max(1, len(unique))
+        if overlap > 0.55:
+            return False
+    if platforms:
+        covered = sum(1 for p in platforms if p in low)
+        if covered < max(1, min(len(platforms), 2)):
+            return False
+    return True
+
+
+def _merge_intel(
+    fallback: IntelReport,
+    data: dict[str, Any],
+    *,
+    agents_used: list[str],
+    narration: Literal["agent", "fallback"],
+) -> IntelReport:
     base = fallback.model_dump()
     for key, value in data.items():
-        if key == "reports":
+        if key in {"reports", "agents_used", "narration"}:
             continue
         if _nonzero(value):
             base[key] = value
@@ -303,6 +444,8 @@ def _merge_intel(fallback: IntelReport, data: dict[str, Any]) -> IntelReport:
     base["reports"] = [section.model_dump() for section in reports]
     if not str(base.get("markdown") or "").strip():
         base["markdown"] = fallback.markdown
+    base["agents_used"] = agents_used
+    base["narration"] = narration
     return IntelReport.model_validate(base)
 
 
@@ -310,21 +453,31 @@ def _reports_from(data: dict[str, Any], fallback: list[IntelSection]) -> list[In
     raw = data.get("reports")
     if not isinstance(raw, list) or not raw:
         return fallback
-    out: list[IntelSection] = []
+    by_id = {section.id: section for section in fallback}
     for item in raw:
         if not isinstance(item, dict):
             continue
         markdown = str(item.get("markdown") or "").strip()
         if not markdown:
             continue
-        out.append(
-            IntelSection(
-                id=str(item.get("id") or f"r{len(out)}"),
-                title=str(item.get("title") or "Brief"),
-                markdown=markdown,
-            )
+        section_id = str(item.get("id") or f"r{len(by_id)}")
+        by_id[section_id] = IntelSection(
+            id=section_id,
+            title=str(item.get("title") or by_id.get(section_id, IntelSection(id=section_id, title="Brief", markdown="")).title),
+            markdown=markdown,
         )
-    return out or fallback
+    # Keep a stable order: plays, format, sniper, platforms, competitive, then extras.
+    order = ["plays", "format", "sniper", "platforms", "competitive"]
+    ordered: list[IntelSection] = []
+    seen: set[str] = set()
+    for key in order:
+        if key in by_id:
+            ordered.append(by_id[key])
+            seen.add(key)
+    for key, section in by_id.items():
+        if key not in seen:
+            ordered.append(section)
+    return ordered or fallback
 
 
 async def _complete_json(
@@ -337,26 +490,35 @@ async def _complete_json(
     try:
         raw = await provider.complete(
             [Message(role="system", content=system), Message(role="user", content=user)],
-            temperature=0.3,
+            temperature=0.35,
             max_tokens=max_tokens,
             reasoning_effort="low",
         )
         return parse_json_object(raw)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("intel agent JSON parse/complete failed: %s", exc)
         return {}
+
+
+def _facts_header(request: IntelRequest, facts: dict[str, Any]) -> str:
+    platforms = _platforms_in_facts(facts)
+    packed = json.dumps(facts, ensure_ascii=False)[:18000]
+    must = ", ".join(platforms) if platforms else "none yet"
+    return (
+        f"Brand: {request.brand_name}\n"
+        f"Voice: {request.voice_notes or 'sharp, human'}\n"
+        f"Forbidden: {request.forbidden_claims or 'none listed'}\n"
+        f"{PLAY_CALLER_HINT}\n"
+        f"MUST evaluate platforms: {must}\n\n"
+        f"FACTS (source of truth — evaluate, do not reprint):\n{packed}"
+    )
 
 
 async def generate_intel(request: IntelRequest, provider: LLMProvider) -> IntelReport:
     facts = request.facts or {}
     fallback = fallback_intel(facts, request.brand_name)
-    packed = json.dumps(facts, ensure_ascii=False)[:16000]
-    header = (
-        f"Brand: {request.brand_name}\n"
-        f"Voice: {request.voice_notes or 'sharp, human'}\n"
-        f"Forbidden: {request.forbidden_claims or 'none listed'}\n"
-        f"{PLAY_CALLER_HINT}\n\n"
-        f"FACTS (source of truth):\n{packed}"
-    )
+    platforms = _platforms_in_facts(facts)
+    header = _facts_header(request, facts)
     chief_user = (
         "JSON schema keys: scoreboard_blurb, markdown, "
         "good_at[], fumbling[], why_engagement_mid[], gaps[], "
@@ -364,13 +526,62 @@ async def generate_intel(request: IntelRequest, provider: LLMProvider) -> IntelR
         f"{header}"
     )
     play_user = header
-    chief_data, play_data = await asyncio.gather(
-        _complete_json(provider, system=INTEL_CHIEF, user=chief_user, max_tokens=3500),
-        _complete_json(provider, system=PLAY_CALLER, user=play_user, max_tokens=2200),
+    platform_user = header
+
+    chief_data, play_data, platform_data = await asyncio.gather(
+        _complete_json(provider, system=INTEL_CHIEF, user=chief_user, max_tokens=4500),
+        _complete_json(provider, system=PLAY_CALLER, user=play_user, max_tokens=2800),
+        _complete_json(provider, system=PLATFORM_SCOUT, user=platform_user, max_tokens=3200),
     )
-    merged = dict(chief_data)
-    if isinstance(play_data.get("reports"), list) and play_data["reports"]:
-        merged["reports"] = play_data["reports"]
-    elif isinstance(chief_data.get("reports"), list) and chief_data["reports"]:
-        merged["reports"] = chief_data["reports"]
-    return _merge_intel(fallback, merged)
+
+    agents_used: list[str] = []
+    if chief_data:
+        agents_used.append("intel_chief")
+    if play_data.get("reports"):
+        agents_used.append("play_caller")
+    if platform_data.get("reports"):
+        agents_used.append("platform_scout")
+
+    # One retry if chief markdown is thin / template-clone (common with gpt-oss empty JSON).
+    markdown = str(chief_data.get("markdown") or "").strip()
+    if not markdown_passes_quality(markdown, fallback=fallback.markdown, platforms=platforms):
+        retry_user = (
+            chief_user
+            + "\n\nRETRY: Your previous draft failed quality. "
+            "Write a NEW evaluative brief with 25+ distinct bullets. "
+            "Do not copy FACTS lines. Cover every MUST-evaluate platform."
+        )
+        retry = await _complete_json(
+            provider, system=INTEL_CHIEF, user=retry_user, max_tokens=4500
+        )
+        if retry:
+            chief_data = {**chief_data, **retry}
+            markdown = str(chief_data.get("markdown") or "").strip()
+            if "intel_chief" not in agents_used:
+                agents_used.append("intel_chief")
+
+    merged: dict[str, Any] = dict(chief_data)
+    report_chunks: list[Any] = []
+    for blob in (play_data, platform_data, chief_data):
+        raw = blob.get("reports")
+        if isinstance(raw, list):
+            report_chunks.extend(raw)
+    if report_chunks:
+        merged["reports"] = report_chunks
+
+    agent_ok = markdown_passes_quality(
+        str(merged.get("markdown") or ""),
+        fallback=fallback.markdown,
+        platforms=platforms,
+    )
+    if not agent_ok:
+        # Keep structured fields / agent reports if present, but stick to fact markdown.
+        merged.pop("markdown", None)
+        narration: Literal["agent", "fallback"] = "fallback"
+        if not agents_used:
+            agents_used = []
+        logger.info("intel chief markdown failed quality gate — using fact brief + agent tabs if any")
+    else:
+        narration = "agent"
+
+    return _merge_intel(fallback, merged, agents_used=agents_used, narration=narration)
