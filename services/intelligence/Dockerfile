@@ -7,7 +7,7 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-COPY services/intelligence/pyproject.toml ./
+COPY services/intelligence/pyproject.toml services/intelligence/uv.lock ./
 RUN uv sync --no-install-project --no-dev
 
 COPY services/intelligence/app ./app
