@@ -231,8 +231,6 @@ export function DiscoveryReport({
   useEffect(() => {
     if (!models.readyText) return;
     let cancelled = false;
-    setGeminiIntel(null);
-    setIntelFetchError(null);
     void generateIntelReport({
       facts,
       brand_name: brand.displayName || "the brand",
@@ -408,7 +406,11 @@ export function DiscoveryReport({
               size="sm"
               variant="outline"
               disabled={!models.readyText || intelBusy}
-              onClick={() => setIntelTick((n) => n + 1)}
+              onClick={() => {
+                setGeminiIntel(null);
+                setIntelFetchError(null);
+                setIntelTick((n) => n + 1);
+              }}
             >
               Regenerate intel
             </Button>
