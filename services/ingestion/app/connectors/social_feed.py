@@ -35,7 +35,7 @@ from app.connectors.social_feed_parse import (
     posted_at_from_url,
     settle_page,
 )
-from app.connectors.social_profile.browser import BrowserSession
+from app.connectors.social_profile.browser import BrowserSession, await_or_abandon
 from app.connectors.social_profile.targets import ProfileTarget
 from app.date_window import DateWindow
 from app.objectstore import ObjectStore
@@ -185,9 +185,9 @@ class SocialFeedConnector:
     async def _scout_target_isolated(self, target: ProfileTarget, *, record: bool) -> None:
         platform = normalize_platform(target.platform or "web")
         try:
-            await asyncio.wait_for(
+            await await_or_abandon(
                 self._scout_with_oss_then_browser(target, record=record),
-                timeout=_PLATFORM_BUDGET_S,
+                _PLATFORM_BUDGET_S,
             )
         except TimeoutError:
             await self._emit(
@@ -306,9 +306,9 @@ class SocialFeedConnector:
             self._oss_heartbeat(platform=platform, stop=stop)
         )
         try:
-            return await asyncio.wait_for(
+            return await await_or_abandon(
                 self._oss_fetch(platform, handle=handle, url=url),
-                timeout=_OSS_BUDGET_S,
+                _OSS_BUDGET_S,
             )
         except TimeoutError:
             raise TimeoutError(f"oss timed out after {_OSS_BUDGET_S}s") from None
@@ -347,21 +347,19 @@ class SocialFeedConnector:
                 )
             },
         )
-        async with BrowserSession(
-            headless=self._headless,
-            record=record,
-            cookies=cookies,
-            storage_state=storage_state,
-        ) as session:
-            if record:
-                self._session = session
-            assert session.page is not None
-            stop = asyncio.Event()
-            hb = asyncio.create_task(
-                self._oss_heartbeat(platform=platform, stop=stop)
-            )
-            oss_ok = False
-            try:
+        stop = asyncio.Event()
+        hb = asyncio.create_task(self._oss_heartbeat(platform=platform, stop=stop))
+        oss_ok = False
+        try:
+            async with BrowserSession(
+                headless=self._headless,
+                record=record,
+                cookies=cookies,
+                storage_state=storage_state,
+            ) as session:
+                if record:
+                    self._session = session
+                assert session.page is not None
                 await self._emit("nav", {"url": url, "platform": platform, "phase": "profile"})
                 try:
                     await session.page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_MS)
@@ -369,7 +367,7 @@ class SocialFeedConnector:
                 except Exception as exc:  # noqa: BLE001
                     await self._emit("error", {"detail": f"linkedin oss nav: {exc}"})
                 try:
-                    account, posts = await asyncio.wait_for(
+                    account, posts = await await_or_abandon(
                         fetch_linkedin_company_posts(
                             page=session.page,
                             run_id=self._run_id,
@@ -380,7 +378,7 @@ class SocialFeedConnector:
                             object_store=self._object_store,
                             max_posts=_MAX_POSTS,
                         ),
-                        timeout=_LINKEDIN_OSS_BUDGET_S,
+                        _LINKEDIN_OSS_BUDGET_S,
                     )
                     if posts:
                         await self._commit_oss_posts(account, posts, platform=platform)
@@ -411,18 +409,20 @@ class SocialFeedConnector:
                         "action",
                         {"detail": f"oss_fallback platform=linkedin reason={exc}"},
                     )
-            finally:
-                stop.set()
-                hb.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await hb
-            if oss_ok:
+                if oss_ok:
+                    if record and session.recorded_video_path:
+                        self._video_path = session.recorded_video_path
+                    return
+                await self._scout_target_browser(session, target)
                 if record and session.recorded_video_path:
                     self._video_path = session.recorded_video_path
-                return
-            await self._scout_target_browser(session, target)
-            if record and session.recorded_video_path:
-                self._video_path = session.recorded_video_path
+        except RuntimeError as exc:
+            await self._emit("error", {"detail": f"linkedin chromium: {exc}"})
+        finally:
+            stop.set()
+            hb.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb
         async with self._lock:
             if "browser" not in self._sources_used:
                 self._sources_used.append("browser")

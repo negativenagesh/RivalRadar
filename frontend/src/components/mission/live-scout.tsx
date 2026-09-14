@@ -404,6 +404,7 @@ export function LiveScout({
   );
   const [missingPlatforms, setMissingPlatforms] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const logEndRef = useRef<HTMLLIElement | null>(null);
   const liveShots = useMemo(
     () =>
       frames && frames.length > 0
@@ -423,6 +424,9 @@ export function LiveScout({
   const shots = useMemo(() => mergeShots(liveShots, persistedShots), [liveShots, persistedShots]);
   const ytdlpIntel = useMemo(() => ytdlpIntelFromEvents(events), [events]);
   const logEvents = useMemo(() => operatorLogEvents(events), [events]);
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ block: "end" });
+  }, [logEvents.length]);
 
   const brandTargets = useMemo(() => targets.filter((t) => t.role === "brand"), [targets]);
   const rivalRows = useMemo(() => {
@@ -756,7 +760,11 @@ export function LiveScout({
               </li>
             )}
             {logEvents.map((ev, i) => (
-              <li key={`${ev.sequence}-${i}`} className="text-muted-foreground">
+              <li
+                key={`${ev.sequence}-${i}`}
+                className="text-muted-foreground"
+                ref={i === logEvents.length - 1 ? logEndRef : undefined}
+              >
                 <span className="text-primary">{ev.step_type}</span> {eventDetail(ev)}
               </li>
             ))}

@@ -20,7 +20,8 @@ WORKDIR /build/services/ingestion
 
 COPY --from=builder --chown=appuser:appuser /build /build
 ENV PATH="/build/services/ingestion/.venv/bin:$PATH" \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    CONNECT_IN_DOCKER=1
 
 RUN playwright install --with-deps chromium && \
     apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
