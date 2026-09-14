@@ -1,7 +1,14 @@
-from app.creative import CreativeRequest, generate_creative
+from app.creative import CreativeRequest, _looks_like_metric_overlay, generate_creative
 from httpx import AsyncClient
 
 from tests.fakes import FakeLLMProvider
+
+
+def test_metric_overlay_detector() -> None:
+    assert _looks_like_metric_overlay("Smartly: 18 Likes")
+    assert _looks_like_metric_overlay("0 Comments. Pixis: Real Action")
+    assert not _looks_like_metric_overlay("Crickets booked the venue")
+    assert not _looks_like_metric_overlay("Their launch RSVP'd alone")
 
 
 async def test_generate_comment_creative() -> None:

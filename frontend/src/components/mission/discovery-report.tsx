@@ -586,11 +586,10 @@ export function DiscoveryReport({
           writes the caption; {imageModelLabel(models.imageModel)} paints the frame. No rival logos.
         </p>
         <p className="rounded-xl border border-border/50 bg-background/30 px-3 py-2 text-xs text-muted-foreground">
-          Context used: brand dossier (name, voice, category, ICP, pillars, preferred formats,
-          forbidden claims) + scout roast pack (your metrics vs each rival — posts, engagement,
-          visual%, cadence, platforms), format mix, themes, winning/leaking lines, and rival/brand
-          post receipts (caption, heat, hasMedia). Rival logos and post images are never painted —
-          only metrics/themes fuel the roast.
+          Context used as joke fuel (not painted literally): brand dossier + scout roast pack (your
+          metrics vs each rival, visual%, cadence, themes, post receipts). Memes invent absurdist
+          metaphors about rival flaws — no laptop/dashboard scoreboards, no “Rival: N Likes”
+          overlays. Logos and rival post art stay out of the frame.
         </p>
         <div className="flex flex-wrap gap-2">
           {STUDIO_FORMATS.map((fmt) => {

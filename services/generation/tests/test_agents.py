@@ -36,11 +36,12 @@ def test_format_agents_include_voice_guard_rules() -> None:
     assert "no fake metrics" in FORMAT_DIRECTOR.lower()
     assert "no rival" in blob.lower()
     assert "Voice Guard" in VOICE_GUARD or "forbidden" in VOICE_GUARD.lower()
-    assert "Gen Z" in MEME_LORD or "GenZ" in MEME_LORD
+    assert "Gen Z" in MEME_LORD or "Gen-Z" in MEME_LORD or "GenZ" in MEME_LORD
     assert "letter-perfect" in IMAGE_NEGATIVES.lower() or "perfect English spelling" in IMAGE_NEGATIVES
-    assert "ZERO readable text" in MEME_LORD or "no other readable text" in FORMAT_SPECS["meme"].lower()
-    assert "ROAST" in MEME_LORD.upper() or "roast" in MEME_LORD
+    assert "laptop" in IMAGE_NEGATIVES.lower() or "dashboard" in MEME_LORD.lower()
+    assert "JOKE FUEL" in MEME_LORD or "joke fuel" in MEME_LORD.lower()
     assert "NEVER invent metrics" in MEME_LORD or "never invent metrics" in MEME_LORD.lower()
+    assert "18 Likes" in MEME_LORD or "scoreboard" in MEME_LORD.lower()
 
 
 def test_comment_sniper_is_approve_only_human() -> None:
