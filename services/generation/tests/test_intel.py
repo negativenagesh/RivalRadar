@@ -1,3 +1,5 @@
+import json
+
 from app.creative import CreativeRequest, generate_creative
 from app.intel import (
     IntelRequest,
@@ -7,7 +9,6 @@ from app.intel import (
 )
 
 from tests.fakes import FakeLLMProvider
-import json
 
 _RICH_BRIEF = """# Intel brief — Pixis
 
