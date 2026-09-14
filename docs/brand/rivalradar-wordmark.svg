@@ -1,17 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="120" viewBox="0 0 640 120" role="img" aria-label="RivalRadar">
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="96" viewBox="0 0 400 96" role="img" aria-label="RivalRadar">
   <title>RivalRadar</title>
-  <!-- Soft radar mark matching frontend electric-lime accent -->
-  <g transform="translate(48,60)" fill="none" stroke="#a3e635" stroke-width="3">
-    <circle r="34" opacity="0.35"/>
-    <circle r="22" opacity="0.55"/>
-    <circle r="10" opacity="0.9"/>
-    <line x1="-40" y1="0" x2="40" y2="0" opacity="0.5"/>
-    <line x1="0" y1="-40" x2="0" y2="40" opacity="0.5"/>
-    <path d="M0 0 L28 -18" stroke-width="4" stroke-linecap="round"/>
-    <circle cx="28" cy="-18" r="4" fill="#a3e635" stroke="none"/>
+  <!-- Tight viewBox so GitHub &lt;p align=center&gt; actually centers the glyph (no empty right pad). -->
+  <g transform="translate(36,48)" fill="none" stroke="#65a30d" stroke-width="3">
+    <circle r="30" opacity="0.35"/>
+    <circle r="19" opacity="0.55"/>
+    <circle r="8" opacity="0.9"/>
+    <line x1="-34" y1="0" x2="34" y2="0" opacity="0.5"/>
+    <line x1="0" y1="-34" x2="0" y2="34" opacity="0.5"/>
+    <path d="M0 0 L24 -16" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="24" cy="-16" r="3.5" fill="#65a30d" stroke="none"/>
   </g>
-  <!-- Wordmark: Rival (white) + Radar (lime) like frontend NavBar / landing -->
-  <text x="110" y="72" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="52" font-weight="800" letter-spacing="-1.5">
-    <tspan fill="#f4f4f5">Rival</tspan><tspan fill="#a3e635">Radar</tspan>
+  <text
+    x="82"
+    y="58"
+    font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+    font-size="44"
+    font-weight="800"
+    letter-spacing="-1.2"
+  >
+    <tspan fill="#18181b">Rival</tspan><tspan fill="#65a30d">Radar</tspan>
   </text>
 </svg>
