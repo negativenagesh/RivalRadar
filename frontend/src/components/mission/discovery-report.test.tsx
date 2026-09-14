@@ -33,6 +33,7 @@ const facts: IntelFacts = {
       role: "brand",
       posts: 2,
       avgEngagement: 4,
+      visualPct: 50,
       platforms: [
         {
           platform: "linkedin",
@@ -48,6 +49,7 @@ const facts: IntelFacts = {
     },
   ],
   formatMix: [{ format: "founder_post", count: 2, pct: 100 }],
+  topThemes: [],
   topPosts: [],
   bottomPosts: [],
   winningBecause: ["Smartly on linkedin: 1 posts, avg 80 likes"],
@@ -66,6 +68,7 @@ const facts: IntelFacts = {
       format: "founder_post",
       score: 140,
       hasMedia: true,
+      themes: [],
     },
   ],
 };

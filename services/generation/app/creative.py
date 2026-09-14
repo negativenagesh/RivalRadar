@@ -36,6 +36,29 @@ class CreativeRequest(BaseModel):
     tone: str | None = None
     post_url: str | None = None
     facts_json: str | None = None
+    # Optional brand dossier (also often embedded inside facts_json roast pack).
+    brand_category: str = ""
+    ideal_customer: str = ""
+    content_pillars: str = ""
+    preferred_formats: list[str] = Field(default_factory=list)
+    # 1-based index when the operator asks for a batch of memes/studio frames.
+    variant: int = Field(default=1, ge=1, le=3)
+    variant_count: int = Field(default=1, ge=1, le=3)
+
+
+def _brand_dossier_lines(request: CreativeRequest) -> str:
+    lines = [f"Brand name: {request.brand_name}", f"Voice: {request.voice_notes or 'on-brand, sharp, human'}"]
+    if request.brand_category:
+        lines.append(f"Category: {request.brand_category}")
+    if request.ideal_customer:
+        lines.append(f"ICP: {request.ideal_customer}")
+    if request.content_pillars:
+        lines.append(f"Content pillars: {request.content_pillars}")
+    if request.preferred_formats:
+        lines.append(f"Preferred formats: {', '.join(request.preferred_formats)}")
+    if request.forbidden_claims:
+        lines.append(f"Forbidden claims: {request.forbidden_claims}")
+    return "\n".join(lines)
 
 
 class CreativeResponse(BaseModel):
@@ -80,7 +103,9 @@ async def _maybe_image(
 async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> CreativeResponse:
     report_excerpt = (request.report_markdown or "")[:3500]
     voice = request.voice_notes or "on-brand, sharp, human"
-    facts = (request.facts_json or "")[:4000]
+    # Memes need denser scout receipts (cadence, format mix, rival heat) without naming rivals in-frame.
+    facts_cap = 9000 if (request.format or "") == "meme" else 7000 if request.kind == "studio" else 4000
+    facts = (request.facts_json or "")[:facts_cap]
     platform = (request.platform or "linkedin").lower()
     if platform == "twitter":
         platform = "x"
@@ -135,32 +160,78 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
         crop = {"instagram": "4:5", "linkedin": "1:1", "x": "1:1", "youtube": "16:9"}.get(
             platform, "1:1"
         )
-        user = (
-            f"Brand: {request.brand_name}\nVoice: {voice}\nPlatform: {platform} crop {crop}\n"
-            f"Format: {fmt}\nSpec: {spec}\nSpice: {request.spice}/5 ({_spice_label(request.spice)})\n"
-            f"Forbidden: {request.forbidden_claims or 'none'}\n"
-            f"Facts:\n{facts or report_excerpt}\n"
-        )
+        variant_line = ""
+        if request.variant_count > 1 or request.variant > 1:
+            variant_line = (
+                f"Batch variant {request.variant} of {request.variant_count}: "
+                "make a DISTINCT angle/punchline from other variants in this batch.\n"
+            )
+        dossier = _brand_dossier_lines(request)
+        if fmt == "meme":
+            user = (
+                f"{dossier}\n"
+                f"Platform: {platform} crop {crop}\n"
+                f"Format: meme\nSpec: {spec}\n"
+                f"Spice: {request.spice}/5 ({_spice_label(request.spice)})\n"
+                f"{variant_line}"
+                "MISSION: write a viral roast meme for OUR brand that dunks on rivals using REAL "
+                "scout receipts (metrics, cadence, format mix, visualPct, caption themes).\n"
+                "USER PROMPT CONTEXT (use all of it):\n"
+                "- Brand dossier above (voice, category, ICP, pillars, forbidden claims)\n"
+                "- ROAST_PACK JSON below: brand scoreboard, each rival's metrics + whyTheyMatter, "
+                "formatMix, topThemes, winningBecause/leakingBecause, rivalReceipts/brandReceipts "
+                "(caption + likes/comments + hasMedia + themes). No media URLs — describe visual "
+                "energy from hasMedia/format only.\n"
+                "IMAGE RULES: original still only; NEVER rival logos, NEVER recreate their posts/"
+                "product UI; overlay letter-perfect; no fake dashboard text.\n"
+                f"ROAST_PACK:\n{facts or report_excerpt}\n"
+            )
+        else:
+            user = (
+                f"{dossier}\n"
+                f"Platform: {platform} crop {crop}\n"
+                f"Format: {fmt}\nSpec: {spec}\n"
+                f"Spice: {request.spice}/5 ({_spice_label(request.spice)})\n"
+                f"{variant_line}"
+                "Use brand voice + scout facts (companies, platforms, cadence, formatMix, "
+                "winning/leaking, topPosts captions/heat). Never put rival logos in image_brief.\n"
+                f"Facts:\n{facts or report_excerpt}\n"
+            )
         raw = await provider.complete(
             [Message(role="system", content=director), Message(role="user", content=user)],
-            temperature=0.85 if fmt != "meme" else 0.95,
+            temperature=0.85 if fmt != "meme" else 1.05,
             max_tokens=700,
         )
         try:
             data = parse_json_object(raw)
         except Exception:  # noqa: BLE001
-            data = {"caption": raw.strip(), "image_brief": raw.strip(), "why_slaps": "", "overlay_text": "", "hashtags": []}
+            data = {
+                "caption": raw.strip(),
+                "image_brief": raw.strip(),
+                "why_slaps": "",
+                "overlay_text": "",
+                "hashtags": [],
+            }
         caption = await voice_guard(
             str(data.get("caption") or "").strip(),
             forbidden=request.forbidden_claims,
             provider=provider,
         )
+        overlay = " ".join(str(data.get("overlay_text") or "").split())[:80]
         image_brief = str(data.get("image_brief") or caption)
-        brief = (
-            f"{image_brief}\nAspect {crop}. Single frame. Overlay: "
-            f"{data.get('overlay_text') or 'none'}. {IMAGE_NEGATIVES}"
-        )
-        # Reuse the director's image_brief — a second text complete() burns free-tier RPM.
+        if fmt == "meme":
+            brief = (
+                f"{image_brief}\n"
+                f"Aspect {crop}. Single cinematic meme still. "
+                f'Render EXACT overlay text letter-perfect: "{overlay or "no text"}". '
+                "Do not invent additional words, UI labels, or dashboard text. "
+                f"{IMAGE_NEGATIVES}"
+            )
+        else:
+            brief = (
+                f"{image_brief}\nAspect {crop}. Single frame. Overlay: "
+                f"{overlay or 'none'}. {IMAGE_NEGATIVES}"
+            )
         concept = image_brief or caption or "lime-on-black editorial still"
         mime, b64, image_error = await _maybe_image(
             provider, brief, request.brand_name, aspect_ratio=crop
@@ -175,7 +246,7 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
             image_data_base64=b64,
             image_error=image_error,
             why_slaps=str(data.get("why_slaps") or "") or None,
-            overlay_text=str(data.get("overlay_text") or "") or None,
+            overlay_text=overlay or None,
             hashtags=tags,
         )
 

@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+### Changed
+- Format studio memes: Gen-Z Meme Lord prompt (viral absurdity, letter-perfect overlay spelling, no gibberish UI text in-frame); operators can queue **1–3 memes** sequentially with per-slot loading; gateway intel/creative timeouts raised (240s / 180s) to stop `ReadTimeout` on multi-agent intel and image paints.
+- Meme generation now feeds a **brand + rival roast pack** (dossier: category/ICP/pillars; scoreboard metrics + visual%; format mix/themes; rival/brand post receipts). Captions may name rivals and cite real scout numbers; painted frames still never include rival logos or cloned post art.
+
 ### Added
 - Operator Models chip can paint with **Agnes Image 2.5 Flash** (`agnes-image-2.5-flash` via `POST /v1/images/generations`, 1K + social ratios) when Gemini is absent. Test & save pings a real 1K square. NVIDIA FLUX remains a fallback; ModelScope is not wired (Alibaba Cloud bind required).
 - Phase 8 final docs/CI pass: filled [PORTFOLIO_NOTES.md](PORTFOLIO_NOTES.md) with interview-ready hard-parts / improvements / scale limits; README status updated to reflect an end-to-end runnable pipeline; frontend CI runs `next typegen` before `tsc` plus unit tests (`npm test`); CONTRIBUTING covers frontend test/typegen workflow.

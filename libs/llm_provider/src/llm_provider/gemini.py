@@ -180,7 +180,7 @@ class GeminiOpenAICompatProvider:
             },
         }
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
+            async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
                     url,
                     headers={

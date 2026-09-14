@@ -92,6 +92,8 @@ describe("buildIntelFacts", () => {
     expect(facts.sniperQueue.length).toBeGreaterThan(0);
     expect(facts.sniperQueue[0]?.href).toContain("linkedin.com");
     expect(facts.leakingBecause.join(" ")).toMatch(/engagement|Cadence|Comment/i);
+    expect(facts.companies.every((c) => typeof c.visualPct === "number")).toBe(true);
+    expect(Array.isArray(facts.topThemes)).toBe(true);
   });
 
   it("falls back to fact cards when Gemini is down", () => {
