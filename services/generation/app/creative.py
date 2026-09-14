@@ -75,7 +75,40 @@ class CreativeResponse(BaseModel):
 
 def _spice_label(spice: int) -> str:
     n = max(1, min(5, spice))
-    return {1: "wholesome hype", 2: "witty", 3: "witty", 4: "petty", 5: "unhinged-but-safe"}[n]
+    return {
+        1: "wholesome absurdist",
+        2: "witty",
+        3: "petty roast",
+        4: "HARD chaotic dunk",
+        5: "unhinged brainrot (safe)",
+    }[n]
+
+
+def _meme_temperature(spice: int) -> float:
+    n = max(1, min(5, spice))
+    return {1: 0.95, 2: 1.0, 3: 1.1, 4: 1.2, 5: 1.25}[n]
+
+
+def _looks_like_metric_overlay(overlay: str) -> bool:
+    t = overlay.lower()
+    if not t:
+        return False
+    metricish = any(
+        token in t
+        for token in (
+            "likes",
+            "comments",
+            "views",
+            "shares",
+            "engagement",
+            "avg",
+            "posts/day",
+            "cadence",
+        )
+    )
+    has_digit = any(ch.isdigit() for ch in t)
+    colon_scoreboard = ":" in t and has_digit
+    return colon_scoreboard or (metricish and has_digit)
 
 
 async def _maybe_image(
@@ -172,18 +205,17 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
                 f"{dossier}\n"
                 f"Platform: {platform} crop {crop}\n"
                 f"Format: meme\nSpec: {spec}\n"
-                f"Spice: {request.spice}/5 ({_spice_label(request.spice)})\n"
+                f"Spice: {request.spice}/5 ({_spice_label(request.spice)}) — "
+                "at spice ≥ 4 the meme MUST feel HARD Gen-Z chaotic, not a corporate still.\n"
                 f"{variant_line}"
-                "MISSION: write a viral roast meme for OUR brand that dunks on rivals using REAL "
-                "scout receipts (metrics, cadence, format mix, visualPct, caption themes).\n"
-                "USER PROMPT CONTEXT (use all of it):\n"
-                "- Brand dossier above (voice, category, ICP, pillars, forbidden claims)\n"
-                "- ROAST_PACK JSON below: brand scoreboard, each rival's metrics + whyTheyMatter, "
-                "formatMix, topThemes, winningBecause/leakingBecause, rivalReceipts/brandReceipts "
-                "(caption + likes/comments + hasMedia + themes). No media URLs — describe visual "
-                "energy from hasMedia/format only.\n"
-                "IMAGE RULES: original still only; NEVER rival logos, NEVER recreate their posts/"
-                "product UI; overlay letter-perfect; no fake dashboard text.\n"
+                "MISSION: invent a CRAZY visual metaphor that roasts a SPECIFIC rival flaw.\n"
+                "ROAST_PACK is intelligence FUEL only — who to dunk and why. "
+                "Do NOT paint the JSON. Do NOT put metrics in the overlay "
+                '(banned patterns: "Rival: 18 Likes", "0 Comments", scoreboard comparisons).\n'
+                "Overlay = punchline joke (3–6 words). Caption may cite one real receipt number.\n"
+                "image_brief = absurdist metaphor still. BANNED frames: laptop, dashboard, charts, "
+                "Wi-Fi icon, coffee-cup war room, neon hacker desk, soft founder portrait.\n"
+                "Stay about the rival's real weakness from the pack — not a random unrelated bit.\n"
                 f"ROAST_PACK:\n{facts or report_excerpt}\n"
             )
         else:
@@ -199,7 +231,7 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
             )
         raw = await provider.complete(
             [Message(role="system", content=director), Message(role="user", content=user)],
-            temperature=0.85 if fmt != "meme" else 1.05,
+            temperature=_meme_temperature(request.spice) if fmt == "meme" else 0.85,
             max_tokens=700,
         )
         try:
@@ -218,13 +250,39 @@ async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> 
             provider=provider,
         )
         overlay = " ".join(str(data.get("overlay_text") or "").split())[:80]
+        if fmt == "meme" and _looks_like_metric_overlay(overlay):
+            # One retry when the model slips into scoreboard overlays.
+            retry_user = (
+                f"{user}\n"
+                f"REJECTED overlay (too metric/scoreboard): {overlay!r}\n"
+                "Rewrite with a HARD absurdist punchline. No digits-as-scoreboard. "
+                "No 'Brand: N Likes'. Keep the roast about the same rival flaw.\n"
+            )
+            raw2 = await provider.complete(
+                [Message(role="system", content=director), Message(role="user", content=retry_user)],
+                temperature=min(1.3, _meme_temperature(request.spice) + 0.1),
+                max_tokens=700,
+            )
+            try:
+                data2 = parse_json_object(raw2)
+                caption = await voice_guard(
+                    str(data2.get("caption") or caption).strip(),
+                    forbidden=request.forbidden_claims,
+                    provider=provider,
+                )
+                overlay2 = " ".join(str(data2.get("overlay_text") or "").split())[:80]
+                if overlay2 and not _looks_like_metric_overlay(overlay2):
+                    overlay = overlay2
+                    data = data2
+            except Exception:  # noqa: BLE001
+                pass
         image_brief = str(data.get("image_brief") or caption)
         if fmt == "meme":
             brief = (
                 f"{image_brief}\n"
-                f"Aspect {crop}. Single cinematic meme still. "
+                f"Aspect {crop}. HARD Gen-Z meme still — absurdist metaphor, NOT a workplace photo. "
                 f'Render EXACT overlay text letter-perfect: "{overlay or "no text"}". '
-                "Do not invent additional words, UI labels, or dashboard text. "
+                "Do not invent additional words. Do not draw charts, laptops, or dashboards. "
                 f"{IMAGE_NEGATIVES}"
             )
         else:
