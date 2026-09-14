@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { ingestionRecordingUrl } from "@/lib/api";
 import {
   filterFindingsPosts,
+  missionWindow,
   postVisualUrl,
 } from "@/lib/findings-filter";
 import { scoutWindowStatsFromEvents } from "@/lib/scout-window-stats";
@@ -405,7 +406,7 @@ export function LiveScout({
   );
   const [missingPlatforms, setMissingPlatforms] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const logEndRef = useRef<HTMLLIElement | null>(null);
+  const logListRef = useRef<HTMLUListElement | null>(null);
   const liveShots = useMemo(
     () =>
       frames && frames.length > 0
@@ -424,10 +425,17 @@ export function LiveScout({
   );
   const shots = useMemo(() => mergeShots(liveShots, persistedShots), [liveShots, persistedShots]);
   const windowStats = useMemo(() => scoutWindowStatsFromEvents(events), [events]);
+  const activeWindow = useMemo(
+    () => missionWindow({ dateFrom, dateTo, lookbackDays }),
+    [dateFrom, dateTo, lookbackDays],
+  );
   const ytdlpIntel = useMemo(() => ytdlpIntelFromEvents(events), [events]);
   const logEvents = useMemo(() => operatorLogEvents(events), [events]);
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ block: "end" });
+    const el = logListRef.current;
+    if (!el) return;
+    // Keep the log pinned to the latest hop without scrolling the page.
+    el.scrollTop = el.scrollHeight;
   }, [logEvents.length]);
 
   const brandTargets = useMemo(() => targets.filter((t) => t.role === "brand"), [targets]);
@@ -500,6 +508,12 @@ export function LiveScout({
 
       <div id="scout-lookback" className="space-y-3">
         <p className="font-display text-sm font-bold">Lookback window</p>
+        <p className="font-ui text-xs text-muted-foreground">
+          Active dates: <span className="text-foreground">{activeWindow.from}</span>
+          {" → "}
+          <span className="text-foreground">{activeWindow.to}</span>
+          {" · "}only posts in this range are downloaded into In-window posts.
+        </p>
         <div className="flex flex-wrap justify-center gap-2">
           {LOOKBACK_PRESETS.map((d) => (
             <button
@@ -753,7 +767,10 @@ export function LiveScout({
           <div className="font-ui border-b border-border/40 px-3 py-2 text-xs text-muted-foreground">
             event log · browser scout (yt-dlp runs parallel, quiet)
           </div>
-          <ul className="flex-1 space-y-1 overflow-y-auto p-3 font-ui text-[11px] leading-relaxed">
+          <ul
+            ref={logListRef}
+            className="flex-1 space-y-1 overflow-y-auto overscroll-contain p-3 font-ui text-[11px] leading-relaxed"
+          >
             {logEvents.length === 0 && (
               <li className="text-muted-foreground">
                 {priorActive || starting
@@ -762,11 +779,7 @@ export function LiveScout({
               </li>
             )}
             {logEvents.map((ev, i) => (
-              <li
-                key={`${ev.sequence}-${i}`}
-                className="text-muted-foreground"
-                ref={i === logEvents.length - 1 ? logEndRef : undefined}
-              >
+              <li key={`${ev.sequence}-${i}`} className="text-muted-foreground">
                 <span className="text-primary">{ev.step_type}</span> {eventDetail(ev)}
               </li>
             ))}
@@ -810,9 +823,7 @@ export function LiveScout({
             <p className="font-accent text-sm italic text-muted-foreground">
               {shots.length > 0
                 ? `${shots.length} posts in this lookback — image expands here, title opens the post.`
-                : dateFrom && dateTo
-                  ? `Waiting on posts for ${dateFrom} → ${dateTo}.`
-                  : `Waiting on posts for the last ${lookbackDays} days.`}
+                : `Waiting on posts for ${activeWindow.from} → ${activeWindow.to}.`}
             </p>
             {(windowStats.found > 0 || windowStats.skippedOutside > 0) && (
               <p className="font-ui mt-1 text-xs text-muted-foreground">
