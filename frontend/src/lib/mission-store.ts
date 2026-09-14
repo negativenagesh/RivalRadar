@@ -312,7 +312,7 @@ export function buildDiscoveryReport(input: {
   if (input.permissions.draftReplies) allowed.push("reply/response posts");
   if (input.permissions.draftTrendJack) allowed.push("trend-jack originals");
   if (input.permissions.suggestComments) allowed.push("comment suggestions (human approve)");
-  if (input.permissions.imageConcepts) allowed.push("Nano Banana post visuals");
+  if (input.permissions.imageConcepts) allowed.push("post visuals (Nano Banana / Agnes / FLUX)");
   if (input.permissions.carouselOutlines) allowed.push("carousel/thread outlines");
   if (input.permissions.comparisonSlides) allowed.push("internal comparison slides");
 

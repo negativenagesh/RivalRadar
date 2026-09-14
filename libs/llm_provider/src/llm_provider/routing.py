@@ -4,7 +4,7 @@ from llm_provider.base import ImageResult, LLMProvider, LLMProviderError, Messag
 
 
 class RoutingLLMProvider:
-    """Text from one vendor, pixels from another (Gemini Nano Banana or NVIDIA FLUX)."""
+    """Text from one vendor, pixels from Gemini, Agnes, or NVIDIA FLUX."""
 
     def __init__(self, text: LLMProvider, image: LLMProvider | None) -> None:
         self._text = text
@@ -42,8 +42,8 @@ class RoutingLLMProvider:
     ) -> ImageResult:
         if self._image is None:
             raise LLMProviderError(
-                "No image model. Paste Gemini for Nano Banana 2, or NVIDIA for FLUX. "
-                "DeepSeek Flash cannot paint a PNG.",
+                "No image model. Paste Gemini for Nano Banana 2, or Agnes for Image 2.5 Flash. "
+                "NVIDIA FLUX is a fallback. DeepSeek Flash cannot paint a PNG.",
                 status_code=400,
             )
         return await self._image.generate_image(

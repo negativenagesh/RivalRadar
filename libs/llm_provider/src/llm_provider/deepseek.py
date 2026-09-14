@@ -89,6 +89,6 @@ class DeepSeekProvider:
     ) -> ImageResult:
         raise LLMProviderError(
             "DeepSeek-V4.1-Flash understands images; it does not paint them. "
-            "Paste Gemini for Nano Banana 2 or NVIDIA for FLUX.",
+            "Paste Gemini for Nano Banana 2, Agnes for Image 2.5 Flash, or NVIDIA for FLUX.",
             status_code=400,
         )

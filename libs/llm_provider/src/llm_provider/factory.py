@@ -3,6 +3,10 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
+from llm_provider.agnes import DEFAULT_BASE_URL as AGNES_BASE
+from llm_provider.agnes import DEFAULT_IMAGE_MODEL as AGNES_MODEL
+from llm_provider.agnes import PING_PROMPT as AGNES_PING_PROMPT
+from llm_provider.agnes import AgnesImageProvider
 from llm_provider.base import LLMProvider, Message
 from llm_provider.deepseek import DEFAULT_BASE_URL as DEEPSEEK_BASE
 from llm_provider.deepseek import DEFAULT_MODEL as DEEPSEEK_MODEL
@@ -19,7 +23,7 @@ from llm_provider.nvidia import NvidiaFluxProvider, NvidiaGptOssProvider
 from llm_provider.routing import RoutingLLMProvider
 
 TEXT_MODELS = frozenset({"gemini", "deepseek", "gptoss"})
-IMAGE_MODELS = frozenset({"nano_banana", "nvidia_flux", "none"})
+IMAGE_MODELS = frozenset({"nano_banana", "agnes", "nvidia_flux", "none"})
 
 
 @lru_cache(maxsize=1)
@@ -92,11 +96,20 @@ def _flux(key: str) -> NvidiaFluxProvider:
     )
 
 
+def _agnes(key: str) -> AgnesImageProvider:
+    return AgnesImageProvider(
+        key,
+        base_url=os.environ.get("AGNES_BASE_URL", AGNES_BASE),
+        model=os.environ.get("AGNES_IMAGE_MODEL", AGNES_MODEL),
+    )
+
+
 def provider_from_operator(
     *,
     gemini_key: str | None = None,
     deepseek_key: str | None = None,
     nvidia_key: str | None = None,
+    agnes_key: str | None = None,
     text_model: str | None = None,
     image_model: str | None = None,
 ) -> LLMProvider:
@@ -104,11 +117,13 @@ def provider_from_operator(
     text_id = (text_model or "gemini").strip().lower()
     if text_id not in TEXT_MODELS:
         raise ValueError("Text model must be gemini, deepseek, or gptoss.")
+    gemini = (gemini_key or "").strip()
+    agnes = (agnes_key or "").strip()
     image_id = (image_model or "").strip().lower() or (
-        "nano_banana" if (gemini_key or "").strip() else "none"
+        "nano_banana" if gemini else "agnes" if agnes else "none"
     )
     if image_id not in IMAGE_MODELS:
-        raise ValueError("Image model must be nano_banana, nvidia_flux, or none.")
+        raise ValueError("Image model must be nano_banana, agnes, nvidia_flux, or none.")
 
     if text_id == "gemini":
         text: LLMProvider = _gemini(_need(gemini_key, "Gemini"))
@@ -119,9 +134,10 @@ def provider_from_operator(
 
     # Gemini key present → Nano Banana only (operator asked: use Gemini for pixels).
     image: LLMProvider | None
-    gemini = (gemini_key or "").strip()
     if gemini:
         image = text if text_id == "gemini" else _gemini(gemini)
+    elif image_id == "agnes":
+        image = _agnes(_need(agnes_key, "Agnes"))
     elif image_id == "nvidia_flux":
         image = _flux(_need(nvidia_key, "NVIDIA"))
     else:
@@ -144,8 +160,15 @@ async def ping_vendor(vendor: str, api_key: str) -> dict[str, str]:
     elif kind == "nvidia":
         provider = _gptoss(key)
         model = NVIDIA_TEXT_MODEL
+    elif kind == "agnes":
+        painter = _agnes(key)
+        image = await painter.generate_image(AGNES_PING_PROMPT, aspect_ratio="1:1")
+        if not image.data:
+            raise ValueError("Agnes painted an empty image. Try again.")
+        preview = f"{image.mime_type} {len(image.data)} bytes"
+        return {"vendor": kind, "model": AGNES_MODEL, "preview": preview}
     else:
-        raise ValueError("Vendor must be gemini, deepseek, or nvidia.")
+        raise ValueError("Vendor must be gemini, deepseek, nvidia, or agnes.")
     text = await provider.complete(ping, temperature=0.0, max_tokens=32, reasoning_effort="low")
     preview = (text or "").replace("\n", " ").strip()[:80]
     if not preview:

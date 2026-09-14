@@ -99,6 +99,7 @@ def _operator_headers(
     x_gemini_key: str | None,
     x_deepseek_key: str | None = None,
     x_nvidia_key: str | None = None,
+    x_agnes_key: str | None = None,
     x_text_model: str | None = None,
     x_image_model: str | None = None,
 ) -> dict[str, str]:
@@ -106,6 +107,7 @@ def _operator_headers(
     gemini = (x_gemini_key or "").strip()
     deepseek = (x_deepseek_key or "").strip()
     nvidia = (x_nvidia_key or "").strip()
+    agnes = (x_agnes_key or "").strip()
     text = (x_text_model or "").strip()
     image = (x_image_model or "").strip()
     if gemini:
@@ -114,11 +116,16 @@ def _operator_headers(
         headers["X-DeepSeek-Key"] = deepseek
     if nvidia:
         headers["X-Nvidia-Key"] = nvidia
+    if agnes:
+        headers["X-Agnes-Key"] = agnes
     if text:
         headers["X-Text-Model"] = text.lower()
     if image:
         headers["X-Image-Model"] = image.lower()
-    if not any(headers.get(k) for k in ("X-Gemini-Key", "X-DeepSeek-Key", "X-Nvidia-Key")):
+    if not any(
+        headers.get(k)
+        for k in ("X-Gemini-Key", "X-DeepSeek-Key", "X-Nvidia-Key", "X-Agnes-Key")
+    ):
         raise HTTPException(status_code=400, detail=GEMINI_MISSING)
     return headers
 
@@ -159,11 +166,17 @@ async def creative_generate(
     x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
     x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
     x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
     x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
     x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
 ) -> dict[str, object]:
     headers = _operator_headers(
-        x_gemini_key, x_deepseek_key, x_nvidia_key, x_text_model, x_image_model
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
     )
     return await generate_creative_content(body, operator_headers=headers)
 
@@ -174,11 +187,17 @@ async def intel_report(
     x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
     x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
     x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
     x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
     x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
 ) -> dict[str, object]:
     headers = _operator_headers(
-        x_gemini_key, x_deepseek_key, x_nvidia_key, x_text_model, x_image_model
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
     )
     return await generate_intel_report(body, operator_headers=headers)
 
@@ -189,16 +208,25 @@ async def llm_ping(
     x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
     x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
     x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
 ) -> dict[str, object]:
     vendor = str(body.get("vendor") or "").strip().lower()
     keep = {
         "gemini": "X-Gemini-Key",
         "deepseek": "X-DeepSeek-Key",
         "nvidia": "X-Nvidia-Key",
+        "agnes": "X-Agnes-Key",
     }.get(vendor)
     if not keep:
-        raise HTTPException(status_code=400, detail="Vendor must be gemini, deepseek, or nvidia.")
-    ping_headers = _operator_headers(x_gemini_key, x_deepseek_key, x_nvidia_key)
+        raise HTTPException(
+            status_code=400, detail="Vendor must be gemini, deepseek, nvidia, or agnes."
+        )
+    ping_headers = _operator_headers(
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+    )
     if keep not in ping_headers:
         raise HTTPException(status_code=400, detail=f"Paste your {vendor} API key to test it.")
     return await ping_generation_vendor(

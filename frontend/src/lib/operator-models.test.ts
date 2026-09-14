@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  AGNES_KEY_STORAGE,
   DEEPSEEK_KEY_STORAGE,
   NVIDIA_KEY_STORAGE,
   loadOperatorState,
@@ -20,6 +21,13 @@ describe("operator model routing", () => {
     window.localStorage.setItem(NVIDIA_KEY_STORAGE, "nvapi-dummy-key-1234");
     const state = loadOperatorState();
     expect(resolveImageModel(state)).toBe("nano_banana");
+  });
+
+  it("uses Agnes Image 2.5 Flash when Gemini is absent and an Agnes key exists", () => {
+    window.localStorage.setItem(NVIDIA_KEY_STORAGE, "nvapi-dummy-key-1234");
+    window.localStorage.setItem(AGNES_KEY_STORAGE, "sk-agnes-dummy-key-1234");
+    const state = loadOperatorState();
+    expect(resolveImageModel(state)).toBe("agnes");
   });
 
   it("uses FLUX when only an NVIDIA key is present", () => {

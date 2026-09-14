@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from llm_provider.agnes import AgnesImageProvider
 from llm_provider.base import LLMProviderError
 from llm_provider.chat_util import message_text
 from llm_provider.deepseek import DeepSeekProvider
@@ -105,6 +106,81 @@ async def test_flux_decodes_b64_json(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _Client.last_json["size"] == "768x1024"
 
 
+async def test_agnes_uses_1k_ratio_and_decodes_b64(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"data": [{"b64_json": "aGVsbG8="}]}
+
+    class _Client:
+        last_json: dict[str, object] | None = None
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str] | None = None,
+            json: dict[str, object] | None = None,
+        ) -> _Resp:
+            assert url.endswith("/images/generations")
+            type(self).last_json = json
+            return _Resp()
+
+    monkeypatch.setattr("llm_provider.agnes.httpx.AsyncClient", _Client)
+    image = await AgnesImageProvider("sk-agnes-test").generate_image(
+        "lime hoodie", aspect_ratio="4:5"
+    )
+    assert image.data == b"hello"
+    assert _Client.last_json is not None
+    assert _Client.last_json["model"] == "agnes-image-2.5-flash"
+    assert _Client.last_json["size"] == "1K"
+    assert _Client.last_json["ratio"] == "3:4"
+    assert _Client.last_json["return_base64"] is True
+
+
+async def test_agnes_falls_back_to_image_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Gen:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"data": [{"url": "https://cdn.example/out.png", "b64_json": None}]}
+
+    class _File:
+        status_code = 200
+        content = b"\x89PNG" + b"pixels"
+
+    class _Client:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, *args: object, **kwargs: object) -> _Gen:
+            return _Gen()
+
+        async def get(self, url: str) -> _File:
+            assert url == "https://cdn.example/out.png"
+            return _File()
+
+    monkeypatch.setattr("llm_provider.agnes.httpx.AsyncClient", _Client)
+    image = await AgnesImageProvider("sk-agnes-test").generate_image("hoodie")
+    assert image.mime_type == "image/png"
+    assert image.data.startswith(b"\x89PNG")
+
+
 def test_operator_routes_gemini_text_and_forces_nano_banana() -> None:
     stack = provider_from_operator(
         gemini_key="AIza-test",
@@ -138,6 +214,29 @@ def test_operator_gptoss_plus_flux_without_gemini() -> None:
     assert isinstance(stack, RoutingLLMProvider)
     assert isinstance(stack._text, NvidiaGptOssProvider)
     assert isinstance(stack._image, NvidiaFluxProvider)
+
+
+def test_operator_deepseek_plus_agnes_without_gemini() -> None:
+    stack = provider_from_operator(
+        deepseek_key="sk-test",
+        agnes_key="sk-agnes",
+        text_model="deepseek",
+        image_model="agnes",
+    )
+    assert isinstance(stack, RoutingLLMProvider)
+    assert isinstance(stack._text, DeepSeekProvider)
+    assert isinstance(stack._image, AgnesImageProvider)
+
+
+def test_operator_gemini_still_wins_over_agnes() -> None:
+    stack = provider_from_operator(
+        gemini_key="AIza-test",
+        agnes_key="sk-agnes",
+        text_model="gemini",
+        image_model="agnes",
+    )
+    assert isinstance(stack, RoutingLLMProvider)
+    assert stack._image is stack._text
 
 
 def test_operator_deepseek_only_has_no_image_backend() -> None:

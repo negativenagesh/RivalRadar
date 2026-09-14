@@ -3,23 +3,25 @@ import { GEMINI_KEY_EVENT, GEMINI_KEY_STORAGE, hasGeminiKey, maskGeminiKey } fro
 export const OPERATOR_EVENT = "rivalradar:operator-models";
 export const DEEPSEEK_KEY_STORAGE = "rivalradar.operator.deepseekKey";
 export const NVIDIA_KEY_STORAGE = "rivalradar.operator.nvidiaKey";
+export const AGNES_KEY_STORAGE = "rivalradar.operator.agnesKey";
 export const TEXT_MODEL_STORAGE = "rivalradar.operator.textModel";
 export const IMAGE_MODEL_STORAGE = "rivalradar.operator.imageModel";
 
 export type TextModel = "gemini" | "deepseek" | "gptoss";
-export type ImageModel = "nano_banana" | "nvidia_flux";
-export type Vendor = "gemini" | "deepseek" | "nvidia";
+export type ImageModel = "nano_banana" | "agnes" | "nvidia_flux";
+export type Vendor = "gemini" | "deepseek" | "nvidia" | "agnes";
 
 export type OperatorState = {
   gemini: string;
   deepseek: string;
   nvidia: string;
+  agnes: string;
   textModel: TextModel;
   imageModel: ImageModel;
 };
 
 const TEXT_MODELS: TextModel[] = ["gemini", "deepseek", "gptoss"];
-const IMAGE_MODELS: ImageModel[] = ["nano_banana", "nvidia_flux"];
+const IMAGE_MODELS: ImageModel[] = ["nano_banana", "agnes", "nvidia_flux"];
 
 function read(storageKey: string): string {
   if (typeof window === "undefined") return "";
@@ -63,6 +65,7 @@ export function loadOperatorState(): OperatorState {
     gemini: read(GEMINI_KEY_STORAGE),
     deepseek: read(DEEPSEEK_KEY_STORAGE),
     nvidia: read(NVIDIA_KEY_STORAGE),
+    agnes: read(AGNES_KEY_STORAGE),
     textModel: TEXT_MODELS.includes(textRaw as TextModel) ? (textRaw as TextModel) : "gemini",
     imageModel: IMAGE_MODELS.includes(imageRaw as ImageModel)
       ? (imageRaw as ImageModel)
@@ -76,7 +79,9 @@ export function saveOperatorKey(vendor: Vendor, raw: string): string {
       ? write(GEMINI_KEY_STORAGE, raw)
       : vendor === "deepseek"
         ? write(DEEPSEEK_KEY_STORAGE, raw)
-        : write(NVIDIA_KEY_STORAGE, raw);
+        : vendor === "nvidia"
+          ? write(NVIDIA_KEY_STORAGE, raw)
+          : write(AGNES_KEY_STORAGE, raw);
   emit();
   return stored;
 }
@@ -108,6 +113,9 @@ export function resolveTextModel(state: OperatorState): TextModel | null {
 
 export function resolveImageModel(state: OperatorState): ImageModel | null {
   if (hasOperatorKey(state.gemini)) return "nano_banana";
+  if (state.imageModel === "agnes" && hasOperatorKey(state.agnes)) return "agnes";
+  if (state.imageModel === "nvidia_flux" && hasOperatorKey(state.nvidia)) return "nvidia_flux";
+  if (hasOperatorKey(state.agnes)) return "agnes";
   if (hasOperatorKey(state.nvidia)) return "nvidia_flux";
   return null;
 }
@@ -119,6 +127,7 @@ export function textModelLabel(model: TextModel): string {
 }
 
 export function imageModelLabel(model: ImageModel | null): string {
+  if (model === "agnes") return "Agnes Image 2.5 Flash";
   if (model === "nvidia_flux") return "NVIDIA FLUX";
   if (model === "nano_banana") return "Nano Banana 2";
   return "no image model";

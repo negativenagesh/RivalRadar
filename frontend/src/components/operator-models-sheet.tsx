@@ -52,9 +52,16 @@ const VENDORS: {
   {
     id: "nvidia",
     title: "NVIDIA (gpt-oss-20b + FLUX)",
-    hint: "Free NIM endpoint. gpt-oss-20b writes text; FLUX paints if Gemini is absent.",
+    hint: "Free NIM endpoint. gpt-oss-20b writes text; FLUX paints only if Gemini and Agnes are both absent.",
     placeholder: "nvapi-…",
     docs: "https://build.nvidia.com/openai/gpt-oss-20b/modelcard",
+  },
+  {
+    id: "agnes",
+    title: "Agnes Image 2.5 Flash",
+    hint: "VLM for social product frames. 1K square (~10s, ~20 RPM). Test paints a tiny square before save. ModelScope stays off until Alibaba Cloud is bound.",
+    placeholder: "sk-…",
+    docs: "https://wiki.agnes-ai.com/en/docs/agnes-image-25-flash.md",
   },
 ];
 
@@ -72,12 +79,14 @@ export function OperatorModelsSheet({
     gemini: "",
     deepseek: "",
     nvidia: "",
+    agnes: "",
   });
   const [busy, setBusy] = useState<Vendor | null>(null);
   const [status, setStatus] = useState<Record<Vendor, string>>({
     gemini: "",
     deepseek: "",
     nvidia: "",
+    agnes: "",
   });
 
   if (!open || typeof document === "undefined") return null;
@@ -133,7 +142,7 @@ export function OperatorModelsSheet({
         </div>
         <p className="text-sm text-muted-foreground">
           Keys stay in this browser. Test before save. Intel and captions use the text model;
-          frames use Nano Banana when a Gemini key exists, otherwise NVIDIA FLUX.
+          frames use Nano Banana when a Gemini key exists, otherwise Agnes Image 2.5 Flash, then NVIDIA FLUX.
         </p>
 
         <div className="space-y-4">
@@ -235,6 +244,18 @@ export function OperatorModelsSheet({
               }
             >
               Nano Banana 2
+            </button>
+            <button
+              type="button"
+              disabled={geminiLocksImage || !hasOperatorKey(state.agnes)}
+              onClick={() => setImageModel("agnes")}
+              className={
+                !geminiLocksImage && imageModel === "agnes"
+                  ? "rounded-full border border-primary bg-primary/20 px-3 py-1.5 text-xs font-bold text-primary"
+                  : "rounded-full border border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
+              }
+            >
+              Agnes 2.5 Flash
             </button>
             <button
               type="button"

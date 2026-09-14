@@ -86,7 +86,7 @@ class NvidiaGptOssProvider:
         aspect_ratio: str | None = None,
     ) -> ImageResult:
         raise LLMProviderError(
-            "gpt-oss-20b is text-only. Pick NVIDIA FLUX in Image, or paste a Gemini key for Nano Banana 2.",
+            "gpt-oss-20b is text-only. Pick Agnes Image 2.5 Flash or NVIDIA FLUX, or paste Gemini for Nano Banana 2.",
             status_code=400,
         )
 

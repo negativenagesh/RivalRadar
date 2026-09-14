@@ -64,6 +64,7 @@ function getServerSnapshot() {
     gemini: "",
     deepseek: "",
     nvidia: "",
+    agnes: "",
     textModel: "gemini",
     imageModel: "nano_banana",
   } satisfies OperatorState);

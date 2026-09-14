@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 
-GEMINI_MISSING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip."
+GEMINI_MISSING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip. Agnes paints images only."
 
 
 def _reraise_upstream(exc: httpx.HTTPStatusError) -> NoReturn:
@@ -102,7 +102,7 @@ async def generate_intel_report(
 async def ping_generation_vendor(
     body: dict[str, Any], *, operator_headers: dict[str, str]
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=45.0) as client:
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=90.0) as client:
         try:
             response = await client.post("/llm/ping", json=body, headers=operator_headers)
             response.raise_for_status()
