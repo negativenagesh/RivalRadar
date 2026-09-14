@@ -24,7 +24,7 @@ import {
 } from "@/lib/api";
 import { MarkdownReport } from "@/components/mission/markdown-report";
 import { IntelVisuals } from "@/components/mission/intel-visuals";
-import { mergeIntel, type IntelFacts } from "@/lib/intel-facts";
+import { mergeIntel, buildStudioRoastPack, type IntelFacts } from "@/lib/intel-facts";
 import {
   SNIPER_PLATFORMS,
   SNIPER_TONES,
@@ -34,6 +34,7 @@ import {
 import { imageModelLabel, textModelLabel } from "@/lib/operator-models";
 import type {
   BrandProfile,
+  CompetitorProfile,
   ConnectionStatus,
   CreativePermissions,
   CreativeResult,
@@ -131,14 +132,20 @@ export function DiscoveryReport({
   permissions,
   onPermissionsChange,
   brand,
+  competitors = [],
 }: {
   facts: IntelFacts;
   permissions: CreativePermissions;
   onPermissionsChange: (p: CreativePermissions) => void;
   brand: BrandProfile;
+  competitors?: CompetitorProfile[];
 }) {
   const models = useOperatorModels();
   const factsJson = useMemo(() => JSON.stringify(facts), [facts]);
+  const studioFactsJson = useMemo(
+    () => JSON.stringify(buildStudioRoastPack(facts, brand, competitors)),
+    [facts, brand, competitors],
+  );
   const factsSig = `${facts.window.label}|${facts.brandName}|${facts.companies
     .map((c) => `${c.name}:${c.posts}`)
     .join(",")}|${facts.sniperQueue.length}`;
@@ -162,9 +169,11 @@ export function DiscoveryReport({
   const [studioFormat, setStudioFormat] = useState("hot_take");
   const [studioPlatform, setStudioPlatform] = useState("linkedin");
   const [studioSpice, setStudioSpice] = useState(3);
+  const [studioMemeCount, setStudioMemeCount] = useState(1);
   const [studioBusy, setStudioBusy] = useState(false);
+  const [studioLoadingSlot, setStudioLoadingSlot] = useState<number | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
-  const [studioOut, setStudioOut] = useState<CreativeResult | null>(null);
+  const [studioOuts, setStudioOuts] = useState<CreativeResult[]>([]);
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   const [sniperPlatform, setSniperPlatform] = useState("linkedin");
@@ -271,26 +280,47 @@ export function DiscoveryReport({
       setStudioError("Flip on the matching creative permission first.");
       return;
     }
+    const batch = studioFormat === "meme" ? studioMemeCount : 1;
     setStudioBusy(true);
     setStudioError(null);
+    setStudioOuts([]);
+    setStudioSpice(spice);
+    const collected: CreativeResult[] = [];
     try {
-      const result = await generateCreative({
-        kind: "studio",
-        brand_name: brand.displayName || "the brand",
-        voice_notes: brand.voiceNotes,
-        forbidden_claims: brand.forbiddenClaims,
-        platform: studioPlatform,
-        format: studioFormat,
-        spice,
-        facts_json: factsJson,
-      });
-      setStudioOut(result);
-      setStudioSpice(spice);
+      for (let i = 1; i <= batch; i += 1) {
+        setStudioLoadingSlot(i);
+        const result = await generateCreative({
+          kind: "studio",
+          brand_name: brand.displayName || "the brand",
+          voice_notes: brand.voiceNotes,
+          forbidden_claims: brand.forbiddenClaims,
+          brand_category: brand.category,
+          ideal_customer: brand.idealCustomer,
+          content_pillars: brand.contentPillars,
+          preferred_formats: brand.preferredFormats,
+          platform: studioPlatform,
+          format: studioFormat,
+          spice,
+          facts_json: studioFormat === "meme" ? studioFactsJson : factsJson,
+          variant: i,
+          variant_count: batch,
+        });
+        collected.push(result);
+        setStudioOuts([...collected]);
+      }
     } catch (err) {
       setStudioError(err instanceof Error ? err.message : "Studio generation failed");
+      if (collected.length) setStudioOuts([...collected]);
     } finally {
+      setStudioLoadingSlot(null);
       setStudioBusy(false);
     }
+  }
+
+  function studioImageSrc(out: CreativeResult): string | null {
+    return out.image_data_base64 && out.image_mime_type
+      ? `data:${out.image_mime_type};base64,${out.image_data_base64}`
+      : null;
   }
 
   async function runSniper() {
@@ -349,11 +379,6 @@ export function DiscoveryReport({
       setSniperBusy(null);
     }
   }
-
-  const studioSrc =
-    studioOut?.image_data_base64 && studioOut.image_mime_type
-      ? `data:${studioOut.image_mime_type};base64,${studioOut.image_data_base64}`
-      : null;
 
   const activeReport =
     reportTab === "brief"
@@ -560,6 +585,13 @@ export function DiscoveryReport({
           Pick what to make. {models.textModel ? textModelLabel(models.textModel) : "Your text model"}{" "}
           writes the caption; {imageModelLabel(models.imageModel)} paints the frame. No rival logos.
         </p>
+        <p className="rounded-xl border border-border/50 bg-background/30 px-3 py-2 text-xs text-muted-foreground">
+          Context used: brand dossier (name, voice, category, ICP, pillars, preferred formats,
+          forbidden claims) + scout roast pack (your metrics vs each rival — posts, engagement,
+          visual%, cadence, platforms), format mix, themes, winning/leaking lines, and rival/brand
+          post receipts (caption, heat, hasMedia). Rival logos and post images are never painted —
+          only metrics/themes fuel the roast.
+        </p>
         <div className="flex flex-wrap gap-2">
           {STUDIO_FORMATS.map((fmt) => {
             const locked = !permissions[fmt.permission];
@@ -600,12 +632,31 @@ export function DiscoveryReport({
             </button>
           ))}
         </div>
+        {studioFormat === "meme" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-ui text-xs text-muted-foreground">memes</span>
+            {[1, 2, 3].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setStudioMemeCount(n)}
+                className={chipClass(studioMemeCount === n)}
+              >
+                {n}
+              </button>
+            ))}
+            <span className="text-xs text-muted-foreground">
+              Generates one after another (loading between each).
+            </span>
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           <Button disabled={studioBusy || !models.readyText} onClick={() => void runStudio()}>
             {studioBusy ? <Loader2 className="size-4 animate-spin" /> : <Flame className="size-4" />}
             Generate
+            {studioFormat === "meme" && studioMemeCount > 1 ? ` ×${studioMemeCount}` : ""}
           </Button>
-          {studioOut && (
+          {studioOuts.length > 0 && (
             <Button
               variant="outline"
               disabled={studioBusy || !models.readyText}
@@ -620,64 +671,88 @@ export function DiscoveryReport({
             {studioError}
           </p>
         )}
-        {studioOut && (
-          <div className="overflow-hidden rounded-2xl border border-border/60 bg-background/40">
-            <div className="border-b border-border/40 px-4 py-2 font-mono text-xs uppercase text-primary">
-              {studioFormat} · {studioPlatform}
-            </div>
-            <div className="space-y-3 p-4">
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{studioOut.text}</p>
-              {studioOut.why_slaps && (
-                <p className="text-xs text-primary">Why this slaps: {studioOut.why_slaps}</p>
-              )}
-              {studioOut.overlay_text && (
-                <p className="text-xs text-muted-foreground">Overlay: {studioOut.overlay_text}</p>
-              )}
-              {studioSrc && (
-                <button type="button" onClick={() => setLightbox(studioSrc)} className="block w-full">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={studioSrc}
-                    alt="Studio output"
-                    className="max-h-80 w-full rounded-xl border border-border/40 object-contain"
-                  />
-                </button>
-              )}
-              {!studioSrc && studioOut.image_error && (
-                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {studioOut.image_error}
-                </p>
-              )}
-              {!studioSrc && !studioOut.image_error && (
-                <p className="text-xs text-muted-foreground">
-                  No PNG this round — caption still usable. Try Generate again.
-                </p>
-              )}
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" onClick={() => void copyText(studioOut.text)}>
-                  <Copy className="size-3.5" />
-                  Copy caption
-                </Button>
-                {studioOut.image_data_base64 && studioOut.image_mime_type && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      downloadImage(
-                        studioOut.image_mime_type as string,
-                        studioOut.image_data_base64 as string,
-                        "rivalradar-studio.png",
-                      )
-                    }
-                  >
-                    <Download className="size-3.5" />
-                    Download PNG
-                  </Button>
-                )}
+        <div className="space-y-4">
+          {studioOuts.map((out, idx) => {
+            const src = studioImageSrc(out);
+            return (
+              <div
+                key={`studio-${idx}-${out.overlay_text ?? out.text.slice(0, 24)}`}
+                className="overflow-hidden rounded-2xl border border-border/60 bg-background/40"
+              >
+                <div className="border-b border-border/40 px-4 py-2 font-mono text-xs uppercase text-primary">
+                  {studioFormat} · {studioPlatform}
+                  {studioOuts.length > 1 ? ` · #${idx + 1}` : ""}
+                </div>
+                <div className="space-y-3 p-4">
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{out.text}</p>
+                  {out.why_slaps && (
+                    <p className="text-xs text-primary">Why this slaps: {out.why_slaps}</p>
+                  )}
+                  {out.overlay_text && (
+                    <p className="text-xs text-muted-foreground">Overlay: {out.overlay_text}</p>
+                  )}
+                  {src && (
+                    <button type="button" onClick={() => setLightbox(src)} className="block w-full">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={src}
+                        alt={`Studio output ${idx + 1}`}
+                        className="max-h-80 w-full rounded-xl border border-border/40 object-contain"
+                      />
+                    </button>
+                  )}
+                  {!src && out.image_error && (
+                    <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                      {out.image_error}
+                    </p>
+                  )}
+                  {!src && !out.image_error && (
+                    <p className="text-xs text-muted-foreground">
+                      No PNG this round — caption still usable. Try Generate again.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={() => void copyText(out.text)}>
+                      <Copy className="size-3.5" />
+                      Copy caption
+                    </Button>
+                    {out.image_data_base64 && out.image_mime_type && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          downloadImage(
+                            out.image_mime_type as string,
+                            out.image_data_base64 as string,
+                            `rivalradar-studio-${idx + 1}.png`,
+                          )
+                        }
+                      >
+                        <Download className="size-3.5" />
+                        Download PNG
+                      </Button>
+                    )}
+                  </div>
+                </div>
               </div>
+            );
+          })}
+          {studioLoadingSlot !== null && (
+            <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-primary/40 bg-primary/5 px-4 py-8">
+              <Loader2 className="size-8 animate-spin text-primary" />
+              <p className="font-mono text-xs uppercase tracking-wider text-primary">
+                Cooking meme {studioLoadingSlot}
+                {studioFormat === "meme" && studioMemeCount > 1
+                  ? ` of ${studioMemeCount}`
+                  : ""}
+                …
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Caption first, then the frame — hang tight.
+              </p>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </section>
 
       <section className="space-y-4 text-left">

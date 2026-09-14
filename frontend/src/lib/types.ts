@@ -222,6 +222,13 @@ export type CreativeRequest = {
   tone?: string;
   post_url?: string;
   facts_json?: string;
+  brand_category?: string;
+  ideal_customer?: string;
+  content_pillars?: string;
+  preferred_formats?: string[];
+  /** 1-based when generating a batch of studio frames / memes */
+  variant?: number;
+  variant_count?: number;
 };
 
 export type CreativeResult = {

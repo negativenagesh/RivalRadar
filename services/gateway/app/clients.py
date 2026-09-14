@@ -64,7 +64,7 @@ def _reraise_transport(exc: httpx.RequestError) -> NoReturn:
 async def generate_creative_content(
     body: dict[str, Any], *, operator_headers: dict[str, str]
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=120.0) as client:
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=180.0) as client:
         try:
             response = await client.post(
                 "/creative/generate",
@@ -83,7 +83,7 @@ async def generate_creative_content(
 async def generate_intel_report(
     body: dict[str, Any], *, operator_headers: dict[str, str]
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=120.0) as client:
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=240.0) as client:
         try:
             response = await client.post(
                 "/intel/report",

@@ -373,6 +373,7 @@ export default function MissionPage() {
             permissions={mission.permissions}
             onPermissionsChange={setPermissions}
             brand={mission.brand}
+            competitors={mission.competitors}
           />
         )}
 

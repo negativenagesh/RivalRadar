@@ -18,6 +18,8 @@ export type IntelCompany = {
   role: "brand" | "rival";
   posts: number;
   avgEngagement: number;
+  /** Share of posts with real media (not screenshots). */
+  visualPct: number;
   platforms: IntelPlatformStats[];
 };
 
@@ -34,6 +36,8 @@ export type IntelPostRef = {
   format: string;
   score: number;
   hasMedia: boolean;
+  /** Clean content themes (no link:/shot:/metric: noise). */
+  themes: string[];
 };
 
 export type IntelFacts = {
@@ -41,12 +45,44 @@ export type IntelFacts = {
   brandName: string;
   companies: IntelCompany[];
   formatMix: { format: string; count: number; pct: number }[];
+  topThemes: { theme: string; count: number }[];
   topPosts: IntelPostRef[];
   bottomPosts: IntelPostRef[];
   winningBecause: string[];
   leakingBecause: string[];
   sniperQueue: IntelPostRef[];
 };
+
+const META_THEMES = new Set([
+  "linkedin",
+  "instagram",
+  "x",
+  "twitter",
+  "youtube",
+  "tiktok",
+  "threads",
+  "video",
+  "posted_at_uncertain",
+]);
+
+function cleanThemes(post: FindingsRow["post"]): string[] {
+  const raw = post.themes?.length
+    ? post.themes
+    : (post.theme_tags || "")
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+  const out: string[] = [];
+  for (const t of raw) {
+    const lower = t.toLowerCase();
+    if (t.includes(":")) continue;
+    if (META_THEMES.has(lower)) continue;
+    if (out.includes(t)) continue;
+    out.push(t);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
 
 function avg(nums: number[]): number {
   if (!nums.length) return 0;
@@ -71,6 +107,7 @@ function toRef(row: FindingsRow): IntelPostRef {
     format: row.post.format,
     score: row.post.engagement_score || row.likes + row.comments * 3 + row.shares * 5,
     hasMedia: Boolean(row.post.media_keys?.[0] || (row.post.image_url && !row.post.image_url.includes("/screenshots/"))),
+    themes: cleanThemes(row.post),
   };
 }
 
@@ -131,11 +168,13 @@ export function buildIntelFacts(
       };
     });
     const scores = list.map((p) => p.post.engagement_score || p.likes + p.comments * 3);
+    const withMedia = list.filter((p) => toRef(p).hasMedia).length;
     return {
       name,
       role,
       posts: list.length,
       avgEngagement: round1(avg(scores)),
+      visualPct: list.length ? Math.round((withMedia / list.length) * 100) : 0,
       platforms,
     };
   });
@@ -214,16 +253,90 @@ export function buildIntelFacts(
     .slice(0, 8)
     .map(toRef);
 
+  const themeCounts = new Map<string, number>();
+  for (const row of rows) {
+    for (const theme of cleanThemes(row.post)) {
+      themeCounts.set(theme, (themeCounts.get(theme) ?? 0) + 1);
+    }
+  }
+  const topThemes = [...themeCounts.entries()]
+    .map(([theme, count]) => ({ theme, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+
   return {
     window: { from: window.from, to: window.to, days, label },
     brandName: input.brand.displayName || "your brand",
     companies,
     formatMix,
+    topThemes,
     topPosts,
     bottomPosts,
     winningBecause,
     leakingBecause,
     sniperQueue,
+  };
+}
+
+/** Dense roast pack for Format Studio memes — brand dossier + rival metrics + receipts (no media URLs). */
+export function buildStudioRoastPack(
+  facts: IntelFacts,
+  brand: BrandProfile,
+  competitors: { name: string; whyTheyMatter: string }[] = [],
+): Record<string, unknown> {
+  const whyByName = new Map(
+    competitors.map((c) => [c.name.trim().toLowerCase(), c.whyTheyMatter.trim()] as const),
+  );
+  const brandCo = facts.companies.find((c) => c.role === "brand");
+  const rivals = facts.companies.filter((c) => c.role === "rival");
+  const slimPost = (p: IntelPostRef) => ({
+    company: p.company,
+    role: p.role,
+    platform: p.platform,
+    format: p.format,
+    caption: p.caption,
+    likes: p.likes,
+    comments: p.comments,
+    shares: p.shares,
+    views: p.views,
+    score: p.score,
+    hasMedia: p.hasMedia,
+    themes: p.themes,
+  });
+  return {
+    window: facts.window,
+    brand: {
+      name: brand.displayName || facts.brandName,
+      category: brand.category || null,
+      voice: brand.voiceNotes || null,
+      idealCustomer: brand.idealCustomer || null,
+      contentPillars: brand.contentPillars || null,
+      preferredFormats: brand.preferredFormats || [],
+      forbiddenClaims: brand.forbiddenClaims || null,
+      scoreboard: brandCo
+        ? {
+            posts: brandCo.posts,
+            avgEngagement: brandCo.avgEngagement,
+            visualPct: brandCo.visualPct,
+            platforms: brandCo.platforms,
+          }
+        : null,
+    },
+    rivals: rivals.map((r) => ({
+      name: r.name,
+      whyTheyMatter: whyByName.get(r.name.trim().toLowerCase()) || null,
+      posts: r.posts,
+      avgEngagement: r.avgEngagement,
+      visualPct: r.visualPct,
+      platforms: r.platforms,
+    })),
+    formatMix: facts.formatMix,
+    topThemes: facts.topThemes,
+    winningBecause: facts.winningBecause,
+    leakingBecause: facts.leakingBecause,
+    rivalReceipts: facts.topPosts.filter((p) => p.role === "rival").map(slimPost),
+    brandReceipts: facts.topPosts.filter((p) => p.role === "brand").map(slimPost),
+    sniperReceipts: facts.sniperQueue.slice(0, 6).map(slimPost),
   };
 }
 
@@ -235,7 +348,7 @@ function bullets(lines: string[], empty: string): string {
 export function factsToMarkdown(facts: IntelFacts): string {
   const companyLines = facts.companies.map((c) => {
     const role = c.role === "brand" ? "you" : "rival";
-    return `**${c.name}** (${role}): ${c.posts} posts, avg heat ${c.avgEngagement}`;
+    return `**${c.name}** (${role}): ${c.posts} posts, avg heat ${c.avgEngagement}, visuals ${c.visualPct}%`;
   });
   const mixLines = facts.formatMix.map(
     (row) => `**${row.format}** is ${row.pct}% of the window (${row.count} posts)`,
