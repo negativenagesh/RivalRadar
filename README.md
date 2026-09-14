@@ -1,17 +1,9 @@
 <p align="center">
-  <img src="docs/brand/rivalradar-logo.jpg" alt="RivalRadar" width="520" />
-</p>
-
-<p align="center">
-  <img src="docs/brand/rivalradar-wordmark.svg" alt="RivalRadar" width="260" />
+  <img src="docs/brand/rivalradar-wordmark.svg" alt="RivalRadar" width="500" />
 </p>
 
 <p align="center">
   <a href="https://github.com/negativenagesh/RivalRadar/stargazers"><img src="https://img.shields.io/github/stars/negativenagesh/RivalRadar?style=for-the-badge&logo=github&color=a3e635&labelColor=111111" alt="GitHub stars" /></a>
-  <a href="https://github.com/negativenagesh/RivalRadar/network/members"><img src="https://img.shields.io/github/forks/negativenagesh/RivalRadar?style=for-the-badge&logo=github&color=a3e635&labelColor=111111" alt="GitHub forks" /></a>
-  <a href="https://github.com/negativenagesh/RivalRadar/watchers"><img src="https://img.shields.io/github/watchers/negativenagesh/RivalRadar?style=for-the-badge&logo=github&color=38bdf8&labelColor=111111" alt="GitHub watchers" /></a>
-  <br />
-  <a href="https://github.com/negativenagesh/RivalRadar/issues"><img src="https://img.shields.io/github/issues/negativenagesh/RivalRadar?style=for-the-badge&color=fb7185&labelColor=111111" alt="GitHub issues" /></a>
   <a href="https://github.com/negativenagesh/RivalRadar/blob/main/LICENSE"><img src="https://img.shields.io/github/license/negativenagesh/RivalRadar?style=for-the-badge&color=a3e635&labelColor=111111" alt="License" /></a>
   <a href="https://github.com/negativenagesh/RivalRadar/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/negativenagesh/RivalRadar/ci.yml?branch=main&style=for-the-badge&label=CI&labelColor=111111" alt="CI status" /></a>
   <a href="https://github.com/negativenagesh/RivalRadar/commits/main"><img src="https://img.shields.io/github/last-commit/negativenagesh/RivalRadar?style=for-the-badge&color=a3e635&labelColor=111111" alt="Last commit" /></a>
