@@ -32,7 +32,12 @@ async def test_creative_accepts_deepseek_operator_key() -> None:
             response = await client.post(
                 "/creative/generate",
                 json={"kind": "comment", "brand_name": "Pixis"},
-                headers={"X-DeepSeek-Key": "sk-operator", "X-Text-Model": "deepseek"},
+                headers={
+                    "X-DeepSeek-Key": "sk-operator",
+                    "X-Agnes-Key": "sk-agnes-operator",
+                    "X-Text-Model": "deepseek",
+                    "X-Image-Model": "agnes",
+                },
             )
     finally:
         app.dependency_overrides.pop(operator_provider, None)

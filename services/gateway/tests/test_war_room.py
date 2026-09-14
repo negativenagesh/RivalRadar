@@ -42,8 +42,9 @@ async def test_creative_forwards_deepseek_and_nvidia_headers(
         headers={
             "X-DeepSeek-Key": "sk-operator",
             "X-Nvidia-Key": "nv-operator",
+            "X-Agnes-Key": "sk-agnes-operator",
             "X-Text-Model": "deepseek",
-            "X-Image-Model": "nvidia_flux",
+            "X-Image-Model": "agnes",
         },
     )
     assert response.status_code == 200
@@ -52,8 +53,9 @@ async def test_creative_forwards_deepseek_and_nvidia_headers(
     headers = called.kwargs["operator_headers"]
     assert headers["X-DeepSeek-Key"] == "sk-operator"
     assert headers["X-Nvidia-Key"] == "nv-operator"
+    assert headers["X-Agnes-Key"] == "sk-agnes-operator"
     assert headers["X-Text-Model"] == "deepseek"
-    assert headers["X-Image-Model"] == "nvidia_flux"
+    assert headers["X-Image-Model"] == "agnes"
 
 
 async def test_intel_forwards_operator_key(

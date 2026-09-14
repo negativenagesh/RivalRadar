@@ -47,6 +47,7 @@ async function request<T>(path: string, init?: RequestInit & { operator?: boolea
     if (state.gemini) headers["X-Gemini-Key"] = state.gemini;
     if (state.deepseek) headers["X-DeepSeek-Key"] = state.deepseek;
     if (state.nvidia) headers["X-Nvidia-Key"] = state.nvidia;
+    if (state.agnes) headers["X-Agnes-Key"] = state.agnes;
     if (text) headers["X-Text-Model"] = text;
     headers["X-Image-Model"] = image ?? "none";
   }
@@ -172,13 +173,14 @@ export function generateIntelReport(body: {
 }
 
 export function pingLlm(
-  vendor: "gemini" | "deepseek" | "nvidia",
+  vendor: "gemini" | "deepseek" | "nvidia" | "agnes",
   apiKey: string,
 ): Promise<{ vendor: string; model: string; preview: string }> {
   const headers: Record<string, string> = {};
   if (vendor === "gemini") headers["X-Gemini-Key"] = apiKey;
   if (vendor === "deepseek") headers["X-DeepSeek-Key"] = apiKey;
   if (vendor === "nvidia") headers["X-Nvidia-Key"] = apiKey;
+  if (vendor === "agnes") headers["X-Agnes-Key"] = apiKey;
   return request("/llm/ping", {
     method: "POST",
     body: JSON.stringify({ vendor }),

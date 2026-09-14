@@ -104,4 +104,20 @@ describe("api client", () => {
     await listDrafts();
     expect(fetchMock.mock.calls[0][1].headers["X-Gemini-Key"]).toBeUndefined();
   });
+
+  it("sends Agnes as the image model when Gemini is absent", async () => {
+    window.localStorage.setItem("rivalradar.operator.deepseekKey", "sk-dummy-key-1234");
+    window.localStorage.setItem("rivalradar.operator.agnesKey", "sk-agnes-dummy-1234");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ kind: "studio", text: "caption" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await generateCreative({ kind: "studio", brand_name: "Pixis" });
+    expect(fetchMock.mock.calls[0][1].headers["X-DeepSeek-Key"]).toBe("sk-dummy-key-1234");
+    expect(fetchMock.mock.calls[0][1].headers["X-Agnes-Key"]).toBe("sk-agnes-dummy-1234");
+    expect(fetchMock.mock.calls[0][1].headers["X-Text-Model"]).toBe("deepseek");
+    expect(fetchMock.mock.calls[0][1].headers["X-Image-Model"]).toBe("agnes");
+  });
 });

@@ -27,6 +27,7 @@ def operator_provider(
     x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
     x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
     x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
     x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
     x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
 ) -> LLMProvider:
@@ -35,6 +36,7 @@ def operator_provider(
             gemini_key=x_gemini_key,
             deepseek_key=x_deepseek_key,
             nvidia_key=x_nvidia_key,
+            agnes_key=x_agnes_key,
             text_model=x_text_model,
             image_model=x_image_model,
         )
@@ -64,12 +66,14 @@ async def llm_ping(
     x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
     x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
     x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
 ) -> dict[str, str]:
     vendor = request.vendor.strip().lower()
     key = {
         "gemini": x_gemini_key,
         "deepseek": x_deepseek_key,
         "nvidia": x_nvidia_key,
+        "agnes": x_agnes_key,
     }.get(vendor)
     if not (key or "").strip():
         raise HTTPException(status_code=400, detail=f"Paste your {vendor} API key to test it.")
