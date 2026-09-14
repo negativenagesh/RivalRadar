@@ -8,6 +8,10 @@ import type {
 import { isValidSocialUrl, type SocialKey } from "./social-validate";
 
 export const MISSION_STORAGE_KEY = "rivalradar.mission";
+/** One-time bump: operators who still have the old default 3d lookback get 7d. */
+export const LOOKBACK_DEFAULT_BUMP_KEY = "rivalradar.lookback_default_v7";
+export const LOOKBACK_DEFAULT_DAYS = 7;
+export const LOOKBACK_LEGACY_DEFAULT_DAYS = 3;
 
 export const EMPTY_SOCIALS: BrandProfile["socials"] = {
   linkedin: "",
@@ -74,11 +78,27 @@ export const DEFAULT_MISSION: MissionState = {
   ],
   permissions: DEFAULT_PERMISSIONS,
   recordSession: true,
-  lookbackDays: 7,
+  lookbackDays: LOOKBACK_DEFAULT_DAYS,
   dateFrom: null,
   dateTo: null,
   lastRunId: null,
 };
+
+/** Resolve lookback from storage, bumping the legacy 3d default once to 7d. */
+export function resolveStoredLookbackDays(
+  rawDays: unknown,
+  dateFrom: string | null,
+  dateTo: string | null,
+  opts: { bumpDone: boolean },
+): { days: number; didBump: boolean } {
+  const parsed =
+    typeof rawDays === "number" && rawDays >= 1 ? Math.min(90, rawDays) : LOOKBACK_DEFAULT_DAYS;
+  const custom = Boolean(dateFrom && dateTo);
+  if (!opts.bumpDone && !custom && parsed === LOOKBACK_LEGACY_DEFAULT_DAYS) {
+    return { days: LOOKBACK_DEFAULT_DAYS, didBump: true };
+  }
+  return { days: parsed, didBump: false };
+}
 
 export function loadMission(): MissionState {
   if (typeof window === "undefined") return structuredClone(DEFAULT_MISSION);
@@ -86,15 +106,24 @@ export function loadMission(): MissionState {
     const raw = localStorage.getItem(MISSION_STORAGE_KEY);
     if (!raw) return structuredClone(DEFAULT_MISSION);
     const parsed = JSON.parse(raw) as Partial<MissionState>;
+    const dateFrom = typeof parsed.dateFrom === "string" ? parsed.dateFrom : null;
+    const dateTo = typeof parsed.dateTo === "string" ? parsed.dateTo : null;
+    const bumpDone = localStorage.getItem(LOOKBACK_DEFAULT_BUMP_KEY) === "1";
+    const { days, didBump } = resolveStoredLookbackDays(
+      parsed.lookbackDays,
+      dateFrom,
+      dateTo,
+      { bumpDone },
+    );
+    if (didBump || !bumpDone) {
+      localStorage.setItem(LOOKBACK_DEFAULT_BUMP_KEY, "1");
+    }
     return {
       ...structuredClone(DEFAULT_MISSION),
       ...parsed,
-      lookbackDays:
-        typeof parsed.lookbackDays === "number" && parsed.lookbackDays >= 1
-          ? Math.min(90, parsed.lookbackDays)
-          : 7,
-      dateFrom: typeof parsed.dateFrom === "string" ? parsed.dateFrom : null,
-      dateTo: typeof parsed.dateTo === "string" ? parsed.dateTo : null,
+      lookbackDays: days,
+      dateFrom,
+      dateTo,
     };
   } catch {
     return structuredClone(DEFAULT_MISSION);
@@ -306,7 +335,7 @@ export function buildDiscoveryReport(input: {
   const themes = [...new Set(input.posts.flatMap((p) => p.themes))].slice(0, 8);
   const formats = [...new Set(input.posts.map((p) => p.format))];
   const rivalNames = input.competitors.map((c) => c.name || c.website).filter(Boolean);
-  const lookback = input.lookbackDays ?? 7;
+  const lookback = input.lookbackDays ?? LOOKBACK_DEFAULT_DAYS;
 
   const allowed: string[] = [];
   if (input.permissions.draftReplies) allowed.push("reply/response posts");

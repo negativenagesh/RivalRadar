@@ -51,6 +51,7 @@ _LINKEDIN_OSS_BUDGET_S = 80
 _GOTO_MS = 20_000
 _HEARTBEAT_S = 3
 _COLLECT_BUDGET_S = 40
+_POST_BUDGET_S = 35
 # Reverse-chrono feeds: stop after this many posts older than date_from.
 _PAST_WINDOW_STOP = 3
 _SKIP_PLATFORMS = {"tiktok"}
@@ -152,6 +153,7 @@ class SocialFeedConnector:
                 "detail": (
                     f"scouting_sequential platforms={platforms} "
                     f"targets={len(self._targets)} budget_s={_PLATFORM_BUDGET_S} "
+                    f"window={self._window.date_from}→{self._window.date_to} "
                     f"oss=instaloader,gallery-dl,linkedin_scraper"
                 )
             },
@@ -411,6 +413,12 @@ class SocialFeedConnector:
                         "action",
                         {"detail": f"oss_fallback platform=linkedin reason={exc}"},
                     )
+                # Stop OSS heartbeats before browser fallback — otherwise the
+                # event log keeps printing oss_working while collecting_posts runs.
+                stop.set()
+                hb.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await hb
                 if oss_ok:
                     if record and session.recorded_video_path:
                         self._video_path = session.recorded_video_path
@@ -421,10 +429,11 @@ class SocialFeedConnector:
         except RuntimeError as exc:
             await self._emit("error", {"detail": f"linkedin chromium: {exc}"})
         finally:
-            stop.set()
-            hb.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await hb
+            if not stop.is_set():
+                stop.set()
+                hb.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await hb
         async with self._lock:
             if "browser" not in self._sources_used:
                 self._sources_used.append("browser")
@@ -511,7 +520,7 @@ class SocialFeedConnector:
             if kept >= _MAX_POSTS:
                 break
             try:
-                outcome = await self._ingest_post(
+                outcome = await self._ingest_post_bounded(
                     session,
                     handle=handle,
                     platform=platform,
@@ -608,6 +617,33 @@ class SocialFeedConnector:
             return "older"
         return "outside"
 
+    async def _ingest_post_bounded(
+        self,
+        session: BrowserSession,
+        *,
+        handle: str,
+        platform: str,
+        post_url: str,
+    ) -> str:
+        try:
+            return await await_or_abandon(
+                self._ingest_post(
+                    session, handle=handle, platform=platform, post_url=post_url
+                ),
+                _POST_BUDGET_S,
+            )
+        except TimeoutError:
+            await self._emit(
+                "error",
+                {
+                    "detail": (
+                        f"ingest_post timed out after {_POST_BUDGET_S}s "
+                        f"{post_url[:120]}"
+                    )
+                },
+            )
+            return "failed"
+
     async def _ingest_post(
         self,
         session: BrowserSession,
@@ -621,8 +657,17 @@ class SocialFeedConnector:
         page = session.page
         await self._emit("nav", {"url": post_url, "platform": platform, "phase": "post"})
         try:
-            await page.goto(post_url, wait_until="domcontentloaded", timeout=_GOTO_MS)
+            await await_or_abandon(
+                page.goto(post_url, wait_until="domcontentloaded", timeout=_GOTO_MS),
+                min(_POST_BUDGET_S, _GOTO_MS / 1000 + 2),
+            )
             await settle_page(page)
+        except TimeoutError:
+            await self._emit(
+                "error",
+                {"detail": f"post nav timed out {post_url[:120]}"},
+            )
+            return "failed"
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"post nav failed {post_url}: {exc}"})
             return "failed"
