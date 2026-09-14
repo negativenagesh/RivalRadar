@@ -33,6 +33,7 @@ from app.clients import (
     fetch_youtube_status,
     generate_creative_content,
     generate_intel_report,
+    ping_generation_vendor,
     trigger_digest_generation,
     trigger_ingestion_run,
 )
@@ -94,11 +95,32 @@ async def generate_drafts(
     return PipelineRunCreated(run_id=run.id, status=run.status)
 
 
-def _require_operator_gemini(x_gemini_key: str | None) -> str:
-    key = (x_gemini_key or "").strip()
-    if not key:
+def _operator_headers(
+    x_gemini_key: str | None,
+    x_deepseek_key: str | None = None,
+    x_nvidia_key: str | None = None,
+    x_text_model: str | None = None,
+    x_image_model: str | None = None,
+) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    gemini = (x_gemini_key or "").strip()
+    deepseek = (x_deepseek_key or "").strip()
+    nvidia = (x_nvidia_key or "").strip()
+    text = (x_text_model or "").strip()
+    image = (x_image_model or "").strip()
+    if gemini:
+        headers["X-Gemini-Key"] = gemini
+    if deepseek:
+        headers["X-DeepSeek-Key"] = deepseek
+    if nvidia:
+        headers["X-Nvidia-Key"] = nvidia
+    if text:
+        headers["X-Text-Model"] = text.lower()
+    if image:
+        headers["X-Image-Model"] = image.lower()
+    if not any(headers.get(k) for k in ("X-Gemini-Key", "X-DeepSeek-Key", "X-Nvidia-Key")):
         raise HTTPException(status_code=400, detail=GEMINI_MISSING)
-    return key
+    return headers
 
 
 def _platform_aliases(platform: str) -> set[str]:
@@ -135,18 +157,53 @@ async def _vaulted_sessions(
 async def creative_generate(
     body: dict[str, object],
     x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
 ) -> dict[str, object]:
-    key = _require_operator_gemini(x_gemini_key)
-    return await generate_creative_content(body, api_key=key)
+    headers = _operator_headers(
+        x_gemini_key, x_deepseek_key, x_nvidia_key, x_text_model, x_image_model
+    )
+    return await generate_creative_content(body, operator_headers=headers)
 
 
 @router.post("/intel/report")
 async def intel_report(
     body: dict[str, object],
     x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
 ) -> dict[str, object]:
-    key = _require_operator_gemini(x_gemini_key)
-    return await generate_intel_report(body, api_key=key)
+    headers = _operator_headers(
+        x_gemini_key, x_deepseek_key, x_nvidia_key, x_text_model, x_image_model
+    )
+    return await generate_intel_report(body, operator_headers=headers)
+
+
+@router.post("/llm/ping")
+async def llm_ping(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+) -> dict[str, object]:
+    vendor = str(body.get("vendor") or "").strip().lower()
+    keep = {
+        "gemini": "X-Gemini-Key",
+        "deepseek": "X-DeepSeek-Key",
+        "nvidia": "X-Nvidia-Key",
+    }.get(vendor)
+    if not keep:
+        raise HTTPException(status_code=400, detail="Vendor must be gemini, deepseek, or nvidia.")
+    ping_headers = _operator_headers(x_gemini_key, x_deepseek_key, x_nvidia_key)
+    if keep not in ping_headers:
+        raise HTTPException(status_code=400, detail=f"Paste your {vendor} API key to test it.")
+    return await ping_generation_vendor(
+        {"vendor": vendor}, operator_headers={keep: ping_headers[keep]}
+    )
 
 
 @router.post("/social/comment")

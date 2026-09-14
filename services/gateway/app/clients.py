@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 
-GEMINI_MISSING = "Paste your Gemini API key in Context or the navbar chip."
+GEMINI_MISSING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip."
 
 
 def _reraise_upstream(exc: httpx.HTTPStatusError) -> NoReturn:
@@ -61,13 +61,15 @@ def _reraise_transport(exc: httpx.RequestError) -> NoReturn:
     ) from exc
 
 
-async def generate_creative_content(body: dict[str, Any], *, api_key: str) -> dict[str, Any]:
+async def generate_creative_content(
+    body: dict[str, Any], *, operator_headers: dict[str, str]
+) -> dict[str, Any]:
     async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=120.0) as client:
         try:
             response = await client.post(
                 "/creative/generate",
                 json=body,
-                headers={"X-Gemini-Key": api_key},
+                headers=operator_headers,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -78,14 +80,31 @@ async def generate_creative_content(body: dict[str, Any], *, api_key: str) -> di
         return result
 
 
-async def generate_intel_report(body: dict[str, Any], *, api_key: str) -> dict[str, Any]:
+async def generate_intel_report(
+    body: dict[str, Any], *, operator_headers: dict[str, str]
+) -> dict[str, Any]:
     async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=120.0) as client:
         try:
             response = await client.post(
                 "/intel/report",
                 json=body,
-                headers={"X-Gemini-Key": api_key},
+                headers=operator_headers,
             )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _reraise_upstream(exc)
+        except httpx.RequestError as exc:
+            _reraise_transport(exc)
+        result: dict[str, Any] = response.json()
+        return result
+
+
+async def ping_generation_vendor(
+    body: dict[str, Any], *, operator_headers: dict[str, str]
+) -> dict[str, Any]:
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=45.0) as client:
+        try:
+            response = await client.post("/llm/ping", json=body, headers=operator_headers)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             _reraise_upstream(exc)

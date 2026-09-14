@@ -3,26 +3,27 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { GeminiKeyChip } from "./gemini-key-chip";
-import { GeminiKeyProvider } from "./gemini-key-provider";
-import { GEMINI_KEY_EVENT, GEMINI_KEY_STORAGE } from "@/lib/gemini-key";
+import { OperatorModelsProvider } from "./operator-models-provider";
+import { OPERATOR_EVENT } from "@/lib/operator-models";
+import { GEMINI_KEY_STORAGE } from "@/lib/gemini-key";
 
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
 });
 
-describe("GeminiKeyChip", () => {
+describe("Models chip", () => {
   it("pulses until a key exists then shows last-4", async () => {
     render(
-      <GeminiKeyProvider>
+      <OperatorModelsProvider>
         <GeminiKeyChip />
-      </GeminiKeyProvider>,
+      </OperatorModelsProvider>,
     );
-    const missing = await screen.findByRole("button", { name: /^Gemini$/i });
+    const missing = await screen.findByRole("button", { name: /^Models$/i });
     expect(missing.className).toContain("animate-pulse");
 
     window.localStorage.setItem(GEMINI_KEY_STORAGE, "AIzaSyDummyKey1234");
-    window.dispatchEvent(new Event(GEMINI_KEY_EVENT));
+    window.dispatchEvent(new Event(OPERATOR_EVENT));
 
     const ready = await screen.findByRole("button", { name: /Gemini ••••1234/ });
     expect(ready.className).not.toContain("animate-pulse");
@@ -31,16 +32,16 @@ describe("GeminiKeyChip", () => {
   it("portals the key sheet onto the viewport, not the sticky navbar", async () => {
     const user = userEvent.setup();
     render(
-      <GeminiKeyProvider>
+      <OperatorModelsProvider>
         <header className="sticky top-0 z-50 backdrop-blur-md" data-testid="nav-shell">
           <GeminiKeyChip />
         </header>
-      </GeminiKeyProvider>,
+      </OperatorModelsProvider>,
     );
 
-    await user.click(await screen.findByRole("button", { name: /^Gemini$/i }));
+    await user.click(await screen.findByRole("button", { name: /^Models$/i }));
 
-    const dialog = await screen.findByRole("dialog", { name: /Gemini API key/i });
+    const dialog = await screen.findByRole("dialog", { name: /^Models$/i });
     expect(dialog.closest("[data-testid='nav-shell']")).toBeNull();
     expect(dialog.parentElement).toHaveAttribute("data-testid", "gemini-key-overlay");
     expect(dialog.parentElement?.className).toMatch(/fixed/);

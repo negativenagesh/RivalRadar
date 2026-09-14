@@ -14,7 +14,7 @@ import type {
   PipelineRun,
   PipelineRunCreated,
 } from "./types";
-import { loadGeminiKey } from "./gemini-key";
+import { loadOperatorState, resolveImageModel, resolveTextModel } from "./operator-models";
 
 export const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
 
@@ -34,15 +34,21 @@ function errorDetail(body: { detail?: unknown }, fallback: string): string {
   return fallback;
 }
 
-async function request<T>(path: string, init?: RequestInit & { gemini?: boolean }): Promise<T> {
-  const { gemini: attachGemini, ...rest } = init ?? {};
+async function request<T>(path: string, init?: RequestInit & { operator?: boolean }): Promise<T> {
+  const { operator: attachOperator, ...rest } = init ?? {};
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(rest.headers as Record<string, string> | undefined),
   };
-  if (attachGemini) {
-    const gemini = loadGeminiKey();
-    if (gemini) headers["X-Gemini-Key"] = gemini;
+  if (attachOperator) {
+    const state = loadOperatorState();
+    const text = resolveTextModel(state);
+    const image = resolveImageModel(state);
+    if (state.gemini) headers["X-Gemini-Key"] = state.gemini;
+    if (state.deepseek) headers["X-DeepSeek-Key"] = state.deepseek;
+    if (state.nvidia) headers["X-Nvidia-Key"] = state.nvidia;
+    if (text) headers["X-Text-Model"] = text;
+    headers["X-Image-Model"] = image ?? "none";
   }
   let response: Response;
   try {
@@ -148,7 +154,7 @@ export function generateCreative(body: CreativeRequest): Promise<CreativeResult>
   return request<CreativeResult>("/creative/generate", {
     method: "POST",
     body: JSON.stringify(body),
-    gemini: true,
+    operator: true,
   });
 }
 
@@ -161,7 +167,22 @@ export function generateIntelReport(body: {
   return request<IntelReport>("/intel/report", {
     method: "POST",
     body: JSON.stringify(body),
-    gemini: true,
+    operator: true,
+  });
+}
+
+export function pingLlm(
+  vendor: "gemini" | "deepseek" | "nvidia",
+  apiKey: string,
+): Promise<{ vendor: string; model: string; preview: string }> {
+  const headers: Record<string, string> = {};
+  if (vendor === "gemini") headers["X-Gemini-Key"] = apiKey;
+  if (vendor === "deepseek") headers["X-DeepSeek-Key"] = apiKey;
+  if (vendor === "nvidia") headers["X-Nvidia-Key"] = apiKey;
+  return request("/llm/ping", {
+    method: "POST",
+    body: JSON.stringify({ vendor }),
+    headers,
   });
 }
 

@@ -1,13 +1,12 @@
 "use client";
 
-import { useState } from "react";
 import { motion } from "motion/react";
 import { Globe2, KeyRound, Plus, Sparkles, Trash2, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SocialLinkFields } from "@/components/mission/social-icons";
-import { useGeminiKey } from "@/components/gemini-key-provider";
+import { useOperatorModels } from "@/components/operator-models-provider";
 import type { BrandProfile, CompetitorProfile } from "@/lib/types";
 import { newCompetitor } from "@/lib/mission-store";
 import { cn } from "@/lib/utils";
@@ -76,57 +75,34 @@ function GlassPanel({
   );
 }
 
-function GeminiKillswitch() {
-  const gemini = useGeminiKey();
-  const [draft, setDraft] = useState("");
+function ModelsKillswitch() {
+  const models = useOperatorModels();
 
   return (
-    <GlassPanel delay={0.05} className={gemini.ready ? undefined : "border-destructive/50"}>
+    <GlassPanel delay={0.05} className={models.readyText ? undefined : "border-destructive/50"}>
       <div className="mb-4">
         <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
           <KeyRound className="size-3.5" />
-          Gemini killswitch
+          Model keys
         </p>
-        <h2 className="mt-2 text-2xl font-bold tracking-tight">Your key. Your tokens.</h2>
+        <h2 className="mt-2 text-2xl font-bold tracking-tight">Your keys. Your tokens.</h2>
         <p className="mt-1 max-w-md text-sm text-muted-foreground">
-          Paste a Gemini API key so Report, memes, and comment sniper can run. Stored in this
-          browser only — we will not use the server .env.
+          Gemini, DeepSeek V4.1 Flash, or NVIDIA gpt-oss-20b. Stored in this browser only — never
+          the server .env. Test a key before it is saved.
         </p>
       </div>
-      {gemini.ready ? (
+      {models.readyText ? (
         <p className="mb-3 rounded-2xl border border-primary/30 bg-primary/10 px-3 py-2 font-mono text-sm text-primary">
-          live {gemini.masked}
+          live {models.chipLabel}
         </p>
       ) : (
         <p className="mb-3 animate-pulse rounded-2xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          Warning: no Gemini key. The war room stays dark until you paste one.
+          Warning: no text model key. The war room stays dark until you paste one.
         </p>
       )}
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <input
-          type="password"
-          autoComplete="off"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="AIza…"
-          className={`${inputClass} font-mono`}
-        />
-        <Button
-          type="button"
-          onClick={() => {
-            gemini.setKey(draft);
-            setDraft("");
-          }}
-          disabled={!draft.trim()}
-        >
-          Save
-        </Button>
-        {gemini.ready && (
-          <Button type="button" variant="outline" onClick={() => gemini.clear()}>
-            Clear
-          </Button>
-        )}
-      </div>
+      <Button type="button" onClick={() => models.openSheet()}>
+        Open Models
+      </Button>
     </GlassPanel>
   );
 }
@@ -199,7 +175,7 @@ export function BrandForm({
         </div>
       </GlassPanel>
 
-      <GeminiKillswitch />
+      <ModelsKillswitch />
 
       <GlassPanel delay={0.08}>
         <SocialLinkFields
