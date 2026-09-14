@@ -27,7 +27,7 @@ async def test_trigger_ingestion_endpoint(client: AsyncClient) -> None:
     assert result["accounts_ingested"] == 3
     assert result["posts_ingested"] == 10
     assert result["posts_skipped_duplicate"] == 0
-    assert result["lookback_days"] == 3
+    assert result["lookback_days"] == 7
     assert result["sources_used"] == []
     assert result["screenshots"] == []
     assert "date_from" in result and "date_to" in result

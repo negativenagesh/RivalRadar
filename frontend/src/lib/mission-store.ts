@@ -74,7 +74,7 @@ export const DEFAULT_MISSION: MissionState = {
   ],
   permissions: DEFAULT_PERMISSIONS,
   recordSession: true,
-  lookbackDays: 3,
+  lookbackDays: 7,
   dateFrom: null,
   dateTo: null,
   lastRunId: null,
@@ -92,7 +92,7 @@ export function loadMission(): MissionState {
       lookbackDays:
         typeof parsed.lookbackDays === "number" && parsed.lookbackDays >= 1
           ? Math.min(90, parsed.lookbackDays)
-          : 3,
+          : 7,
       dateFrom: typeof parsed.dateFrom === "string" ? parsed.dateFrom : null,
       dateTo: typeof parsed.dateTo === "string" ? parsed.dateTo : null,
     };
@@ -306,7 +306,7 @@ export function buildDiscoveryReport(input: {
   const themes = [...new Set(input.posts.flatMap((p) => p.themes))].slice(0, 8);
   const formats = [...new Set(input.posts.map((p) => p.format))];
   const rivalNames = input.competitors.map((c) => c.name || c.website).filter(Boolean);
-  const lookback = input.lookbackDays ?? 3;
+  const lookback = input.lookbackDays ?? 7;
 
   const allowed: string[] = [];
   if (input.permissions.draftReplies) allowed.push("reply/response posts");
