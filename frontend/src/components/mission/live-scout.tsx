@@ -17,6 +17,7 @@ import {
   filterFindingsPosts,
   postVisualUrl,
 } from "@/lib/findings-filter";
+import { scoutWindowStatsFromEvents } from "@/lib/scout-window-stats";
 import {
   PLATFORM_LABELS,
   requiredConnectPlatforms,
@@ -422,6 +423,7 @@ export function LiveScout({
     [posts, accounts, targets, dateFrom, dateTo, lookbackDays],
   );
   const shots = useMemo(() => mergeShots(liveShots, persistedShots), [liveShots, persistedShots]);
+  const windowStats = useMemo(() => scoutWindowStatsFromEvents(events), [events]);
   const ytdlpIntel = useMemo(() => ytdlpIntelFromEvents(events), [events]);
   const logEvents = useMemo(() => operatorLogEvents(events), [events]);
   useEffect(() => {
@@ -801,14 +803,28 @@ export function LiveScout({
         </div>
       )}
 
-      {shots.length > 0 && (
+      {(shots.length > 0 || windowStats.found > 0 || priorActive || Boolean(runId)) && (
         <div className="space-y-4 text-left">
           <div className="text-center">
             <h3 className="font-display text-2xl font-bold">In-window posts</h3>
             <p className="font-accent text-sm italic text-muted-foreground">
-              {shots.length} posts in this lookback — image expands here, title opens the post.
+              {shots.length > 0
+                ? `${shots.length} posts in this lookback — image expands here, title opens the post.`
+                : dateFrom && dateTo
+                  ? `Waiting on posts for ${dateFrom} → ${dateTo}.`
+                  : `Waiting on posts for the last ${lookbackDays} days.`}
             </p>
+            {(windowStats.found > 0 || windowStats.skippedOutside > 0) && (
+              <p className="font-ui mt-1 text-xs text-muted-foreground">
+                Found {windowStats.found} · kept {windowStats.ingested || shots.length} · outside
+                lookback {windowStats.skippedOutside}
+                {windowStats.skippedOutside > 0 && shots.length === 0
+                  ? " — widen the lookback above (7d / 14d) to keep more."
+                  : ""}
+              </p>
+            )}
           </div>
+          {shots.length > 0 ? (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {shots.map((s) => {
               const src = shotSrc(s);
@@ -859,6 +875,15 @@ export function LiveScout({
               );
             })}
           </div>
+          ) : (
+            <p className="rounded-2xl border border-dashed border-border/50 px-4 py-8 text-center text-sm text-muted-foreground">
+              {windowStats.skippedOutside > 0
+                ? "Scout found posts, but none sit inside the current lookback. Switch to 7d or 14d and re-run."
+                : priorActive
+                  ? "In-window frames appear here as soon as a post is kept."
+                  : "Start scout to stream in-window post frames."}
+            </p>
+          )}
         </div>
       )}
 

@@ -51,6 +51,8 @@ _LINKEDIN_OSS_BUDGET_S = 80
 _GOTO_MS = 20_000
 _HEARTBEAT_S = 3
 _COLLECT_BUDGET_S = 40
+# Reverse-chrono feeds: stop after this many posts older than date_from.
+_PAST_WINDOW_STOP = 3
 _SKIP_PLATFORMS = {"tiktok"}
 
 
@@ -493,26 +495,9 @@ class SocialFeedConnector:
             )
 
         await self._emit("action", {"detail": f"collecting_posts platform={platform}"})
-        try:
-            post_urls = await asyncio.wait_for(
-                collect_post_urls(
-                    page,
-                    platform=platform,
-                    profile_url=url,
-                    limit=_MAX_POSTS,
-                    max_scrolls=8,
-                ),
-                timeout=_COLLECT_BUDGET_S,
-            )
-        except TimeoutError:
-            await self._emit(
-                "error",
-                {"detail": f"collect_posts timed out {platform} — continuing"},
-            )
-            post_urls = []
-        except Exception as exc:  # noqa: BLE001
-            await self._emit("error", {"detail": f"collect_posts failed {platform}: {exc}"})
-            post_urls = []
+        post_urls = await self._collect_post_urls_bounded(
+            page, platform=platform, profile_url=url
+        )
 
         await self._emit(
             "action",
@@ -520,11 +505,13 @@ class SocialFeedConnector:
         )
 
         kept = 0
+        skipped_outside = 0
+        consecutive_older = 0
         for post_url in post_urls:
             if kept >= _MAX_POSTS:
                 break
             try:
-                ok = await self._ingest_post(
+                outcome = await self._ingest_post(
                     session,
                     handle=handle,
                     platform=platform,
@@ -532,19 +519,94 @@ class SocialFeedConnector:
                 )
             except Exception as exc:  # noqa: BLE001
                 await self._emit("error", {"detail": f"ingest_post failed {post_url}: {exc}"})
-                ok = False
-            if ok:
+                outcome = "failed"
+            if outcome == "kept":
                 kept += 1
+                consecutive_older = 0
+            elif outcome == "older":
+                skipped_outside += 1
+                consecutive_older += 1
+                if consecutive_older >= _PAST_WINDOW_STOP:
+                    await self._emit(
+                        "action",
+                        {
+                            "detail": (
+                                f"past_window_stop platform={platform} "
+                                f"after={consecutive_older} older than {self._window.date_from}"
+                            )
+                        },
+                    )
+                    break
+            elif outcome == "outside":
+                skipped_outside += 1
+                consecutive_older = 0
+            else:
+                consecutive_older = 0
 
         await self._emit(
             "action",
             {
                 "detail": (
                     f"ingested_posts count={kept} platform={platform} "
-                    f"window={self._window.date_from}→{self._window.date_to} source=browser"
+                    f"window={self._window.date_from}→{self._window.date_to} "
+                    f"skipped_outside={skipped_outside} source=browser"
                 ),
             },
         )
+
+    async def _collect_post_urls_bounded(
+        self,
+        page: Any,
+        *,
+        platform: str,
+        profile_url: str,
+    ) -> list[str]:
+        stop = asyncio.Event()
+        hb = asyncio.create_task(
+            self._phase_heartbeat(label=f"collecting_posts platform={platform}", stop=stop)
+        )
+        try:
+            return await await_or_abandon(
+                collect_post_urls(
+                    page,
+                    platform=platform,
+                    profile_url=profile_url,
+                    limit=_MAX_POSTS,
+                    max_scrolls=8,
+                ),
+                _COLLECT_BUDGET_S,
+            )
+        except TimeoutError:
+            await self._emit(
+                "error",
+                {"detail": f"collect_posts timed out {platform} — continuing"},
+            )
+            return []
+        except Exception as exc:  # noqa: BLE001
+            await self._emit("error", {"detail": f"collect_posts failed {platform}: {exc}"})
+            return []
+        finally:
+            stop.set()
+            hb.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb
+
+    async def _phase_heartbeat(self, *, label: str, stop: asyncio.Event) -> None:
+        elapsed = 0
+        while not stop.is_set():
+            await self._emit("action", {"detail": f"{label} elapsed={elapsed}s"})
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=_HEARTBEAT_S)
+                return
+            except TimeoutError:
+                elapsed += _HEARTBEAT_S
+
+    def _skip_outside_outcome(self, posted_at: datetime) -> str:
+        """Classify outside-window posts for reverse-chrono early stop."""
+        day = posted_at.astimezone(UTC).date() if posted_at.tzinfo else posted_at.date()
+        if day < self._window.date_from:
+            return "older"
+        return "outside"
 
     async def _ingest_post(
         self,
@@ -553,7 +615,8 @@ class SocialFeedConnector:
         handle: str,
         platform: str,
         post_url: str,
-    ) -> bool:
+    ) -> str:
+        """Return kept | older | outside | failed (no_date / nav / parse errors)."""
         assert session.page is not None
         page = session.page
         await self._emit("nav", {"url": post_url, "platform": platform, "phase": "post"})
@@ -562,18 +625,24 @@ class SocialFeedConnector:
             await settle_page(page)
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"post nav failed {post_url}: {exc}"})
-            return False
+            return "failed"
 
         url_date = posted_at_from_url(platform, post_url)
         if url_date is not None:
             if url_date.tzinfo is None:
                 url_date = url_date.replace(tzinfo=UTC)
             if not self._window.contains(url_date):
+                day = url_date.astimezone(UTC).date()
                 await self._emit(
                     "action",
-                    {"detail": f"skipped_post reason=outside_window {post_url[:120]}"},
+                    {
+                        "detail": (
+                            f"skipped_post reason=outside_window day={day.isoformat()} "
+                            f"{post_url[:120]}"
+                        )
+                    },
                 )
-                return False
+                return self._skip_outside_outcome(url_date)
         await self._pause(short=True)
         try:
             parsed = await parse_post_page(
@@ -584,22 +653,28 @@ class SocialFeedConnector:
             )
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"parse_post failed {post_url}: {exc}"})
-            return False
+            return "failed"
         posted_at: datetime | None = parsed.get("posted_at") or url_date
         if posted_at is None:
             await self._emit(
                 "action",
                 {"detail": f"skipped_post reason=no_date {post_url[:120]}"},
             )
-            return False
+            return "failed"
         if posted_at.tzinfo is None:
             posted_at = posted_at.replace(tzinfo=UTC)
         if not self._window.contains(posted_at):
+            day = posted_at.astimezone(UTC).date()
             await self._emit(
                 "action",
-                {"detail": f"skipped_post reason=outside_window {post_url[:120]}"},
+                {
+                    "detail": (
+                        f"skipped_post reason=outside_window day={day.isoformat()} "
+                        f"{post_url[:120]}"
+                    )
+                },
             )
-            return False
+            return self._skip_outside_outcome(posted_at)
 
         media_url = parsed.get("media_url")
         media_keys: list[str] = []
@@ -659,7 +734,7 @@ class SocialFeedConnector:
         )
         if media_keys:
             await self._emit_stored_media_frame(post, platform=platform)
-        return True
+        return "kept"
 
     async def _download_post_media(
         self,

@@ -42,7 +42,7 @@ class DateWindow:
             if span > 90:
                 raise DateWindowError("Custom date range cannot exceed 90 days")
             return cls(date_from=date_from, date_to=date_to)
-        days = lookback_days if lookback_days is not None else 3
+        days = lookback_days if lookback_days is not None else 7
         return cls.from_lookback(days, now=now)
 
     def contains(self, dt: datetime) -> bool:

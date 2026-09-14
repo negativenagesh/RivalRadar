@@ -65,7 +65,7 @@ class IngestionRunCreate(BaseModel):
     targets: list[ProfileTargetIn] = []
     record: bool = False
     headless: bool = True
-    lookback_days: int = Field(default=3, ge=1, le=90)
+    lookback_days: int = Field(default=7, ge=1, le=90)
     date_from: date | None = None
     date_to: date | None = None
     # Decrypted Connect Center sessions keyed by platform (linkedin, x, …)
