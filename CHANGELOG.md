@@ -10,6 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 - Meme generation now feeds a **brand + rival roast pack** (dossier: category/ICP/pillars; scoreboard metrics + visual%; format mix/themes; rival/brand post receipts). Captions may name rivals and cite real scout numbers; painted frames still never include rival logos or cloned post art.
 - Hard Gen-Z meme pass: ROAST_PACK is joke fuel (not painted scoreboards); bans laptop/dashboard frames and metric overlays like “Rival: 18 Likes”; spice ≥ 4 raises temperature and retries soft scoreboard overlays.
 - README documents Mission War Room agents + Format Studio; ships real meme example screenshots under [`docs/examples/memes/`](docs/examples/memes/) with captions from operator logs.
+- README hero uses the frontend radar mark + RivalRadar wordmark with GitHub star/fork/CI badge tiles (no H1 title).
 
 ### Added
 - Operator Models chip can paint with **Agnes Image 2.5 Flash** (`agnes-image-2.5-flash` via `POST /v1/images/generations`, 1K + social ratios) when Gemini is absent. Test & save pings a real 1K square. NVIDIA FLUX remains a fallback; ModelScope is not wired (Alibaba Cloud bind required).
