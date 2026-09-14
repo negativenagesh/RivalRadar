@@ -83,7 +83,7 @@ describe("DiscoveryReport war room", () => {
       </GeminiKeyProvider>,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent(/Paste your Gemini API key/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/Paste a Gemini, DeepSeek, or NVIDIA key/i);
     expect(screen.getAllByText("Scoreboard").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Pixis").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Hot take quote card" })).toBeInTheDocument();

@@ -1,7 +1,7 @@
 "use client";
 
-import { GeminiKeyProvider } from "@/components/gemini-key-provider";
+import { OperatorModelsProvider } from "@/components/operator-models-provider";
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
-  return <GeminiKeyProvider>{children}</GeminiKeyProvider>;
+  return <OperatorModelsProvider>{children}</OperatorModelsProvider>;
 }

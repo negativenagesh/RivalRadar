@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { useGeminiKey } from "@/components/gemini-key-provider";
+import { useOperatorModels } from "@/components/operator-models-provider";
 import {
   dropSocialComment,
   generateCreative,
@@ -31,6 +31,7 @@ import {
   STUDIO_FORMATS,
   formatUnlocked,
 } from "@/lib/studio-formats";
+import { imageModelLabel, textModelLabel } from "@/lib/operator-models";
 import type {
   BrandProfile,
   ConnectionStatus,
@@ -39,7 +40,7 @@ import type {
   IntelReport,
 } from "@/lib/types";
 
-const KEY_WARNING = "Paste your Gemini API key in Context or the navbar chip.";
+const KEY_WARNING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip.";
 
 const PERM_OPTIONS: {
   key: keyof CreativePermissions;
@@ -63,8 +64,8 @@ const PERM_OPTIONS: {
   },
   {
     key: "imageConcepts",
-    label: "Nano Banana post visuals",
-    hint: "Memes, quote cards, founder frames",
+    label: "Post visuals",
+    hint: "Nano Banana 2 or NVIDIA FLUX frames",
   },
   {
     key: "carouselOutlines",
@@ -130,7 +131,7 @@ export function DiscoveryReport({
   onPermissionsChange: (p: CreativePermissions) => void;
   brand: BrandProfile;
 }) {
-  const gemini = useGeminiKey();
+  const models = useOperatorModels();
   const factsJson = useMemo(() => JSON.stringify(facts), [facts]);
   const factsSig = `${facts.window.label}|${facts.brandName}|${facts.companies
     .map((c) => `${c.name}:${c.posts}`)
@@ -148,8 +149,8 @@ export function DiscoveryReport({
   }
   const intel = mergeIntel(facts, geminiIntel);
   const usedFallback = geminiIntel === null;
-  const intelBusy = gemini.ready && geminiIntel === null && intelFetchError === null;
-  const intelError = !gemini.ready ? KEY_WARNING : intelFetchError;
+  const intelBusy = models.readyText && geminiIntel === null && intelFetchError === null;
+  const intelError = !models.readyText ? KEY_WARNING : intelFetchError;
 
   const [studioFormat, setStudioFormat] = useState("hot_take");
   const [studioPlatform, setStudioPlatform] = useState("linkedin");
@@ -221,7 +222,7 @@ export function DiscoveryReport({
   }, []);
 
   useEffect(() => {
-    if (!gemini.ready) return;
+    if (!models.readyText) return;
     let cancelled = false;
     void generateIntelReport({
       facts,
@@ -244,10 +245,10 @@ export function DiscoveryReport({
     return () => {
       cancelled = true;
     };
-  }, [facts, factsSig, gemini.ready, brand.displayName, brand.voiceNotes, brand.forbiddenClaims]);
+  }, [facts, factsSig, models.readyText, brand.displayName, brand.voiceNotes, brand.forbiddenClaims]);
 
   async function runStudio(spice = studioSpice) {
-    if (!gemini.ready) {
+    if (!models.readyText) {
       setStudioError(KEY_WARNING);
       return;
     }
@@ -278,7 +279,7 @@ export function DiscoveryReport({
   }
 
   async function runSniper() {
-    if (!gemini.ready) {
+    if (!models.readyText) {
       setSniperError(KEY_WARNING);
       return;
     }
@@ -360,7 +361,7 @@ export function DiscoveryReport({
         </p>
       </div>
 
-      {!gemini.ready && (
+      {!models.readyText && (
         <p
           role="alert"
           className="animate-pulse rounded-2xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm text-primary"
@@ -380,7 +381,11 @@ export function DiscoveryReport({
           <div className="flex items-center gap-2">
             {intelBusy && <Loader2 className="size-4 animate-spin text-primary" />}
             <span className="font-ui text-[10px] uppercase tracking-widest text-muted-foreground">
-              {intelBusy ? "agents writing" : usedFallback ? "offline · fact brief" : "gemini live"}
+              {intelBusy
+                ? "agents writing"
+                : usedFallback
+                  ? "offline · fact brief"
+                  : `${models.textModel ?? "model"} live`}
             </span>
             <Button
               size="sm"
@@ -473,7 +478,8 @@ export function DiscoveryReport({
           <h3 className="font-display text-lg font-bold">Format studio</h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          Pick what to make. Gemini writes the caption; Nano Banana paints the frame. No rival logos.
+          Pick what to make. {models.textModel ? textModelLabel(models.textModel) : "Your text model"}{" "}
+          writes the caption; {imageModelLabel(models.imageModel)} paints the frame. No rival logos.
         </p>
         <div className="flex flex-wrap gap-2">
           {STUDIO_FORMATS.map((fmt) => {
@@ -516,14 +522,14 @@ export function DiscoveryReport({
           ))}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={studioBusy || !gemini.ready} onClick={() => void runStudio()}>
+          <Button disabled={studioBusy || !models.readyText} onClick={() => void runStudio()}>
             {studioBusy ? <Loader2 className="size-4 animate-spin" /> : <Flame className="size-4" />}
             Generate
           </Button>
           {studioOut && (
             <Button
               variant="outline"
-              disabled={studioBusy || !gemini.ready}
+              disabled={studioBusy || !models.readyText}
               onClick={() => void runStudio(Math.min(5, studioSpice + 1))}
             >
               Regenerate with more spice
@@ -677,7 +683,7 @@ export function DiscoveryReport({
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
-            disabled={sniperBusy !== null || !gemini.ready}
+            disabled={sniperBusy !== null || !models.readyText}
             onClick={() => void runSniper()}
           >
             {sniperBusy === "gen" ? (

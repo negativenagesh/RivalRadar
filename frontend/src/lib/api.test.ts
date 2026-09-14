@@ -96,6 +96,8 @@ describe("api client", () => {
 
     await generateCreative({ kind: "studio", brand_name: "Pixis" });
     expect(fetchMock.mock.calls[0][1].headers["X-Gemini-Key"]).toBe("AIzaSyDummyKey1234");
+    expect(fetchMock.mock.calls[0][1].headers["X-Text-Model"]).toBe("gemini");
+    expect(fetchMock.mock.calls[0][1].headers["X-Image-Model"]).toBe("nano_banana");
 
     fetchMock.mockClear();
     fetchMock.mockResolvedValue({ ok: true, json: async () => [] });
