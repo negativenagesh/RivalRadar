@@ -284,44 +284,48 @@ export function DiscoveryReport({
 
   useEffect(() => {
     if (!models.readyText) return;
-    const cacheKey = intelCacheKey(factsSig, brand.displayName || "the brand");
-    const cached = readIntelCache(cacheKey);
-    if (cached) {
-      setGeminiIntel(cached);
-      setIntelFetchError(null);
-      return;
-    }
     let cancelled = false;
-    setIntelStages({});
-    void streamIntelReport(
-      {
-        facts,
-        brand_name: brand.displayName || "the brand",
-        voice_notes: brand.voiceNotes,
-        forbidden_claims: brand.forbiddenClaims,
-      },
-      (event) => {
-        if (cancelled) return;
-        if (event.event === "stage") {
-          setIntelStages((s) => ({ ...s, [event.agent]: "writing" }));
-        } else if (event.event === "agent") {
-          setIntelStages((s) => ({ ...s, [event.agent]: "done" }));
-        }
-      },
-    )
-      .then((report) => {
-        if (cancelled) return;
-        writeIntelCache(cacheKey, report);
-        setGeminiIntel(report);
+    const cacheKey = intelCacheKey(factsSig, brand.displayName || "the brand");
+    // Defer setState out of the effect body (react-hooks/set-state-in-effect).
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      const cached = readIntelCache(cacheKey);
+      if (cached) {
+        setGeminiIntel(cached);
         setIntelFetchError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setGeminiIntel(null);
-        setIntelFetchError(
-          err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
-        );
-      });
+        return;
+      }
+      setIntelStages({});
+      void streamIntelReport(
+        {
+          facts,
+          brand_name: brand.displayName || "the brand",
+          voice_notes: brand.voiceNotes,
+          forbidden_claims: brand.forbiddenClaims,
+        },
+        (event) => {
+          if (cancelled) return;
+          if (event.event === "stage") {
+            setIntelStages((s) => ({ ...s, [event.agent]: "writing" }));
+          } else if (event.event === "agent") {
+            setIntelStages((s) => ({ ...s, [event.agent]: "done" }));
+          }
+        },
+      )
+        .then((report) => {
+          if (cancelled) return;
+          writeIntelCache(cacheKey, report);
+          setGeminiIntel(report);
+          setIntelFetchError(null);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setGeminiIntel(null);
+          setIntelFetchError(
+            err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
+          );
+        });
+    });
     return () => {
       cancelled = true;
     };
