@@ -30,6 +30,17 @@ def test_host_needs_ssl() -> None:
     assert _host_needs_ssl("postgresql+asyncpg://u:p@postgres:5432/db") is False
 
 
+def test_database_ssl_connect_arg_is_require_mode() -> None:
+    """Render self-signed TLS needs asyncpg ssl='require', not ssl=True (verify)."""
+    from app import db as db_mod
+    from app.config import settings
+
+    if settings.database_ssl:
+        assert db_mod._connect_args.get("ssl") == "require"
+    else:
+        assert "ssl" not in db_mod._connect_args
+
+
 def test_memory_rate_limiter_blocks() -> None:
     limiter = MemoryRateLimiter()
     assert limiter.allow("v1:/creative/generate", 2, 60)[0] is True
