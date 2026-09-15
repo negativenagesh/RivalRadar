@@ -41,3 +41,8 @@ export function formatUnlocked(
   if (!spec) return false;
   return permissions[spec.permission];
 }
+
+/** Human label for a studio format id (falls back to the id). */
+export function formatLabel(formatId: string): string {
+  return STUDIO_FORMATS.find((f) => f.id === formatId)?.label ?? formatId;
+}

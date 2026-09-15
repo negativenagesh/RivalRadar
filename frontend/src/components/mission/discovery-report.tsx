@@ -35,6 +35,7 @@ import {
   SNIPER_PLATFORMS,
   SNIPER_TONES,
   STUDIO_FORMATS,
+  formatLabel,
   formatUnlocked,
 } from "@/lib/studio-formats";
 import { imageModelLabel, textModelLabel } from "@/lib/operator-models";
@@ -767,7 +768,7 @@ export function DiscoveryReport({
                 className="overflow-hidden rounded-2xl border border-border/60 bg-background/40"
               >
                 <div className="border-b border-border/40 px-4 py-2 font-mono text-xs uppercase text-primary">
-                  {studioFormat} · {studioPlatform}
+                  {formatLabel(studioFormat)} · {studioPlatform}
                   {studioOuts.length > 1 ? ` · #${idx + 1}` : ""}
                 </div>
                 <div className="space-y-3 p-4">
@@ -838,12 +839,14 @@ export function DiscoveryReport({
             <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-primary/40 bg-primary/5 px-4 py-8">
               <Loader2 className="size-8 animate-spin text-primary" />
               <p className="font-mono text-xs uppercase tracking-wider text-primary">
-                Cooking {studioFormat === "meme" ? "meme" : "variation"} {studioLoadingSlot}
+                Cooking {formatLabel(studioFormat)} {studioLoadingSlot}
                 {studioCount > 1 ? ` of ${studioCount}` : ""}
                 …
               </p>
               <p className="text-xs text-muted-foreground">
-                Caption first, then the frame — hang tight.
+                {studioFormat === "meme"
+                  ? "Caption first, then the frame — hang tight."
+                  : `Building your ${formatLabel(studioFormat).toLowerCase()} — hang tight.`}
               </p>
             </div>
           )}
