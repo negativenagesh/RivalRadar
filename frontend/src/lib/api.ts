@@ -185,6 +185,81 @@ export function generateIntelReport(body: {
   });
 }
 
+export type IntelStreamEvent =
+  | { event: "stage"; agent: string; status: "writing" }
+  | { event: "agent"; agent: string; status: "done"; ok: boolean }
+  | { event: "report"; report: IntelReport }
+  | { event: "error"; detail: string };
+
+/** SSE intel stream: per-agent progress events, resolves with the final report. */
+export async function streamIntelReport(
+  body: {
+    facts: unknown;
+    brand_name: string;
+    voice_notes?: string;
+    forbidden_claims?: string;
+  },
+  onEvent?: (event: IntelStreamEvent) => void,
+): Promise<IntelReport> {
+  const state = loadOperatorState();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (state.gemini) headers["X-Gemini-Key"] = state.gemini;
+  if (state.deepseek) headers["X-DeepSeek-Key"] = state.deepseek;
+  if (state.nvidia) headers["X-Nvidia-Key"] = state.nvidia;
+  if (state.agnes) headers["X-Agnes-Key"] = state.agnes;
+  headers["X-Text-Model"] = resolveTextModel(state) ?? state.textModel;
+  headers["X-Image-Model"] = resolveImageModel(state) ?? state.imageModel;
+
+  let response: Response;
+  try {
+    response = await fetch(`${GATEWAY_URL}/intel/report/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "network error";
+    throw new Error(`Gateway unreachable (${reason}).`);
+  }
+  if (!response.ok || !response.body) {
+    throw new Error(`Intel stream failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let report: IntelReport | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) {
+      const eventMatch = block.match(/^event: (.+)$/m);
+      const dataMatch = block.match(/^data: (.+)$/m);
+      if (!eventMatch || !dataMatch) continue;
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(dataMatch[1]) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const event = { event: eventMatch[1], ...data } as IntelStreamEvent;
+      if (event.event === "error") {
+        throw new Error(event.detail || "Intel stream error");
+      }
+      if (event.event === "report") {
+        report = event.report;
+      }
+      onEvent?.(event);
+    }
+  }
+  if (!report) throw new Error("Intel stream ended without a report.");
+  return report;
+}
+
 export function pingLlm(
   vendor: "gemini" | "deepseek" | "nvidia" | "agnes",
   apiKey: string,

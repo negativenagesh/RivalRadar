@@ -1,9 +1,13 @@
+import json
+from collections.abc import AsyncIterator
+
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.creative import CreativeRequest, CreativeResponse, generate_creative
 from app.drafting import draft_response
-from app.intel import IntelReport, IntelRequest, generate_intel
+from app.intel import IntelReport, IntelRequest, generate_intel, generate_intel_events
 from app.schemas import DraftRequest, DraftResponse
 from app.voice.retrieval import load_corpus
 from llm_provider import (
@@ -117,3 +121,22 @@ async def intel_report(
         return await generate_intel(request, provider)
     except LLMProviderError as exc:
         raise _llm_http(exc) from exc
+
+
+@router.post("/intel/report/stream")
+async def intel_report_stream(
+    request: IntelRequest,
+    provider: LLMProvider = Depends(operator_provider),
+) -> StreamingResponse:
+    """SSE: stage/agent progress events, then the final merged IntelReport."""
+
+    async def events() -> AsyncIterator[str]:
+        try:
+            async for payload in generate_intel_events(request, provider):
+                event = str(payload.pop("event"))
+                yield f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except LLMProviderError as exc:
+            detail = json.dumps({"detail": exc.detail}, ensure_ascii=False)
+            yield f"event: error\ndata: {detail}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")

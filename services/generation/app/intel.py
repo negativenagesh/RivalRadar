@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator, Awaitable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -514,35 +515,15 @@ def _facts_header(request: IntelRequest, facts: dict[str, Any]) -> str:
     )
 
 
-async def generate_intel(request: IntelRequest, provider: LLMProvider) -> IntelReport:
-    facts = request.facts or {}
-    fallback = fallback_intel(facts, request.brand_name)
-    platforms = _platforms_in_facts(facts)
-    header = _facts_header(request, facts)
-    chief_user = (
-        "JSON schema keys: scoreboard_blurb, markdown, "
-        "good_at[], fumbling[], why_engagement_mid[], gaps[], "
-        "plays[{title,format,platform,why}], sniper_bait[{why,href,company}].\n\n"
-        f"{header}"
-    )
-    play_user = header
-    platform_user = header
-
-    chief_data, play_data, platform_data = await asyncio.gather(
-        _complete_json(provider, system=INTEL_CHIEF, user=chief_user, max_tokens=4500),
-        _complete_json(provider, system=PLAY_CALLER, user=play_user, max_tokens=2800),
-        _complete_json(provider, system=PLATFORM_SCOUT, user=platform_user, max_tokens=3200),
-    )
-
-    agents_used: list[str] = []
-    if chief_data:
-        agents_used.append("intel_chief")
-    if play_data.get("reports"):
-        agents_used.append("play_caller")
-    if platform_data.get("reports"):
-        agents_used.append("platform_scout")
-
-    # One retry if chief markdown is thin / template-clone (common with gpt-oss empty JSON).
+async def _chief_with_quality_retry(
+    provider: LLMProvider,
+    *,
+    chief_user: str,
+    fallback: IntelReport,
+    platforms: list[str],
+) -> dict[str, Any]:
+    """Intel Chief JSON + one quality retry when the markdown is thin."""
+    chief_data = await _complete_json(provider, system=INTEL_CHIEF, user=chief_user, max_tokens=4500)
     markdown = str(chief_data.get("markdown") or "").strip()
     if not markdown_passes_quality(markdown, fallback=fallback.markdown, platforms=platforms):
         retry_user = (
@@ -551,14 +532,30 @@ async def generate_intel(request: IntelRequest, provider: LLMProvider) -> IntelR
             "Write a NEW evaluative brief with 25+ distinct bullets. "
             "Do not copy FACTS lines. Cover every MUST-evaluate platform."
         )
-        retry = await _complete_json(
-            provider, system=INTEL_CHIEF, user=retry_user, max_tokens=4500
-        )
+        retry = await _complete_json(provider, system=INTEL_CHIEF, user=retry_user, max_tokens=4500)
         if retry:
             chief_data = {**chief_data, **retry}
-            markdown = str(chief_data.get("markdown") or "").strip()
-            if "intel_chief" not in agents_used:
-                agents_used.append("intel_chief")
+    return chief_data
+
+
+def _assemble_intel(
+    request: IntelRequest,
+    *,
+    chief_data: dict[str, Any],
+    play_data: dict[str, Any],
+    platform_data: dict[str, Any],
+) -> IntelReport:
+    facts = request.facts or {}
+    fallback = fallback_intel(facts, request.brand_name)
+    platforms = _platforms_in_facts(facts)
+
+    agents_used: list[str] = []
+    if chief_data:
+        agents_used.append("intel_chief")
+    if play_data.get("reports"):
+        agents_used.append("play_caller")
+    if platform_data.get("reports"):
+        agents_used.append("platform_scout")
 
     merged: dict[str, Any] = dict(chief_data)
     report_chunks: list[Any] = []
@@ -578,10 +575,87 @@ async def generate_intel(request: IntelRequest, provider: LLMProvider) -> IntelR
         # Keep structured fields / agent reports if present, but stick to fact markdown.
         merged.pop("markdown", None)
         narration: Literal["agent", "fallback"] = "fallback"
-        if not agents_used:
-            agents_used = []
         logger.info("intel chief markdown failed quality gate — using fact brief + agent tabs if any")
     else:
         narration = "agent"
 
     return _merge_intel(fallback, merged, agents_used=agents_used, narration=narration)
+
+
+async def generate_intel(request: IntelRequest, provider: LLMProvider) -> IntelReport:
+    facts = request.facts or {}
+    platforms = _platforms_in_facts(facts)
+    header = _facts_header(request, facts)
+    chief_user = (
+        "JSON schema keys: scoreboard_blurb, markdown, "
+        "good_at[], fumbling[], why_engagement_mid[], gaps[], "
+        "plays[{title,format,platform,why}], sniper_bait[{why,href,company}].\n\n"
+        f"{header}"
+    )
+
+    chief_data, play_data, platform_data = await asyncio.gather(
+        _chief_with_quality_retry(
+            provider, chief_user=chief_user, fallback=fallback_intel(facts, request.brand_name), platforms=platforms
+        ),
+        _complete_json(provider, system=PLAY_CALLER, user=header, max_tokens=2800),
+        _complete_json(provider, system=PLATFORM_SCOUT, user=header, max_tokens=3200),
+    )
+    return _assemble_intel(
+        request, chief_data=chief_data, play_data=play_data, platform_data=platform_data
+    )
+
+
+async def generate_intel_events(
+    request: IntelRequest, provider: LLMProvider
+) -> AsyncIterator[dict[str, Any]]:
+    """SSE-friendly intel: stage events as each agent writes, then the final report."""
+    facts = request.facts or {}
+    fallback = fallback_intel(facts, request.brand_name)
+    platforms = _platforms_in_facts(facts)
+    header = _facts_header(request, facts)
+    chief_user = (
+        "JSON schema keys: scoreboard_blurb, markdown, "
+        "good_at[], fumbling[], why_engagement_mid[], gaps[], "
+        "plays[{title,format,platform,why}], sniper_bait[{why,href,company}].\n\n"
+        f"{header}"
+    )
+
+    for agent in ("intel_chief", "play_caller", "platform_scout"):
+        yield {"event": "stage", "agent": agent, "status": "writing"}
+
+    async def run(agent: str, coro: Awaitable[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+        return agent, await coro
+
+    tasks = [
+        asyncio.create_task(
+            run(
+                "intel_chief",
+                _chief_with_quality_retry(
+                    provider, chief_user=chief_user, fallback=fallback, platforms=platforms
+                ),
+            )
+        ),
+        asyncio.create_task(
+            run("play_caller", _complete_json(provider, system=PLAY_CALLER, user=header, max_tokens=2800))
+        ),
+        asyncio.create_task(
+            run(
+                "platform_scout",
+                _complete_json(provider, system=PLATFORM_SCOUT, user=header, max_tokens=3200),
+            )
+        ),
+    ]
+
+    results: dict[str, dict[str, Any]] = {}
+    for fut in asyncio.as_completed(tasks):
+        agent, data = await fut
+        results[agent] = data
+        yield {"event": "agent", "agent": agent, "status": "done", "ok": bool(data)}
+
+    report = _assemble_intel(
+        request,
+        chief_data=results.get("intel_chief") or {},
+        play_data=results.get("play_caller") or {},
+        platform_data=results.get("platform_scout") or {},
+    )
+    yield {"event": "report", "report": report.model_dump(mode="json")}
