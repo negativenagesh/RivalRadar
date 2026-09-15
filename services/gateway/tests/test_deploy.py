@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.config import _normalize_database_url, cors_origin_list
+from app.config import _host_needs_ssl, _normalize_database_url, cors_origin_list
 from app.rate_limit import MemoryRateLimiter, visitor_id
 from httpx import AsyncClient
 from starlette.requests import Request
@@ -14,11 +14,20 @@ from starlette.requests import Request
 def test_normalize_database_url_render_style() -> None:
     assert _normalize_database_url("postgres://u:p@h/db").startswith("postgresql+asyncpg://")
     assert "+asyncpg" in _normalize_database_url("postgresql://u:p@h/db")
+    cleaned = _normalize_database_url("postgresql://u:p@dpg-x/db?sslmode=require")
+    assert "sslmode" not in cleaned
+    assert cleaned.startswith("postgresql+asyncpg://")
 
 
 def test_cors_origins_parser() -> None:
     assert "https://app.vercel.app" in ["https://app.vercel.app", "http://localhost:3000"]
     assert cors_origin_list()  # smoke default list
+
+
+def test_host_needs_ssl() -> None:
+    assert _host_needs_ssl("postgresql+asyncpg://u:p@dpg-abc/db") is True
+    assert _host_needs_ssl("postgresql+asyncpg://u:p@localhost/db") is False
+    assert _host_needs_ssl("postgresql+asyncpg://u:p@postgres:5432/db") is False
 
 
 def test_memory_rate_limiter_blocks() -> None:

@@ -10,7 +10,8 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_async_engine(settings.database_url, echo=False)
+_connect_args: dict[str, object] = {"ssl": True} if settings.database_ssl else {}
+engine = create_async_engine(settings.database_url, echo=False, connect_args=_connect_args)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
