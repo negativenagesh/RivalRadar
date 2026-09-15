@@ -89,6 +89,7 @@ class SocialFeedConnector:
         self._lock = asyncio.Lock()
         self._accounts: list[RawAccount] = []
         self._posts: list[RawPost] = []
+        self._media_counts: dict[str, dict[str, int]] = {}
         self._screenshot_keys: list[str] = []
         self._loaded = False
         self._sources_used: list[str] = []
@@ -111,6 +112,23 @@ class SocialFeedConnector:
     @property
     def screenshot_keys(self) -> list[str]:
         return list(self._screenshot_keys)
+
+    _VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv")
+
+    def _count_media(self, platform: str, post: RawPost) -> None:
+        """Track stored-media shape per platform for the ingest summary + logs."""
+        bucket = self._media_counts.setdefault(platform, {"img": 0, "vid": 0, "none": 0})
+        key = (post.get("media_keys") or [""])[0].lower()
+        if not key:
+            bucket["none"] += 1
+        elif key.endswith(self._VIDEO_EXTS):
+            bucket["vid"] += 1
+        else:
+            bucket["img"] += 1
+
+    def _media_summary(self, platform: str) -> str:
+        bucket = self._media_counts.get(platform, {"img": 0, "vid": 0, "none": 0})
+        return f"media_imgs={bucket['img']} media_vids={bucket['vid']} media_none={bucket['none']}"
 
     async def aclose(self) -> None:
         self._session = None
@@ -268,6 +286,7 @@ class SocialFeedConnector:
             },
         )
         for p in posts:
+            self._count_media(platform, p)
             await self._emit(
                 "action",
                 {
@@ -281,6 +300,12 @@ class SocialFeedConnector:
                 },
             )
             await self._emit_stored_media_frame(p, platform=platform)
+        summary = self._media_summary(platform)
+        logger.info("scout media summary platform=%s source=oss %s", platform, summary)
+        await self._emit(
+            "action",
+            {"detail": f"media_summary platform={platform} source=oss {summary}"},
+        )
         await self._flush_checkpoint()
 
     async def _browser_fallback(self, target: ProfileTarget, *, record: bool) -> None:
@@ -562,6 +587,12 @@ class SocialFeedConnector:
                 ),
             },
         )
+        summary = self._media_summary(platform)
+        logger.info("scout media summary platform=%s source=browser %s", platform, summary)
+        await self._emit(
+            "action",
+            {"detail": f"media_summary platform={platform} source=browser {summary}"},
+        )
 
     async def _collect_post_urls_bounded(
         self,
@@ -759,7 +790,9 @@ class SocialFeedConnector:
             "posted_at": posted_at.isoformat().replace("+00:00", "Z"),
             "media_urls": media_urls,
             "media_keys": media_keys,
+            "media_kind": str(parsed.get("media_kind") or "image"),
         }
+        self._count_media(platform, post)
         async with self._lock:
             self._posts.append(post)
         await self._emit(
@@ -799,13 +832,19 @@ class SocialFeedConnector:
             url=media_url,
         )
         if key:
+            logger.info("media stored post=%s key=%s via=page", post_id, key)
             return key
-        return await download_media_to_store(
+        key = await download_media_to_store(
             self._object_store,
             run_id=self._run_id,
             post_id=post_id,
             url=media_url,
         )
+        if key:
+            logger.info("media stored post=%s key=%s via=http", post_id, key)
+        else:
+            logger.info("media not stored post=%s src=%.100s", post_id, media_url)
+        return key
 
     async def _flush_checkpoint(self) -> None:
         if self._checkpoint is None:

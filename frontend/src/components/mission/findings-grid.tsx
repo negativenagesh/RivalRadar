@@ -7,6 +7,7 @@ import type { CompetitorAccount, CompetitorPost } from "@/lib/types";
 import {
   filterFindingsPosts,
   findingsBoard,
+  isVideoVisual,
   postVisualUrl,
   type FindingsRow,
 } from "@/lib/findings-filter";
@@ -16,6 +17,34 @@ import { cn } from "@/lib/utils";
 
 function resolveImage(post: CompetitorPost): string | null {
   return postVisualUrl(post);
+}
+
+function PostVisual({ post, className }: { post: CompetitorPost; className?: string }) {
+  const url = resolveImage(post);
+  if (!url) return null;
+  if (isVideoVisual(url)) {
+    return (
+      <video
+        src={url}
+        controls
+        muted
+        playsInline
+        preload="metadata"
+        className={className}
+      />
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt=""
+      className={className}
+      onError={(e) => {
+        (e.target as HTMLImageElement).style.display = "none";
+      }}
+    />
+  );
 }
 
 function fmt(n: number): string {
@@ -134,12 +163,19 @@ export function FindingsGrid({
             role="presentation"
           >
             {resolveImage(lightbox.post) ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={resolveImage(lightbox.post) ?? ""}
-                alt=""
-                className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain"
-              />
+              isVideoVisual(resolveImage(lightbox.post)) ? (
+                <PostVisual
+                  post={lightbox.post}
+                  className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain"
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={resolveImage(lightbox.post) ?? ""}
+                  alt=""
+                  className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain"
+                />
+              )
             ) : null}
             <p className="font-display mt-4 max-w-2xl text-center text-sm font-semibold text-white">
               {(lightbox.post.caption.split("\n")[0] ?? lightbox.post.caption).trim()}
@@ -243,33 +279,35 @@ function PostTile({
   onOpenImage: (row: FindingsRow) => void;
 }) {
   const img = resolveImage(row.post);
+  const isVideo = isVideoVisual(img);
   const title = (row.post.caption.split("\n")[0] ?? row.post.caption).trim() || "Untitled drop";
 
   return (
     <article className="group flex flex-col overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-b from-card/50 to-card/20 text-left text-foreground">
-      <button
-        type="button"
-        onClick={() => img && onOpenImage(row)}
-        className="relative aspect-square overflow-hidden bg-black/40"
-        disabled={!img}
-        aria-label={img ? "View image fullscreen" : title}
-      >
-        {img ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={img}
-            alt=""
-            className="h-full w-full object-contain transition duration-300 group-hover:scale-[1.02]"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = "none";
-            }}
-          />
-        ) : (
-          <div className="font-shout flex h-full items-center justify-center text-lg uppercase tracking-widest text-muted-foreground/40">
-            {row.post.format}
-          </div>
-        )}
-      </button>
+      {isVideo ? (
+        <div className="relative aspect-square overflow-hidden bg-black/40">
+          <PostVisual post={row.post} className="h-full w-full object-contain" />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => img && onOpenImage(row)}
+          className="relative aspect-square overflow-hidden bg-black/40"
+          disabled={!img}
+          aria-label={img ? "View image fullscreen" : title}
+        >
+          {img ? (
+            <PostVisual
+              post={row.post}
+              className="h-full w-full object-contain transition duration-300 group-hover:scale-[1.02]"
+            />
+          ) : (
+            <div className="font-shout flex h-full items-center justify-center text-lg uppercase tracking-widest text-muted-foreground/40">
+              {row.post.format}
+            </div>
+          )}
+        </button>
+      )}
 
       <div className="grid grid-cols-4 gap-px border-y border-border/40 bg-border/30">
         <Metric cell label="likes" value={row.likes} icon={<Heart className="size-2.5" />} />

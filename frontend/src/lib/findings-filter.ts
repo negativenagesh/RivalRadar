@@ -37,6 +37,12 @@ export function postVisualUrl(post: CompetitorPost): string | null {
   return `${base.replace(/\/$/, "")}${url.startsWith("/") ? url : `/${url}`}`;
 }
 
+/** True when the visual URL points at a playable video file (reel/clip, not a poster). */
+export function isVideoVisual(url: string | null): boolean {
+  if (!url) return false;
+  return /\.(mp4|webm|mov|mkv)([?#]|$)/i.test(url);
+}
+
 function isoDay(iso: string): string {
   return iso.slice(0, 10);
 }

@@ -147,3 +147,32 @@ def test_post_permalink_ignores_company_pages() -> None:
         )
         is None
     )
+
+
+def test_select_media_prefers_playable_video_over_poster() -> None:
+    from app.connectors.social_feed_parse import _select_media
+
+    url, kind = _select_media(
+        {
+            "ogImage": "https://cdn.example/poster.jpg",
+            "ogVideo": "https://cdn.example/reel.mp4",
+            "videoSrc": "blob:https://www.instagram.com/abc",
+        }
+    )
+    assert url == "https://cdn.example/reel.mp4"
+    assert kind == "video"
+
+
+def test_select_media_uses_http_video_src_then_falls_back_to_image() -> None:
+    from app.connectors.social_feed_parse import _select_media
+
+    url, kind = _select_media({"videoSrc": "https://cdn.example/clip.webm"})
+    assert (url, kind) == ("https://cdn.example/clip.webm", "video")
+
+    url, kind = _select_media(
+        {"ogImage": "https://cdn.example/poster.jpg", "videoSrc": "blob:https://x.com/1"}
+    )
+    assert (url, kind) == ("https://cdn.example/poster.jpg", "image")
+
+    url, kind = _select_media({"imgCandidates": ["https://cdn.example/a.jpg"]})
+    assert (url, kind) == ("https://cdn.example/a.jpg", "image")
