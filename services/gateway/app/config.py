@@ -1,6 +1,7 @@
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 def _normalize_database_url(url: str) -> str:
