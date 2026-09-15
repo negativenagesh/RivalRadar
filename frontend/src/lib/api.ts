@@ -185,6 +185,54 @@ export function generateIntelReport(body: {
   });
 }
 
+export type PublishVariation = {
+  caption: string;
+  hashtags: string[];
+  title: string;
+  description: string;
+  why: string;
+};
+
+export type PublishPlan = {
+  platform: string;
+  agent: string;
+  variations: PublishVariation[];
+};
+
+export function generatePublishPlan(body: {
+  brand_name: string;
+  platform: string;
+  asset_caption: string;
+  asset_context?: string;
+  intel_markdown?: string;
+  image_b64?: string;
+  variations?: number;
+}): Promise<PublishPlan> {
+  return request<PublishPlan>("/creative/publish-plan", {
+    method: "POST",
+    body: JSON.stringify(body),
+    operator: true,
+  });
+}
+
+export type StagePostResult = {
+  ok: boolean;
+  detail: string;
+  screenshot_jpeg_b64: string | null;
+};
+
+export function stagePlatformPost(body: {
+  platform: string;
+  caption: string;
+  media_png_b64?: string;
+  approved: boolean;
+}): Promise<StagePostResult> {
+  return request<StagePostResult>("/social/stage-post", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export type IntelStreamEvent =
   | { event: "stage"; agent: string; status: "writing" }
   | { event: "agent"; agent: string; status: "done"; ok: boolean }

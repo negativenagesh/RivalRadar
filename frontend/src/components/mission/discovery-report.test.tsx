@@ -10,6 +10,8 @@ vi.mock("next/link", () => ({
 vi.mock("@/lib/api", () => ({
   streamIntelReport: vi.fn(),
   generateCreative: vi.fn(),
+  generatePublishPlan: vi.fn(),
+  stagePlatformPost: vi.fn(),
   dropSocialComment: vi.fn(),
   listConnections: vi.fn(async () => [{ platform: "linkedin", status: "connected" }]),
   getServerModelDefaults: vi.fn(async () => ({

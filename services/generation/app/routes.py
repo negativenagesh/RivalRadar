@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.creative import CreativeRequest, CreativeResponse, generate_creative
 from app.drafting import draft_response
 from app.intel import IntelReport, IntelRequest, generate_intel, generate_intel_events
+from app.publish import PublishPlanRequest, PublishPlanResponse, generate_publish_plan
 from app.schemas import DraftRequest, DraftResponse
 from app.voice.retrieval import load_corpus
 from llm_provider import (
@@ -108,6 +109,17 @@ async def creative_generate(
 ) -> CreativeResponse:
     try:
         return await generate_creative(request, provider)
+    except LLMProviderError as exc:
+        raise _llm_http(exc) from exc
+
+
+@router.post("/creative/publish-plan", response_model=PublishPlanResponse)
+async def creative_publish_plan(
+    request: PublishPlanRequest,
+    provider: LLMProvider = Depends(operator_provider),
+) -> PublishPlanResponse:
+    try:
+        return await generate_publish_plan(request, provider)
     except LLMProviderError as exc:
         raise _llm_http(exc) from exc
 

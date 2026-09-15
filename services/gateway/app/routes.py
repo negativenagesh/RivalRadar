@@ -32,7 +32,9 @@ from app.clients import (
     fetch_youtube_status,
     generate_creative_content,
     generate_intel_report,
+    generate_publish_plan,
     ping_generation_vendor,
+    stage_ingestion_post,
     stream_intel_report,
     trigger_digest_generation,
     trigger_ingestion_run,
@@ -287,6 +289,51 @@ async def social_comment(
         "platform_sessions": vault,
     }
     return await drop_ingestion_comment(payload)
+
+
+@router.post("/creative/publish-plan")
+async def creative_publish_plan(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> dict[str, object]:
+    headers = _operator_headers(
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
+    )
+    return await generate_publish_plan(body, operator_headers=headers)
+
+
+@router.post("/social/stage-post")
+async def social_stage_post(
+    body: dict[str, object],
+    session: AsyncSession = Depends(get_session),
+    workspace_id: str = "default",
+) -> dict[str, object]:
+    if not body.get("approved"):
+        raise HTTPException(status_code=400, detail="human approval required")
+    platform = str(body.get("platform") or "").strip()
+    caption = str(body.get("caption") or "").strip()
+    aliases = _platform_aliases(platform)
+    vault = await _vaulted_sessions(session, workspace_id=workspace_id, platforms=aliases)
+    if not vault:
+        raise HTTPException(status_code=400, detail=f"not connected to {platform or 'this platform'}")
+    payload = {
+        "platform": platform,
+        "caption": caption,
+        "media_png_b64": body.get("media_png_b64"),
+        "approved": True,
+        "platform_sessions": vault,
+    }
+    return await stage_ingestion_post(payload)
 
 
 @router.get("/pipeline-runs/{run_id}", response_model=PipelineRunRead)

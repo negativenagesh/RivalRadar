@@ -169,6 +169,36 @@ async def drop_ingestion_comment(body: dict[str, Any]) -> dict[str, Any]:
         return result
 
 
+async def generate_publish_plan(
+    body: dict[str, Any], *, operator_headers: dict[str, str]
+) -> dict[str, Any]:
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=120.0) as client:
+        try:
+            response = await client.post(
+                "/creative/publish-plan", json=body, headers=operator_headers
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _reraise_upstream(exc)
+        except httpx.RequestError as exc:
+            _reraise_transport(exc)
+        result: dict[str, Any] = response.json()
+        return result
+
+
+async def stage_ingestion_post(body: dict[str, Any]) -> dict[str, Any]:
+    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=180.0) as client:
+        try:
+            response = await client.post("/social/stage-post", json=body)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _reraise_upstream(exc)
+        except httpx.RequestError as exc:
+            _reraise_transport(exc)
+        result: dict[str, Any] = response.json()
+        return result
+
+
 async def check_compliance(text: str) -> dict[str, Any]:
     async with httpx.AsyncClient(base_url=settings.compliance_service_url, timeout=30.0) as client:
         response = await client.post("/compliance/check", json={"text": text})
