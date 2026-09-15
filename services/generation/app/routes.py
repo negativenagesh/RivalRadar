@@ -5,10 +5,20 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.creative import CreativeRequest, CreativeResponse, generate_creative
+from app.creative import (
+    CreativeRequest,
+    CreativeResponse,
+    generate_comment_events,
+    generate_creative,
+)
 from app.drafting import draft_response
 from app.intel import IntelReport, IntelRequest, generate_intel, generate_intel_events
-from app.publish import PublishPlanRequest, PublishPlanResponse, generate_publish_plan
+from app.publish import (
+    PublishPlanRequest,
+    PublishPlanResponse,
+    generate_publish_plan,
+    generate_publish_plan_events,
+)
 from app.schemas import DraftRequest, DraftResponse
 from app.voice.retrieval import load_corpus
 from llm_provider import (
@@ -122,6 +132,40 @@ async def creative_publish_plan(
         return await generate_publish_plan(request, provider)
     except LLMProviderError as exc:
         raise _llm_http(exc) from exc
+
+
+@router.post("/creative/publish-plan/stream")
+async def creative_publish_plan_stream(
+    request: PublishPlanRequest,
+    provider: LLMProvider = Depends(operator_provider),
+) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        try:
+            async for payload in generate_publish_plan_events(request, provider):
+                event = str(payload.pop("event"))
+                yield f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except LLMProviderError as exc:
+            detail = json.dumps({"detail": exc.detail}, ensure_ascii=False)
+            yield f"event: error\ndata: {detail}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@router.post("/creative/comment/stream")
+async def creative_comment_stream(
+    request: CreativeRequest,
+    provider: LLMProvider = Depends(operator_provider),
+) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        try:
+            async for payload in generate_comment_events(request, provider):
+                event = str(payload.pop("event"))
+                yield f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except LLMProviderError as exc:
+            detail = json.dumps({"detail": exc.detail}, ensure_ascii=False)
+            yield f"event: error\ndata: {detail}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 @router.post("/intel/report", response_model=IntelReport)

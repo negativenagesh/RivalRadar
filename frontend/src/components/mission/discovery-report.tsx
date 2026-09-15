@@ -20,10 +20,11 @@ import { useOperatorModels } from "@/components/operator-models-provider";
 import {
   dropSocialComment,
   generateCreative,
-  generatePublishPlan,
   listConnections,
   stagePlatformPost,
+  streamCommentDraft,
   streamIntelReport,
+  streamPublishPlan,
   type PublishPlan,
   type PublishVariation,
   type StagePostResult,
@@ -425,18 +426,26 @@ export function DiscoveryReport({
     setSniperError(null);
     setDropResult(null);
     try {
-      const result = await generateCreative({
-        kind: "comment",
-        brand_name: brand.displayName || "the brand",
-        voice_notes: brand.voiceNotes,
-        forbidden_claims: brand.forbiddenClaims,
-        platform: activeSniperPlatform,
-        spice: sniperSpice,
-        tone: sniperTone,
-        post_url: picked.href,
-        competitor_caption: picked.caption,
-        facts_json: factsJson,
-      });
+      setSniperDraft("");
+      const result = await streamCommentDraft(
+        {
+          kind: "comment",
+          brand_name: brand.displayName || "the brand",
+          voice_notes: brand.voiceNotes,
+          forbidden_claims: brand.forbiddenClaims,
+          platform: activeSniperPlatform,
+          spice: sniperSpice,
+          tone: sniperTone,
+          post_url: picked.href,
+          competitor_caption: picked.caption,
+          facts_json: factsJson,
+        },
+        (event) => {
+          if (event.event === "delta" && event.text) {
+            setSniperDraft((prev) => `${prev}${event.text}`);
+          }
+        },
+      );
       setSniperDraft(result.text);
     } catch (err) {
       setSniperError(err instanceof Error ? err.message : "Sniper draft failed");
@@ -783,8 +792,10 @@ export function DiscoveryReport({
                   {formatLabel(studioFormat)} · {studioPlatform}
                   {studioOuts.length > 1 ? ` · #${idx + 1}` : ""}
                 </div>
-                <div className="space-y-3 p-4">
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{out.text}</p>
+                <div className="space-y-3 p-4 text-left">
+                  <div className="text-sm leading-relaxed">
+                    <MarkdownReport source={out.text} />
+                  </div>
                   {out.why_slaps && (
                     <p className="text-xs text-primary">Why this slaps: {out.why_slaps}</p>
                   )}
@@ -1073,6 +1084,7 @@ function PublishPanel({
   const [count, setCount] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [liveDraft, setLiveDraft] = useState("");
   const [plan, setPlan] = useState<PublishPlan | null>(null);
   const [stagingIdx, setStagingIdx] = useState<number | null>(null);
   const [stagingAll, setStagingAll] = useState(false);
@@ -1093,8 +1105,9 @@ function PublishPanel({
     setError(null);
     setStaged({});
     setSelected({});
+    setLiveDraft("");
     try {
-      const next = await generatePublishPlan({
+      const next = await streamPublishPlan({
         brand_name: brandName,
         platform,
         asset_caption: out.text,
@@ -1106,8 +1119,13 @@ function PublishPanel({
         format,
         spice,
         variations: count,
+      }, (event) => {
+        if (event.event === "delta" && event.text) {
+          setLiveDraft((prev) => `${prev}${event.text}`);
+        }
       });
       setPlan(next);
+      setLiveDraft("");
       const initial: Record<number, boolean> = {};
       next.variations.forEach((_, idx) => {
         initial[idx] = true;
@@ -1215,6 +1233,11 @@ function PublishPanel({
         </Button>
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
+      {busy && liveDraft && (
+        <div className="rounded-lg border border-dashed border-primary/40 p-2 text-left text-xs">
+          <MarkdownReport source={liveDraft} />
+        </div>
+      )}
       {plan && (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -1257,9 +1280,11 @@ function PublishPanel({
                       setSelected((prev) => ({ ...prev, [idx]: e.target.checked }))
                     }
                   />
-                  <span className="text-xs leading-relaxed whitespace-pre-wrap">
-                    {variation.title ? `${variation.title}\n` : ""}
-                    {variation.caption}
+                  <span className="min-w-0 flex-1 text-left text-xs leading-relaxed">
+                    {variation.title ? (
+                      <p className="mb-1 font-medium">{variation.title}</p>
+                    ) : null}
+                    <MarkdownReport source={variation.caption} />
                   </span>
                 </label>
                 {variation.description && (

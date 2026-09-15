@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Literal
+from collections.abc import AsyncIterator
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -131,6 +132,54 @@ async def _maybe_image(
     except Exception:  # noqa: BLE001
         logger.warning("creative generate_image failed; caption-only", exc_info=True)
         return None, None, "Nano Banana 2 did not return an image. Try Generate again."
+
+
+
+async def generate_comment_events(
+    request: CreativeRequest, provider: LLMProvider
+) -> AsyncIterator[dict[str, Any]]:
+    """SSE: stream comment-sniper tokens, then the final CreativeResponse."""
+    if request.kind != "comment":
+        yield {"event": "error", "detail": "comment stream only supports kind=comment"}
+        return
+    report_excerpt = (request.report_markdown or "")[:3500]
+    voice = request.voice_notes or "on-brand, sharp, human"
+    facts = (request.facts_json or "")[:4000]
+    platform = (request.platform or "linkedin").lower()
+    if platform == "twitter":
+        platform = "x"
+    cap = _CHAR_CAP.get(platform, 220)
+    messages: list[Message] = [
+        Message(role="system", content=COMMENT_SNIPER),
+        Message(
+            role="user",
+            content=(
+                f"Brand: {request.brand_name}\nVoice: {voice}\n"
+                f"Platform: {platform}\nTone: {request.tone or _spice_label(request.spice)}\n"
+                f"Spice: {request.spice}/5\nMax chars: {cap}\n"
+                f"Rival permalink: {request.post_url or '(none)'}\n"
+                f"Rival post: {request.competitor_caption or '(from discovery themes)'}\n"
+                f"Forbidden: {request.forbidden_claims or 'none'}\n"
+                f"Facts:\n{facts or report_excerpt}\n"
+            ),
+        ),
+    ]
+    yield {"event": "stage", "agent": "comment_sniper", "status": "writing"}
+    buf = ""
+    try:
+        async for piece in provider.complete_stream(messages, temperature=0.8, max_tokens=160):
+            if not piece:
+                continue
+            buf += piece
+            yield {"event": "delta", "agent": "comment_sniper", "text": piece}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("comment stream failed: %s", exc)
+        buf = ""
+    text = buf.strip().strip('"')
+    if text:
+        text = await voice_guard(text, forbidden=request.forbidden_claims, provider=provider)
+    result = CreativeResponse(kind="comment", text=(text or "")[:cap])
+    yield {"event": "result", "result": result.model_dump(mode="json")}
 
 
 async def generate_creative(request: CreativeRequest, provider: LLMProvider) -> CreativeResponse:
