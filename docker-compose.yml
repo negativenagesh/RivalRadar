@@ -156,6 +156,9 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
+    environment:
+      # Bind all interfaces so Docker HEALTHCHECK (localhost:3000) works
+      HOSTNAME: "0.0.0.0"
     restart: unless-stopped
     ports:
       - "3000:3000"

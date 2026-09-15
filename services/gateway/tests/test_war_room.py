@@ -4,14 +4,16 @@ import pytest
 from httpx import AsyncClient
 
 
-async def test_creative_and_intel_require_gemini_key(client: AsyncClient) -> None:
+async def test_creative_and_intel_forward_empty_headers_for_server_env(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No operator keys → gateway forwards anyway; generation falls back to server env keys."""
+    mock = AsyncMock(return_value={"kind": "comment", "text": "server env"})
+    monkeypatch.setattr("app.routes.generate_creative_content", mock)
     creative = await client.post("/creative/generate", json={"kind": "comment", "brand_name": "Pixis"})
-    assert creative.status_code == 400
-    assert "Models chip" in creative.json()["detail"] or "Gemini" in creative.json()["detail"]
-
-    intel = await client.post("/intel/report", json={"facts": {}, "brand_name": "Pixis"})
-    assert intel.status_code == 400
-    assert "Models chip" in intel.json()["detail"] or "Gemini" in intel.json()["detail"]
+    assert creative.status_code == 200
+    assert mock.await_args is not None
+    assert mock.await_args.kwargs["operator_headers"] == {}
 
 
 async def test_creative_forwards_operator_key(

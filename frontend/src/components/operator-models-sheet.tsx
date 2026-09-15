@@ -91,8 +91,6 @@ export function OperatorModelsSheet({
 
   if (!open || typeof document === "undefined") return null;
 
-  const geminiLocksImage = hasOperatorKey(state.gemini);
-
   async function testAndSave(vendor: Vendor) {
     const draft = drafts[vendor].trim();
     if (!draft) return;
@@ -142,7 +140,8 @@ export function OperatorModelsSheet({
         </div>
         <p className="text-sm text-muted-foreground">
           Keys stay in this browser. Test before save. Intel and captions use the text model;
-          frames use Nano Banana when a Gemini key exists, otherwise Agnes Image 2.5 Flash, then NVIDIA FLUX.
+          frames use your image pick. No keys here? The server drives GPT-OSS 20B + Agnes
+          2.5 Flash from its own env keys when configured.
         </p>
 
         <div className="space-y-4">
@@ -247,10 +246,10 @@ export function OperatorModelsSheet({
             </button>
             <button
               type="button"
-              disabled={geminiLocksImage || !hasOperatorKey(state.agnes)}
+              disabled={!hasOperatorKey(state.agnes)}
               onClick={() => setImageModel("agnes")}
               className={
-                !geminiLocksImage && imageModel === "agnes"
+                imageModel === "agnes"
                   ? "rounded-full border border-primary bg-primary/20 px-3 py-1.5 text-xs font-bold text-primary"
                   : "rounded-full border border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
               }
@@ -259,10 +258,10 @@ export function OperatorModelsSheet({
             </button>
             <button
               type="button"
-              disabled={geminiLocksImage || !hasOperatorKey(state.nvidia)}
+              disabled={!hasOperatorKey(state.nvidia)}
               onClick={() => setImageModel("nvidia_flux")}
               className={
-                !geminiLocksImage && imageModel === "nvidia_flux"
+                imageModel === "nvidia_flux"
                   ? "rounded-full border border-primary bg-primary/20 px-3 py-1.5 text-xs font-bold text-primary"
                   : "rounded-full border border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
               }
@@ -271,9 +270,7 @@ export function OperatorModelsSheet({
             </button>
           </div>
           <p className="text-xs text-muted-foreground">
-            {geminiLocksImage
-              ? "Gemini key is present — frames always use Nano Banana 2."
-              : `Live: ${imageModelLabel(imageModel)}. DeepSeek cannot generate image pixels.`}
+            Live: {imageModelLabel(imageModel)}. DeepSeek cannot generate image pixels.
           </p>
         </div>
       </div>

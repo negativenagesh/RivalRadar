@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/operator-models";
 import { GEMINI_KEY_EVENT } from "@/lib/gemini-key";
 import { OperatorModelsSheet } from "@/components/operator-models-sheet";
+import { getServerModelDefaults, type ServerModelDefaults } from "@/lib/api";
 
 type OperatorModelsContextValue = {
   state: OperatorState;
@@ -35,6 +37,9 @@ type OperatorModelsContextValue = {
   readyImage: boolean;
   textModel: TextModel | null;
   imageModel: ImageModel | null;
+  /** True when the effective model comes from server env keys, not the chip. */
+  serverText: boolean;
+  serverImage: boolean;
   chipLabel: string;
   setKey: (vendor: Vendor, raw: string) => void;
   setTextModel: (model: TextModel) => void;
@@ -65,8 +70,8 @@ function getServerSnapshot() {
     deepseek: "",
     nvidia: "",
     agnes: "",
-    textModel: "gemini",
-    imageModel: "nano_banana",
+    textModel: "gptoss",
+    imageModel: "agnes",
   } satisfies OperatorState);
 }
 
@@ -74,9 +79,30 @@ export function OperatorModelsProvider({ children }: { children: ReactNode }) {
   const raw = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const state = useMemo<OperatorState>(() => JSON.parse(raw) as OperatorState, [raw]);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [serverDefaults, setServerDefaults] = useState<ServerModelDefaults | null>(null);
 
-  const textModel = resolveTextModel(state);
-  const imageModel = resolveImageModel(state);
+  useEffect(() => {
+    let alive = true;
+    getServerModelDefaults()
+      .then((defaults) => {
+        if (alive) setServerDefaults(defaults);
+      })
+      .catch(() => {
+        /* gateway down — chip keys still work */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const localText = resolveTextModel(state);
+  const localImage = resolveImageModel(state);
+  const serverTextModel =
+    localText === null && serverDefaults?.available ? serverDefaults.text_model : null;
+  const serverImageModel =
+    localImage === null && serverDefaults?.available ? serverDefaults.image_model : null;
+  const textModel = localText ?? serverTextModel;
+  const imageModel = localImage ?? serverImageModel;
 
   const setKey = useCallback((vendor: Vendor, value: string) => {
     saveOperatorKey(vendor, value);
@@ -89,13 +115,15 @@ export function OperatorModelsProvider({ children }: { children: ReactNode }) {
       readyImage: imageModel !== null,
       textModel,
       imageModel,
-      chipLabel: chipLabel(state),
+      serverText: localText === null && serverTextModel !== null,
+      serverImage: localImage === null && serverImageModel !== null,
+      chipLabel: chipLabel(state, serverDefaults),
       setKey,
       setTextModel: saveTextModel,
       setImageModel: saveImageModel,
       openSheet: () => setSheetOpen(true),
     }),
-    [state, textModel, imageModel, setKey],
+    [state, textModel, imageModel, localText, localImage, serverTextModel, serverImageModel, serverDefaults, setKey],
   );
 
   return (

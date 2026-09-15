@@ -12,6 +12,12 @@ vi.mock("@/lib/api", () => ({
   generateCreative: vi.fn(),
   dropSocialComment: vi.fn(),
   listConnections: vi.fn(async () => [{ platform: "linkedin", status: "connected" }]),
+  getServerModelDefaults: vi.fn(async () => ({
+    text_model: null,
+    image_model: null,
+    available: false,
+    source: "server-env",
+  })),
 }));
 
 import { GeminiKeyProvider } from "@/components/gemini-key-provider";

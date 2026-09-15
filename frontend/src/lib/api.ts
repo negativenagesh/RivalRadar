@@ -18,6 +18,17 @@ import { loadOperatorState, resolveImageModel, resolveTextModel } from "./operat
 
 export const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
 
+export type ServerModelDefaults = {
+  text_model: "gemini" | "deepseek" | "gptoss" | null;
+  image_model: "nano_banana" | "agnes" | "nvidia_flux" | null;
+  available: boolean;
+  source: string;
+};
+
+export function getServerModelDefaults(): Promise<ServerModelDefaults> {
+  return request<ServerModelDefaults>("/models/defaults");
+}
+
 function errorDetail(body: { detail?: unknown }, fallback: string): string {
   const detail = body.detail;
   if (typeof detail === "string" && detail.trim()) return detail;
@@ -48,8 +59,10 @@ async function request<T>(path: string, init?: RequestInit & { operator?: boolea
     if (state.deepseek) headers["X-DeepSeek-Key"] = state.deepseek;
     if (state.nvidia) headers["X-Nvidia-Key"] = state.nvidia;
     if (state.agnes) headers["X-Agnes-Key"] = state.agnes;
-    if (text) headers["X-Text-Model"] = text;
-    headers["X-Image-Model"] = image ?? "none";
+    // Always send the operator's model preference — with no keys, the server
+    // honors it via env keys (gpt-oss / Agnes defaults) when configured.
+    headers["X-Text-Model"] = text ?? state.textModel;
+    headers["X-Image-Model"] = image ?? state.imageModel;
   }
   let response: Response;
   try {

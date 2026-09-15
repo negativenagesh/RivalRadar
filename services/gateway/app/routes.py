@@ -122,11 +122,7 @@ def _operator_headers(
         headers["X-Text-Model"] = text.lower()
     if image:
         headers["X-Image-Model"] = image.lower()
-    if not any(
-        headers.get(k)
-        for k in ("X-Gemini-Key", "X-DeepSeek-Key", "X-Nvidia-Key", "X-Agnes-Key")
-    ):
-        raise HTTPException(status_code=400, detail=GEMINI_MISSING)
+    # Empty is fine: generation falls back to server env keys (gpt-oss / Agnes defaults).
     return headers
 
 
@@ -158,6 +154,13 @@ async def _vaulted_sessions(
         except Exception:  # noqa: BLE001 - skip corrupt vault rows
             continue
     return out
+
+
+@router.get("/models/defaults")
+async def model_defaults() -> dict[str, object]:
+    from app.clients import fetch_model_defaults
+
+    return await fetch_model_defaults()
 
 
 @router.post("/creative/generate")
