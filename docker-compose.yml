@@ -6,6 +6,19 @@ x-env: &common-env
   GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
   GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.6-flash}
   GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+  # Mission defaults (gpt-oss text + Agnes image) when the operator pasted no keys.
+  NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+  NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+  NVIDIA_TEXT_MODEL: ${NVIDIA_TEXT_MODEL:-openai/gpt-oss-20b}
+  NVIDIA_IMAGE_MODEL: ${NVIDIA_IMAGE_MODEL:-black-forest-labs/flux.1-schnell}
+  AGNES_API_KEY: ${AGNES_API_KEY:-}
+  AGNES_BASE_URL: ${AGNES_BASE_URL:-https://apihub.agnes-ai.com/v1}
+  AGNES_IMAGE_MODEL: ${AGNES_IMAGE_MODEL:-agnes-image-2.5-flash}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+  DEEPSEEK_TEXT_MODEL: ${DEEPSEEK_TEXT_MODEL:-deepseek-flash}
+  MISSION_TEXT_MODEL: ${MISSION_TEXT_MODEL:-gptoss}
+  MISSION_IMAGE_MODEL: ${MISSION_IMAGE_MODEL:-agnes}
 
 services:
   postgres:
