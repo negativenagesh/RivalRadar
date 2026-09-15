@@ -203,9 +203,13 @@ export function generatePublishPlan(body: {
   brand_name: string;
   platform: string;
   asset_caption: string;
+  overlay_text?: string;
   asset_context?: string;
+  image_concept?: string;
   intel_markdown?: string;
-  image_b64?: string;
+  facts_json?: string;
+  format?: string;
+  spice?: number;
   variations?: number;
 }): Promise<PublishPlan> {
   return request<PublishPlan>("/creative/publish-plan", {
