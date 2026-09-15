@@ -201,4 +201,43 @@ describe("DiscoveryReport war room", () => {
       image_data_base64: null,
     });
   });
+
+  it("shows Post to platform desk after studio generate", async () => {
+    const { generateCreative } = await import("@/lib/api");
+    vi.mocked(generateCreative).mockResolvedValue({
+      kind: "studio",
+      text: "ready to post caption",
+      image_concept: "neon frog roasting dashboards",
+      image_mime_type: "image/png",
+      image_data_base64: "aaa",
+      overlay_text: "dashboards lie",
+      why_slaps: "visual punch",
+    });
+    window.localStorage.setItem("rivalradar.operator.geminiKey", "AIza-dummy-key-1234");
+
+    const { userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(
+      <GeminiKeyProvider>
+        <DiscoveryReport
+          facts={facts}
+          permissions={DEFAULT_PERMISSIONS}
+          onPermissionsChange={() => undefined}
+          brand={{ ...DEFAULT_BRAND, displayName: "Pixis" }}
+        />
+      </GeminiKeyProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Shitpost / meme" }));
+    const generate = screen.getAllByRole("button").find((btn) => btn.textContent?.trim() === "Generate");
+    expect(generate).toBeTruthy();
+    await user.click(generate!);
+
+    expect(await screen.findByText("Post to platform")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate viral captions" })).toBeInTheDocument();
+    expect(screen.getByText("Caption variations (max 3)")).toBeInTheDocument();
+    for (const platform of ["linkedin", "instagram", "x", "youtube"]) {
+      expect(screen.getAllByRole("button", { name: platform }).length).toBeGreaterThan(0);
+    }
+  });
 });
