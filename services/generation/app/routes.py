@@ -58,7 +58,8 @@ def _llm_http(exc: LLMProviderError) -> HTTPException:
 @router.get("/models/defaults")
 async def model_defaults() -> dict[str, object]:
     """Which Mission models the server can drive from env keys alone."""
-    return server_model_defaults()
+    defaults: dict[str, object] = server_model_defaults()
+    return defaults
 
 
 @router.post("/drafts/generate", response_model=DraftResponse)

@@ -20,7 +20,6 @@ from starlette.websockets import WebSocketState
 
 from app.agent_events_bus import get_event_bus
 from app.clients import (
-    GEMINI_MISSING,
     cancel_ingestion_run,
     drop_ingestion_comment,
     fetch_ingestion_accounts,
@@ -160,7 +159,8 @@ async def _vaulted_sessions(
 async def model_defaults() -> dict[str, object]:
     from app.clients import fetch_model_defaults
 
-    return await fetch_model_defaults()
+    result: dict[str, object] = await fetch_model_defaults()
+    return result
 
 
 @router.post("/creative/generate")

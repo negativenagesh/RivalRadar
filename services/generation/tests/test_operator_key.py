@@ -1,6 +1,6 @@
+import pytest
 from app.main import app
 from app.routes import operator_provider
-import pytest
 from httpx import ASGITransport, AsyncClient
 
 from llm_provider import LLMProviderError, get_llm_provider, provider_from_operator

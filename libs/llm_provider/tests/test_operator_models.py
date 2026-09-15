@@ -181,7 +181,7 @@ async def test_agnes_falls_back_to_image_url(monkeypatch: pytest.MonkeyPatch) ->
     assert image.data.startswith(b"\x89PNG")
 
 
-def test_operator_routes_gemini_text_and_forces_nano_banana() -> None:
+def test_operator_requested_image_wins_when_its_key_exists() -> None:
     stack = provider_from_operator(
         gemini_key="AIza-test",
         nvidia_key="nv-test",
@@ -190,7 +190,7 @@ def test_operator_routes_gemini_text_and_forces_nano_banana() -> None:
     )
     assert isinstance(stack, RoutingLLMProvider)
     assert isinstance(stack._text, GeminiOpenAICompatProvider)
-    assert stack._image is stack._text
+    assert isinstance(stack._image, NvidiaFluxProvider)
 
 
 def test_operator_deepseek_text_gemini_image() -> None:
@@ -228,7 +228,7 @@ def test_operator_deepseek_plus_agnes_without_gemini() -> None:
     assert isinstance(stack._image, AgnesImageProvider)
 
 
-def test_operator_gemini_still_wins_over_agnes() -> None:
+def test_operator_agnes_pick_beats_gemini_default() -> None:
     stack = provider_from_operator(
         gemini_key="AIza-test",
         agnes_key="sk-agnes",
@@ -236,7 +236,23 @@ def test_operator_gemini_still_wins_over_agnes() -> None:
         image_model="agnes",
     )
     assert isinstance(stack, RoutingLLMProvider)
-    assert stack._image is stack._text
+    assert isinstance(stack._image, AgnesImageProvider)
+
+
+def test_operator_no_keys_falls_back_to_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NVIDIA_API_KEY", "nv-server")
+    monkeypatch.setenv("AGNES_API_KEY", "agnes-server")
+    stack = provider_from_operator()
+    assert isinstance(stack, RoutingLLMProvider)
+    assert isinstance(stack._text, NvidiaGptOssProvider)
+    assert isinstance(stack._image, AgnesImageProvider)
+
+
+def test_operator_no_keys_no_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("GEMINI_API_KEY", "DEEPSEEK_API_KEY", "NVIDIA_API_KEY", "AGNES_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError, match="Models chip"):
+        provider_from_operator()
 
 
 def test_operator_deepseek_only_has_no_image_backend() -> None:
