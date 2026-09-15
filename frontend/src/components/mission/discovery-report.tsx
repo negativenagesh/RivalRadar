@@ -1037,7 +1037,13 @@ export function DiscoveryReport({
 
 const PUBLISH_PLATFORMS = ["linkedin", "instagram", "x", "youtube"];
 
-function publishVariationText(variation: PublishVariation): string {
+function publishVariationText(variation: PublishVariation, platform: string): string {
+  if (platform === "youtube") {
+    const title = variation.title || variation.caption.split("\n")[0] || "RivalRadar post";
+    const body = variation.description || variation.caption;
+    const tags = variation.hashtags.join(" ");
+    return [title, body, tags].filter(Boolean).join("\n\n");
+  }
   const tags = variation.hashtags.join(" ");
   return [variation.caption, tags].filter(Boolean).join("\n\n");
 }
@@ -1069,6 +1075,8 @@ function PublishPanel({
   const [error, setError] = useState<string | null>(null);
   const [plan, setPlan] = useState<PublishPlan | null>(null);
   const [stagingIdx, setStagingIdx] = useState<number | null>(null);
+  const [stagingAll, setStagingAll] = useState(false);
+  const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [staged, setStaged] = useState<Record<number, StagePostResult>>({});
 
   function selectPlatform(next: string): void {
@@ -1077,12 +1085,14 @@ function PublishPanel({
     setPlan(null);
     setError(null);
     setStaged({});
+    setSelected({});
   }
 
   async function runPlan(): Promise<void> {
     setBusy(true);
     setError(null);
     setStaged({});
+    setSelected({});
     try {
       const next = await generatePublishPlan({
         brand_name: brandName,
@@ -1098,6 +1108,11 @@ function PublishPanel({
         variations: count,
       });
       setPlan(next);
+      const initial: Record<number, boolean> = {};
+      next.variations.forEach((_, idx) => {
+        initial[idx] = true;
+      });
+      setSelected(initial);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "publish plan failed");
     } finally {
@@ -1119,7 +1134,7 @@ function PublishPanel({
     try {
       const result = await stagePlatformPost({
         platform,
-        caption: publishVariationText(variation),
+        caption: publishVariationText(variation, platform),
         media_png_b64: out.image_data_base64 ?? undefined,
         approved: true,
       });
@@ -1129,6 +1144,44 @@ function PublishPanel({
     } finally {
       setStagingIdx(null);
     }
+  }
+
+  async function stageSelected(): Promise<void> {
+    if (!plan) return;
+    const idxs = plan.variations
+      .map((_, idx) => idx)
+      .filter((idx) => selected[idx]);
+    if (idxs.length === 0) {
+      setError("Select at least one variation to stage.");
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `Stage ${idxs.length} variation(s) on ${platform} via the headless browser? Nothing auto-publishes.`,
+      )
+    ) {
+      return;
+    }
+    setStagingAll(true);
+    setError(null);
+    for (const idx of idxs) {
+      setStagingIdx(idx);
+      try {
+        const result = await stagePlatformPost({
+          platform,
+          caption: publishVariationText(plan.variations[idx], platform),
+          media_png_b64: out.image_data_base64 ?? undefined,
+          approved: true,
+        });
+        setStaged((prev) => ({ ...prev, [idx]: result }));
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "staging failed");
+        break;
+      }
+    }
+    setStagingIdx(null);
+    setStagingAll(false);
   }
 
   return (
@@ -1164,6 +1217,30 @@ function PublishPanel({
       {error && <p className="text-xs text-destructive">{error}</p>}
       {plan && (
         <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={stagingAll || stagingIdx !== null}
+              onClick={() => void stageSelected()}
+            >
+              {stagingAll ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+              Stage selected on {platform}
+            </Button>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => {
+                const all: Record<number, boolean> = {};
+                plan.variations.forEach((_, idx) => {
+                  all[idx] = true;
+                });
+                setSelected(all);
+              }}
+            >
+              Select all
+            </button>
+          </div>
           {plan.variations.map((variation, idx) => {
             const stagedResult = staged[idx];
             return (
@@ -1171,10 +1248,20 @@ function PublishPanel({
                 key={`${platform}-${idx}`}
                 className="space-y-1.5 rounded-lg border border-border/40 p-2.5"
               >
-                <p className="text-xs leading-relaxed whitespace-pre-wrap">
-                  {variation.title ? `${variation.title}\n` : ""}
-                  {variation.caption}
-                </p>
+                <label className="flex items-start gap-2 text-left">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={Boolean(selected[idx])}
+                    onChange={(e) =>
+                      setSelected((prev) => ({ ...prev, [idx]: e.target.checked }))
+                    }
+                  />
+                  <span className="text-xs leading-relaxed whitespace-pre-wrap">
+                    {variation.title ? `${variation.title}\n` : ""}
+                    {variation.caption}
+                  </span>
+                </label>
                 {variation.description && (
                   <p className="text-xs text-muted-foreground whitespace-pre-wrap">
                     {variation.description}
@@ -1190,26 +1277,24 @@ function PublishPanel({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => void copyText(publishVariationText(variation))}
+                    onClick={() => void copyText(publishVariationText(variation, platform))}
                   >
                     <Copy className="size-3.5" />
                     Copy
                   </Button>
-                  {platform !== "youtube" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={stagingIdx !== null}
-                      onClick={() => void stageVariation(idx, variation)}
-                    >
-                      {stagingIdx === idx ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <Send className="size-3.5" />
-                      )}
-                      Stage on {platform}
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={stagingIdx !== null || stagingAll}
+                    onClick={() => void stageVariation(idx, variation)}
+                  >
+                    {stagingIdx === idx ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Send className="size-3.5" />
+                    )}
+                    Stage on {platform}
+                  </Button>
                 </div>
                 {stagedResult && (
                   <div className="space-y-1 pt-1">

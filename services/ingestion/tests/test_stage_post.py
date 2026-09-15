@@ -10,9 +10,8 @@ def test_stage_post_requires_human_approval() -> None:
         validate_stage(platform="linkedin", caption="shipping soon", approved=False)
 
 
-def test_stage_post_rejects_youtube() -> None:
-    with pytest.raises(StagePostError, match="youtube staging not supported"):
-        validate_stage(platform="youtube", caption="hi", approved=True)
+def test_stage_post_accepts_youtube() -> None:
+    assert validate_stage(platform="youtube", caption="Title\n\nDescription", approved=True) == "youtube"
 
 
 def test_stage_post_rejects_empty_caption() -> None:
@@ -29,7 +28,7 @@ def test_stage_post_normalizes_twitter_to_x() -> None:
     assert validate_stage(platform="twitter", caption="hi", approved=True) == "x"
 
 
-@pytest.mark.parametrize("platform", ["linkedin", "x", "instagram"])
+@pytest.mark.parametrize("platform", ["linkedin", "x", "instagram", "youtube"])
 def test_stage_post_accepts_supported_platforms(platform: str) -> None:
     assert validate_stage(platform=platform, caption="launch notes", approved=True) == platform
 
