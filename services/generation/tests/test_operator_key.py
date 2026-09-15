@@ -134,3 +134,23 @@ async def test_intel_report_streams_stage_agent_and_report_events() -> None:
     assert "event: agent" in body
     assert "event: report" in body
     assert '"intel_chief"' in body
+
+
+async def test_intel_report_streams_markdown_delta_events() -> None:
+    payload = '{"markdown": "# Live brief\\n\\n- receipt", "scoreboard_blurb": "hi"}'
+    fake = FakeLLMProvider(completion=payload)
+    fake.stream_chunks = [payload[:20], payload[20:40], payload[40:]]
+    app.dependency_overrides[operator_provider] = lambda: fake
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/intel/report/stream",
+                json={"facts": {"brandName": "Pixis"}, "brand_name": "Pixis"},
+            )
+    finally:
+        app.dependency_overrides.pop(operator_provider, None)
+    assert response.status_code == 200
+    body = response.text
+    assert "event: delta" in body
+    assert "Live brief" in body or "markdown" in body

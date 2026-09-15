@@ -501,6 +501,96 @@ async def _complete_json(
         return {}
 
 
+async def _complete_json_streaming(
+    provider: LLMProvider,
+    *,
+    system: str,
+    user: str,
+    max_tokens: int,
+    agent: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream an agent; yield markdown delta events when parseable, then {"_data": ...}."""
+    messages = [Message(role="system", content=system), Message(role="user", content=user)]
+    buf = ""
+    last_md = ""
+    try:
+        async for piece in provider.complete_stream(
+            messages,
+            temperature=0.35,
+            max_tokens=max_tokens,
+            reasoning_effort="low",
+        ):
+            if not piece:
+                continue
+            buf += piece
+            try:
+                data = parse_json_object(buf)
+            except Exception:  # noqa: BLE001 — partial JSON while streaming
+                continue
+            md = str(data.get("markdown") or "")
+            if md and md != last_md:
+                if md.startswith(last_md):
+                    yield {
+                        "event": "delta",
+                        "agent": agent,
+                        "markdown": md[len(last_md) :],
+                        "replace": False,
+                    }
+                else:
+                    yield {
+                        "event": "delta",
+                        "agent": agent,
+                        "markdown": md,
+                        "replace": True,
+                    }
+                last_md = md
+        try:
+            yield {"_data": parse_json_object(buf)}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("intel agent stream JSON parse failed: %s", exc)
+            yield {"_data": {}}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("intel agent stream failed: %s", exc)
+        yield {"_data": {}}
+
+
+async def _chief_with_quality_retry_streaming(
+    provider: LLMProvider,
+    *,
+    chief_user: str,
+    fallback: IntelReport,
+    platforms: list[str],
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream Intel Chief; retry once without streaming if quality fails."""
+    chief_data: dict[str, Any] = {}
+    async for event in _complete_json_streaming(
+        provider, system=INTEL_CHIEF, user=chief_user, max_tokens=4500, agent="intel_chief"
+    ):
+        if "_data" in event:
+            chief_data = event["_data"] if isinstance(event["_data"], dict) else {}
+        else:
+            yield event
+    markdown = str(chief_data.get("markdown") or "").strip()
+    if not markdown_passes_quality(markdown, fallback=fallback.markdown, platforms=platforms):
+        retry_user = (
+            chief_user
+            + "\n\nRETRY: Your previous draft failed quality. "
+            "Write a NEW evaluative brief with 25+ distinct bullets. "
+            "Do not copy FACTS lines. Cover every MUST-evaluate platform."
+        )
+        retry = await _complete_json(provider, system=INTEL_CHIEF, user=retry_user, max_tokens=4500)
+        if retry:
+            chief_data = {**chief_data, **retry}
+            md = str(chief_data.get("markdown") or "")
+            if md:
+                yield {
+                    "event": "delta",
+                    "agent": "intel_chief",
+                    "markdown": md,
+                    "replace": True,
+                }
+    yield {"_data": chief_data}
+
 def _facts_header(request: IntelRequest, facts: dict[str, Any]) -> str:
     platforms = _platforms_in_facts(facts)
     packed = json.dumps(facts, ensure_ascii=False)[:18000]
@@ -608,7 +698,7 @@ async def generate_intel(request: IntelRequest, provider: LLMProvider) -> IntelR
 async def generate_intel_events(
     request: IntelRequest, provider: LLMProvider
 ) -> AsyncIterator[dict[str, Any]]:
-    """SSE-friendly intel: stage events as each agent writes, then the final report."""
+    """SSE-friendly intel: token deltas from Intel Chief, stage events, then final report."""
     facts = request.facts or {}
     fallback = fallback_intel(facts, request.brand_name)
     platforms = _platforms_in_facts(facts)
@@ -626,28 +716,30 @@ async def generate_intel_events(
     async def run(agent: str, coro: Awaitable[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         return agent, await coro
 
-    tasks = [
-        asyncio.create_task(
-            run(
-                "intel_chief",
-                _chief_with_quality_retry(
-                    provider, chief_user=chief_user, fallback=fallback, platforms=platforms
-                ),
-            )
-        ),
-        asyncio.create_task(
-            run("play_caller", _complete_json(provider, system=PLAY_CALLER, user=header, max_tokens=2800))
-        ),
-        asyncio.create_task(
-            run(
-                "platform_scout",
-                _complete_json(provider, system=PLATFORM_SCOUT, user=header, max_tokens=3200),
-            )
-        ),
-    ]
+    # Start play/platform in parallel while we stream the chief.
+    play_task = asyncio.create_task(
+        run("play_caller", _complete_json(provider, system=PLAY_CALLER, user=header, max_tokens=2800))
+    )
+    scout_task = asyncio.create_task(
+        run(
+            "platform_scout",
+            _complete_json(provider, system=PLATFORM_SCOUT, user=header, max_tokens=3200),
+        )
+    )
 
-    results: dict[str, dict[str, Any]] = {}
-    for fut in asyncio.as_completed(tasks):
+    chief_data: dict[str, Any] = {}
+    async for event in _chief_with_quality_retry_streaming(
+        provider, chief_user=chief_user, fallback=fallback, platforms=platforms
+    ):
+        if "_data" in event:
+            raw = event["_data"]
+            chief_data = raw if isinstance(raw, dict) else {}
+        else:
+            yield event
+    yield {"event": "agent", "agent": "intel_chief", "status": "done", "ok": bool(chief_data)}
+
+    results: dict[str, dict[str, Any]] = {"intel_chief": chief_data}
+    for fut in asyncio.as_completed([play_task, scout_task]):
         agent, data = await fut
         results[agent] = data
         yield {"event": "agent", "agent": agent, "status": "done", "ok": bool(data)}

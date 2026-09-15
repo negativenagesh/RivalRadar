@@ -240,6 +240,7 @@ export function stagePlatformPost(body: {
 export type IntelStreamEvent =
   | { event: "stage"; agent: string; status: "writing" }
   | { event: "agent"; agent: string; status: "done"; ok: boolean }
+  | { event: "delta"; agent: string; markdown: string; replace?: boolean }
   | { event: "report"; report: IntelReport }
   | { event: "error"; detail: string };
 

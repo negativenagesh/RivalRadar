@@ -203,11 +203,13 @@ export function DiscoveryReport({
   const [reportTab, setReportTab] = useState("brief");
   const [intelTick, setIntelTick] = useState(0);
   const [intelStages, setIntelStages] = useState<Record<string, "writing" | "done">>({});
+  const [intelLiveMarkdown, setIntelLiveMarkdown] = useState("");
   if (intelForSig !== factsSig) {
     setIntelForSig(factsSig);
     setGeminiIntel(null);
     setIntelFetchError(null);
     setIntelStages({});
+    setIntelLiveMarkdown("");
     setReportTab("brief");
   }
   const intel = mergeIntel(facts, geminiIntel);
@@ -303,6 +305,7 @@ export function DiscoveryReport({
         return;
       }
       setIntelStages({});
+      setIntelLiveMarkdown("");
       void streamIntelReport(
         {
           facts,
@@ -316,6 +319,10 @@ export function DiscoveryReport({
             setIntelStages((s) => ({ ...s, [event.agent]: "writing" }));
           } else if (event.event === "agent") {
             setIntelStages((s) => ({ ...s, [event.agent]: "done" }));
+          } else if (event.event === "delta" && event.markdown) {
+            setIntelLiveMarkdown((prev) =>
+              event.replace ? event.markdown : `${prev}${event.markdown}`,
+            );
           }
         },
       )
@@ -323,11 +330,13 @@ export function DiscoveryReport({
           if (cancelled) return;
           writeIntelCache(cacheKey, report);
           setGeminiIntel(report);
+          setIntelLiveMarkdown("");
           setIntelFetchError(null);
         })
         .catch((err: unknown) => {
           if (cancelled) return;
           setGeminiIntel(null);
+          setIntelLiveMarkdown("");
           setIntelFetchError(
             err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
           );
@@ -457,7 +466,9 @@ export function DiscoveryReport({
 
   const activeReport =
     reportTab === "brief"
-      ? intel.markdown
+      ? geminiIntel
+        ? intel.markdown
+        : intelLiveMarkdown || intel.markdown
       : (intel.reports.find((section) => section.id === reportTab)?.markdown ?? intel.markdown);
 
   return (
@@ -517,6 +528,7 @@ export function DiscoveryReport({
                 setGeminiIntel(null);
                 setIntelFetchError(null);
                 setIntelStages({});
+                setIntelLiveMarkdown("");
                 setIntelTick((n) => n + 1);
               }}
             >
