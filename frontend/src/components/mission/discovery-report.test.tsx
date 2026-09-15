@@ -11,6 +11,8 @@ vi.mock("@/lib/api", () => ({
   streamIntelReport: vi.fn(),
   generateCreative: vi.fn(),
   generatePublishPlan: vi.fn(),
+  streamPublishPlan: vi.fn(),
+  streamCommentDraft: vi.fn(),
   stagePlatformPost: vi.fn(),
   dropSocialComment: vi.fn(),
   listConnections: vi.fn(async () => [{ platform: "linkedin", status: "connected" }]),

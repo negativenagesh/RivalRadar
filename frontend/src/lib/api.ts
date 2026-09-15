@@ -199,6 +199,61 @@ export type PublishPlan = {
   variations: PublishVariation[];
 };
 
+
+export type PublishStreamEvent =
+  | { event: "stage"; agent: string; status: "writing" }
+  | { event: "delta"; agent: string; text: string }
+  | { event: "plan"; plan: PublishPlan }
+  | { event: "error"; detail: string };
+
+export async function streamPublishPlan(
+  body: {
+    brand_name: string;
+    platform: string;
+    asset_caption: string;
+    overlay_text?: string;
+    asset_context?: string;
+    image_concept?: string;
+    intel_markdown?: string;
+    facts_json?: string;
+    format?: string;
+    spice?: number;
+    variations?: number;
+  },
+  onEvent?: (event: PublishStreamEvent) => void,
+): Promise<PublishPlan> {
+  const events = await readSseStream<PublishStreamEvent>(
+    "/creative/publish-plan/stream",
+    body,
+    onEvent,
+  );
+  const planEvent = events.find((e): e is Extract<PublishStreamEvent, { event: "plan" }> => e.event === "plan");
+  if (!planEvent) throw new Error("Publish stream ended without a plan.");
+  return planEvent.plan;
+}
+
+export type CommentStreamEvent =
+  | { event: "stage"; agent: string; status: "writing" }
+  | { event: "delta"; agent: string; text: string }
+  | { event: "result"; result: CreativeResult }
+  | { event: "error"; detail: string };
+
+export async function streamCommentDraft(
+  body: CreativeRequest,
+  onEvent?: (event: CommentStreamEvent) => void,
+): Promise<CreativeResult> {
+  const events = await readSseStream<CommentStreamEvent>(
+    "/creative/comment/stream",
+    body,
+    onEvent,
+  );
+  const resultEvent = events.find(
+    (e): e is Extract<CommentStreamEvent, { event: "result" }> => e.event === "result",
+  );
+  if (!resultEvent) throw new Error("Comment stream ended without a result.");
+  return resultEvent.result;
+}
+
 export function generatePublishPlan(body: {
   brand_name: string;
   platform: string;
@@ -235,6 +290,71 @@ export function stagePlatformPost(body: {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+
+function operatorFetchHeaders(): Record<string, string> {
+  const state = loadOperatorState();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (state.gemini) headers["X-Gemini-Key"] = state.gemini;
+  if (state.deepseek) headers["X-DeepSeek-Key"] = state.deepseek;
+  if (state.nvidia) headers["X-Nvidia-Key"] = state.nvidia;
+  if (state.agnes) headers["X-Agnes-Key"] = state.agnes;
+  headers["X-Text-Model"] = resolveTextModel(state) ?? state.textModel;
+  headers["X-Image-Model"] = resolveImageModel(state) ?? state.imageModel;
+  return headers;
+}
+
+async function readSseStream<TEvent extends { event: string }>(
+  path: string,
+  body: unknown,
+  onEvent?: (event: TEvent) => void,
+): Promise<TEvent[]> {
+  let response: Response;
+  try {
+    response = await fetch(`${GATEWAY_URL}${path}`, {
+      method: "POST",
+      headers: operatorFetchHeaders(),
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "network error";
+    throw new Error(`Gateway unreachable (${reason}).`);
+  }
+  if (!response.ok || !response.body) {
+    throw new Error(`Stream failed: ${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const events: TEvent[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) {
+      const eventMatch = block.match(/^event: (.+)$/m);
+      const dataMatch = block.match(/^data: (.+)$/m);
+      if (!eventMatch || !dataMatch) continue;
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(dataMatch[1]) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const event = { event: eventMatch[1], ...data } as TEvent;
+      if ((event as { event: string }).event === "error") {
+        const detail = String((data as { detail?: string }).detail || "stream error");
+        throw new Error(detail);
+      }
+      events.push(event);
+      onEvent?.(event);
+    }
+  }
+  return events;
 }
 
 export type IntelStreamEvent =

@@ -35,7 +35,9 @@ from app.clients import (
     generate_publish_plan,
     ping_generation_vendor,
     stage_ingestion_post,
+    stream_comment_draft,
     stream_intel_report,
+    stream_publish_plan,
     trigger_digest_generation,
     trigger_ingestion_run,
 )
@@ -310,6 +312,54 @@ async def creative_publish_plan(
         x_image_model=x_image_model,
     )
     return await generate_publish_plan(body, operator_headers=headers)
+
+
+@router.post("/creative/publish-plan/stream")
+async def creative_publish_plan_stream(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> StreamingResponse:
+    headers = _operator_headers(
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
+    )
+    return StreamingResponse(
+        stream_publish_plan(body, operator_headers=headers),
+        media_type="text/event-stream",
+    )
+
+
+@router.post("/creative/comment/stream")
+async def creative_comment_stream(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> StreamingResponse:
+    headers = _operator_headers(
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
+    )
+    return StreamingResponse(
+        stream_comment_draft(body, operator_headers=headers),
+        media_type="text/event-stream",
+    )
 
 
 @router.post("/social/stage-post")

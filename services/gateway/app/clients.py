@@ -120,11 +120,32 @@ async def stream_intel_report(
     body: dict[str, Any], *, operator_headers: dict[str, str]
 ) -> AsyncIterator[str]:
     """Proxy generation's intel SSE stream byte-for-byte."""
+    async for chunk in _stream_generation("/intel/report/stream", body, operator_headers):
+        yield chunk
+
+
+async def stream_publish_plan(
+    body: dict[str, Any], *, operator_headers: dict[str, str]
+) -> AsyncIterator[str]:
+    async for chunk in _stream_generation("/creative/publish-plan/stream", body, operator_headers):
+        yield chunk
+
+
+async def stream_comment_draft(
+    body: dict[str, Any], *, operator_headers: dict[str, str]
+) -> AsyncIterator[str]:
+    async for chunk in _stream_generation("/creative/comment/stream", body, operator_headers):
+        yield chunk
+
+
+async def _stream_generation(
+    path: str, body: dict[str, Any], operator_headers: dict[str, str]
+) -> AsyncIterator[str]:
     try:
         async with httpx.AsyncClient(
             base_url=settings.generation_service_url, timeout=httpx.Timeout(300.0, read=300.0)
         ) as client, client.stream(
-            "POST", "/intel/report/stream", json=body, headers=operator_headers
+            "POST", path, json=body, headers=operator_headers
         ) as response:
             if response.status_code != 200:
                 await response.aread()
