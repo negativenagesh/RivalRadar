@@ -33,6 +33,7 @@ from app.clients import (
     generate_creative_content,
     generate_intel_report,
     ping_generation_vendor,
+    stream_intel_report,
     trigger_digest_generation,
     trigger_ingestion_run,
 )
@@ -203,6 +204,32 @@ async def intel_report(
         x_image_model=x_image_model,
     )
     return await generate_intel_report(body, operator_headers=headers)
+
+
+@router.post("/intel/report/stream")
+async def intel_report_stream(
+    request: Request,
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> StreamingResponse:
+    headers = _operator_headers(
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
+    )
+    body: dict[str, object] = await request.json()
+    return StreamingResponse(
+        stream_intel_report(body, operator_headers=headers),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/llm/ping")

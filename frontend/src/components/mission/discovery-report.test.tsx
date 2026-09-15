@@ -8,7 +8,7 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  generateIntelReport: vi.fn(),
+  streamIntelReport: vi.fn(),
   generateCreative: vi.fn(),
   dropSocialComment: vi.fn(),
   listConnections: vi.fn(async () => [{ platform: "linkedin", status: "connected" }]),
@@ -92,7 +92,7 @@ describe("DiscoveryReport war room", () => {
       </GeminiKeyProvider>,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent(/Paste a Gemini, DeepSeek, or NVIDIA key/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/Paste a key in the Models chip/i);
     expect(screen.getAllByText("Scoreboard").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Pixis").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Hot take quote card" })).toBeInTheDocument();
@@ -106,5 +106,53 @@ describe("DiscoveryReport war room", () => {
     expect(screen.getByText("War-room agents")).toBeInTheDocument();
     expect(screen.getByText("Comment sniper")).toBeInTheDocument();
     expect(screen.getByText(/human delays/i)).toBeInTheDocument();
+  });
+
+  it("serves a cached brief on remount instead of re-streaming", async () => {
+    const { streamIntelReport } = await import("@/lib/api");
+    const streamMock = vi.mocked(streamIntelReport);
+    streamMock.mockResolvedValue({
+      scoreboard_blurb: "cached blurb from the chief",
+      markdown: "# Cached brief\n\n- persisted",
+      good_at: [],
+      fumbling: [],
+      why_engagement_mid: [],
+      gaps: [],
+      plays: [],
+      sniper_bait: [],
+      reports: [],
+      narration: "agent",
+      agents_used: ["intel_chief"],
+    } as never);
+    window.localStorage.setItem("rivalradar.operator.geminiKey", "AIza-dummy-key-1234");
+
+    const first = render(
+      <GeminiKeyProvider>
+        <DiscoveryReport
+          facts={facts}
+          permissions={DEFAULT_PERMISSIONS}
+          onPermissionsChange={() => undefined}
+          brand={{ ...DEFAULT_BRAND, displayName: "Pixis" }}
+        />
+      </GeminiKeyProvider>,
+    );
+    await screen.findByText("cached blurb from the chief");
+    expect(streamMock).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    render(
+      <GeminiKeyProvider>
+        <DiscoveryReport
+          facts={facts}
+          permissions={DEFAULT_PERMISSIONS}
+          onPermissionsChange={() => undefined}
+          brand={{ ...DEFAULT_BRAND, displayName: "Pixis" }}
+        />
+      </GeminiKeyProvider>,
+    );
+    // Cached brief renders immediately — no new stream, no "agents writing".
+    await screen.findByText("cached blurb from the chief");
+    expect(streamMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/agents writing/i)).not.toBeInTheDocument();
   });
 });

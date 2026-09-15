@@ -1,3 +1,5 @@
+import json
+from collections.abc import AsyncIterator
 from typing import Any, NoReturn
 
 import httpx
@@ -112,6 +114,33 @@ async def generate_intel_report(
             _reraise_transport(exc)
         result: dict[str, Any] = response.json()
         return result
+
+
+async def stream_intel_report(
+    body: dict[str, Any], *, operator_headers: dict[str, str]
+) -> AsyncIterator[str]:
+    """Proxy generation's intel SSE stream byte-for-byte."""
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.generation_service_url, timeout=httpx.Timeout(300.0, read=300.0)
+        ) as client, client.stream(
+            "POST", "/intel/report/stream", json=body, headers=operator_headers
+        ) as response:
+            if response.status_code != 200:
+                await response.aread()
+                detail = response.text[:400]
+                try:
+                    payload = response.json()
+                    detail = str(payload.get("detail") or detail)
+                except Exception:  # noqa: BLE001
+                    pass
+                yield f"event: error\ndata: {json.dumps({'detail': detail})}\n\n"
+                return
+            async for chunk in response.aiter_text():
+                yield chunk
+    except httpx.RequestError as exc:
+        detail = f"generation service unreachable ({exc.__class__.__name__})"
+        yield f"event: error\ndata: {json.dumps({'detail': detail})}\n\n"
 
 
 async def ping_generation_vendor(

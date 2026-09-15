@@ -19,8 +19,8 @@ import { useOperatorModels } from "@/components/operator-models-provider";
 import {
   dropSocialComment,
   generateCreative,
-  generateIntelReport,
   listConnections,
+  streamIntelReport,
 } from "@/lib/api";
 import { MarkdownReport } from "@/components/mission/markdown-report";
 import { IntelVisuals } from "@/components/mission/intel-visuals";
@@ -41,7 +41,47 @@ import type {
   IntelReport,
 } from "@/lib/types";
 
-const KEY_WARNING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip.";
+const KEY_WARNING =
+  "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / GEMINI_API_KEY in the server .env.";
+
+const INTEL_CACHE_PREFIX = "rivalradar.intel.";
+
+function intelCacheKey(sig: string, brandName: string): string {
+  let hash = 0;
+  const text = `${sig}|${brandName}`;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (Math.imul(hash, 31) + text.charCodeAt(i)) | 0;
+  }
+  return `${INTEL_CACHE_PREFIX}${(hash >>> 0).toString(36)}`;
+}
+
+function readIntelCache(key: string): IntelReport | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as IntelReport;
+    return parsed && typeof parsed.markdown === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeIntelCache(key: string, report: IntelReport): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Keep only the newest few cached briefs.
+    const stale = Object.keys(window.localStorage).filter(
+      (k) => k.startsWith(INTEL_CACHE_PREFIX) && k !== key,
+    );
+    for (const k of stale.slice(0, Math.max(0, stale.length - 4))) {
+      window.localStorage.removeItem(k);
+    }
+    window.localStorage.setItem(key, JSON.stringify(report));
+  } catch {
+    // storage full / private mode
+  }
+}
 
 const AGENT_LABELS: Record<string, string> = {
   intel_chief: "Intel Chief",
@@ -155,16 +195,21 @@ export function DiscoveryReport({
   const [intelForSig, setIntelForSig] = useState(factsSig);
   const [reportTab, setReportTab] = useState("brief");
   const [intelTick, setIntelTick] = useState(0);
+  const [intelStages, setIntelStages] = useState<Record<string, "writing" | "done">>({});
   if (intelForSig !== factsSig) {
     setIntelForSig(factsSig);
     setGeminiIntel(null);
     setIntelFetchError(null);
+    setIntelStages({});
     setReportTab("brief");
   }
   const intel = mergeIntel(facts, geminiIntel);
   const usedFallback = !geminiIntel || geminiIntel.narration === "fallback";
   const intelBusy = models.readyText && geminiIntel === null && intelFetchError === null;
   const intelError = !models.readyText ? KEY_WARNING : intelFetchError;
+  const writingAgents = Object.entries(intelStages)
+    .filter(([, status]) => status === "writing")
+    .map(([agent]) => AGENT_LABELS[agent as keyof typeof AGENT_LABELS] ?? agent);
 
   const [studioFormat, setStudioFormat] = useState("hot_take");
   const [studioPlatform, setStudioPlatform] = useState("linkedin");
@@ -240,24 +285,47 @@ export function DiscoveryReport({
   useEffect(() => {
     if (!models.readyText) return;
     let cancelled = false;
-    void generateIntelReport({
-      facts,
-      brand_name: brand.displayName || "the brand",
-      voice_notes: brand.voiceNotes,
-      forbidden_claims: brand.forbiddenClaims,
-    })
-      .then((report) => {
-        if (cancelled) return;
-        setGeminiIntel(report);
+    const cacheKey = intelCacheKey(factsSig, brand.displayName || "the brand");
+    // Defer setState out of the effect body (react-hooks/set-state-in-effect).
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      const cached = readIntelCache(cacheKey);
+      if (cached) {
+        setGeminiIntel(cached);
         setIntelFetchError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setGeminiIntel(null);
-        setIntelFetchError(
-          err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
-        );
-      });
+        return;
+      }
+      setIntelStages({});
+      void streamIntelReport(
+        {
+          facts,
+          brand_name: brand.displayName || "the brand",
+          voice_notes: brand.voiceNotes,
+          forbidden_claims: brand.forbiddenClaims,
+        },
+        (event) => {
+          if (cancelled) return;
+          if (event.event === "stage") {
+            setIntelStages((s) => ({ ...s, [event.agent]: "writing" }));
+          } else if (event.event === "agent") {
+            setIntelStages((s) => ({ ...s, [event.agent]: "done" }));
+          }
+        },
+      )
+        .then((report) => {
+          if (cancelled) return;
+          writeIntelCache(cacheKey, report);
+          setGeminiIntel(report);
+          setIntelFetchError(null);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setGeminiIntel(null);
+          setIntelFetchError(
+            err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
+          );
+        });
+    });
     return () => {
       cancelled = true;
     };
@@ -422,7 +490,9 @@ export function DiscoveryReport({
             {intelBusy && <Loader2 className="size-4 animate-spin text-primary" />}
             <span className="font-ui text-[10px] uppercase tracking-widest text-muted-foreground">
               {intelBusy
-                ? "agents writing"
+                ? writingAgents.length
+                  ? `${writingAgents.join(" + ")} writing · streaming`
+                  : "agents writing"
                 : usedFallback
                   ? "offline · fact brief"
                   : `${models.textModel ?? "model"} live`}
@@ -432,8 +502,14 @@ export function DiscoveryReport({
               variant="outline"
               disabled={!models.readyText || intelBusy}
               onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.localStorage.removeItem(
+                    intelCacheKey(factsSig, brand.displayName || "the brand"),
+                  );
+                }
                 setGeminiIntel(null);
                 setIntelFetchError(null);
+                setIntelStages({});
                 setIntelTick((n) => n + 1);
               }}
             >
@@ -457,17 +533,25 @@ export function DiscoveryReport({
         <div className="flex flex-wrap gap-2">
           {(["intel_chief", "play_caller", "platform_scout"] as const).map((id) => {
             const live = (intel.agents_used ?? []).includes(id);
+            const stage = intelStages[id];
+            const label = intelBusy
+              ? stage === "done"
+                ? " · done"
+                : " · writing"
+              : live
+                ? " · live"
+                : " · standby";
             return (
               <span
                 key={id}
                 className={
-                  live
+                  live || (intelBusy && stage === "done")
                     ? "font-ui rounded-full border border-primary/40 bg-primary/15 px-3 py-1 text-[11px] font-semibold text-primary"
                     : "font-ui rounded-full border border-border/50 px-3 py-1 text-[11px] text-muted-foreground"
                 }
               >
                 {AGENT_LABELS[id]}
-                {intelBusy ? " · writing" : live ? " · live" : " · standby"}
+                {label}
               </span>
             );
           })}
