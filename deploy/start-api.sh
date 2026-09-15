@@ -14,8 +14,19 @@ export MISSION_IMAGE_MODEL="${MISSION_IMAGE_MODEL:-agnes}"
 # Never inject platform social cookies from env — users log in via Connect browser.
 unset LINKEDIN_COOKIES TWITTER_COOKIES X_COOKIES INSTAGRAM_COOKIES YOUTUBE_COOKIES || true
 
+GEN_UVICORN="$ROOT/services/generation/.venv/bin/uvicorn"
+GW_UVICORN="$ROOT/services/gateway/.venv/bin/uvicorn"
+if [[ ! -x "$GEN_UVICORN" ]]; then
+  echo "missing generation uvicorn at $GEN_UVICORN" >&2
+  exit 1
+fi
+if [[ ! -x "$GW_UVICORN" ]]; then
+  echo "missing gateway uvicorn at $GW_UVICORN" >&2
+  exit 1
+fi
+
 cd "$ROOT/services/generation"
-uvicorn app.main:app --host 127.0.0.1 --port "$GEN_PORT" &
+"$GEN_UVICORN" app.main:app --host 127.0.0.1 --port "$GEN_PORT" &
 GEN_PID=$!
 
 cleanup() {
@@ -24,7 +35,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Wait briefly so /ready can succeed after cold start.
-for _ in $(seq 1 30); do
+for _ in $(seq 1 40); do
   if curl -fsS "http://127.0.0.1:${GEN_PORT}/health" >/dev/null 2>&1; then
     break
   fi
@@ -32,4 +43,4 @@ for _ in $(seq 1 30); do
 done
 
 cd "$ROOT/services/gateway"
-exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+exec "$GW_UVICORN" app.main:app --host 0.0.0.0 --port "$PORT"

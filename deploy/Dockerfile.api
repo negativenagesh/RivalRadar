@@ -30,7 +30,7 @@ COPY --from=builder --chown=appuser:appuser /build /build
 COPY --chown=appuser:appuser deploy/start-api.sh /build/deploy/start-api.sh
 RUN chmod +x /build/deploy/start-api.sh
 
-ENV PATH="/build/services/gateway/.venv/bin:/build/services/generation/.venv/bin:$PATH" \
+ENV PATH="/build/services/generation/.venv/bin:/build/services/gateway/.venv/bin:$PATH" \
     MISSION_TEXT_MODEL=gptoss \
     MISSION_IMAGE_MODEL=agnes \
     GENERATION_INTERNAL_PORT=8003 \

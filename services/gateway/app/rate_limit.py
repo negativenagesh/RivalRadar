@@ -12,7 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse, Response
 
 # Conservative quotas so shared gpt-oss + Agnes keys survive multi-tenant traffic.
-# Buckets are per visitor fingerprint (IP + UA + optional rr_vid cookie).
+# Buckets are per client IP (never trust client-supplied visitor tokens for quotas).
 LIMITS: dict[str, tuple[int, int]] = {
     # path prefix → (max_requests, window_seconds)
     "/creative/generate": (20, 3600),
@@ -21,8 +21,9 @@ LIMITS: dict[str, tuple[int, int]] = {
     "/social/stage-post": (15, 3600),
     "/social/comment": (20, 3600),
     "/ingestion/runs": (10, 3600),
-    "/pipeline/runs": (8, 3600),
-    "/connect/": (30, 3600),
+    "/drafts/generate": (8, 3600),
+    "/pipeline-runs": (30, 3600),
+    "/connections/": (30, 3600),
     "/analytics/": (240, 3600),
     "*": (180, 3600),
 }
@@ -30,13 +31,20 @@ LIMITS: dict[str, tuple[int, int]] = {
 _SKIP_PREFIXES = ("/health", "/ready", "/docs", "/openapi", "/redoc")
 
 
-def visitor_id(request: Request) -> str:
+def client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for") or ""
-    ip = forwarded.split(",")[0].strip() or (request.client.host if request.client else "unknown")
-    ua = request.headers.get("user-agent") or ""
-    vid = request.cookies.get("rr_vid") or request.headers.get("x-rr-vid") or ""
-    raw = f"{ip}|{ua}|{vid}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    if forwarded:
+        return forwarded.split(",")[0].strip() or "unknown"
+    real = request.headers.get("x-real-ip") or request.headers.get("cf-connecting-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else "unknown"
+
+
+def visitor_id(request: Request) -> str:
+    """Stable analytics id — IP-anchored so clients cannot rotate past rate limits."""
+    ip = client_ip(request)
+    return hashlib.sha256(ip.encode("utf-8")).hexdigest()[:32]
 
 
 def _match_limit(path: str) -> tuple[str, int, int]:

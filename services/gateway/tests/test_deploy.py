@@ -30,7 +30,7 @@ def test_memory_rate_limiter_blocks() -> None:
     assert retry >= 1
 
 
-def test_visitor_id_stable_for_same_headers() -> None:
+def test_visitor_id_is_ip_anchored() -> None:
     scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -43,13 +43,20 @@ def test_visitor_id_stable_for_same_headers() -> None:
         "headers": [
             (b"user-agent", b"TestAgent/1.0"),
             (b"x-forwarded-for", b"203.0.113.9"),
+            (b"x-rr-vid", b"attacker-rotating-token"),
         ],
         "client": ("127.0.0.1", 12345),
         "server": ("test", 80),
     }
     req = Request(scope)
     a = visitor_id(req)
-    b = visitor_id(req)
+    scope2 = dict(scope)
+    scope2["headers"] = [
+        (b"user-agent", b"TotallyDifferent/9.9"),
+        (b"x-forwarded-for", b"203.0.113.9"),
+        (b"x-rr-vid", b"another-token"),
+    ]
+    b = visitor_id(Request(scope2))
     assert a == b
     assert len(a) == 32
 
