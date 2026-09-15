@@ -1092,7 +1092,8 @@ function PublishPanel({
   ready: boolean;
 }) {
   const [assetIdx, setAssetIdx] = useState(0);
-  const out = outs[Math.min(assetIdx, Math.max(outs.length - 1, 0))] ?? outs[0];
+  const safeAssetIdx = Math.min(assetIdx, Math.max(outs.length - 1, 0));
+  const out = outs[safeAssetIdx] ?? outs[0];
   const [platform, setPlatform] = useState(
     PUBLISH_PLATFORMS.includes(defaultPlatform) ? defaultPlatform : "x",
   );
@@ -1106,12 +1107,8 @@ function PublishPanel({
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [staged, setStaged] = useState<Record<number, StagePostResult>>({});
 
-  useEffect(() => {
-    if (assetIdx >= outs.length) setAssetIdx(Math.max(outs.length - 1, 0));
-  }, [outs.length, assetIdx]);
-
   function selectAsset(idx: number): void {
-    if (idx === assetIdx) return;
+    if (idx === safeAssetIdx) return;
     setAssetIdx(idx);
     setPlan(null);
     setError(null);
@@ -1260,7 +1257,7 @@ function PublishPanel({
                   type="button"
                   onClick={() => selectAsset(idx)}
                   className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
-                    assetIdx === idx
+                    safeAssetIdx === idx
                       ? "border-primary bg-primary/10 text-primary"
                       : "border-border/50 bg-background/50 text-muted-foreground hover:border-primary/40"
                   }`}
