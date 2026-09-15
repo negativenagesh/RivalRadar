@@ -9,6 +9,7 @@ import {
   Flame,
   Loader2,
   MessageSquare,
+  Send,
   Sparkles,
   Target,
   X,
@@ -19,8 +20,13 @@ import { useOperatorModels } from "@/components/operator-models-provider";
 import {
   dropSocialComment,
   generateCreative,
+  generatePublishPlan,
   listConnections,
+  stagePlatformPost,
   streamIntelReport,
+  type PublishPlan,
+  type PublishVariation,
+  type StagePostResult,
 } from "@/lib/api";
 import { MarkdownReport } from "@/components/mission/markdown-report";
 import { IntelVisuals } from "@/components/mission/intel-visuals";
@@ -214,7 +220,7 @@ export function DiscoveryReport({
   const [studioFormat, setStudioFormat] = useState("hot_take");
   const [studioPlatform, setStudioPlatform] = useState("linkedin");
   const [studioSpice, setStudioSpice] = useState(3);
-  const [studioMemeCount, setStudioMemeCount] = useState(1);
+  const [studioCount, setStudioCount] = useState(1);
   const [studioBusy, setStudioBusy] = useState(false);
   const [studioLoadingSlot, setStudioLoadingSlot] = useState<number | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
@@ -348,7 +354,7 @@ export function DiscoveryReport({
       setStudioError("Flip on the matching creative permission first.");
       return;
     }
-    const batch = studioFormat === "meme" ? studioMemeCount : 1;
+    const batch = studioCount;
     setStudioBusy(true);
     setStudioError(null);
     setStudioOuts([]);
@@ -715,29 +721,27 @@ export function DiscoveryReport({
             </button>
           ))}
         </div>
-        {studioFormat === "meme" && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-ui text-xs text-muted-foreground">memes</span>
-            {[1, 2, 3].map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setStudioMemeCount(n)}
-                className={chipClass(studioMemeCount === n)}
-              >
-                {n}
-              </button>
-            ))}
-            <span className="text-xs text-muted-foreground">
-              Generates one after another (loading between each).
-            </span>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-ui text-xs text-muted-foreground">variations</span>
+          {[1, 2, 3].map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setStudioCount(n)}
+              className={chipClass(studioCount === n)}
+            >
+              {n}
+            </button>
+          ))}
+          <span className="text-xs text-muted-foreground">
+            Up to 3, generated one after another (loading between each).
+          </span>
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={studioBusy || !models.readyText} onClick={() => void runStudio()}>
             {studioBusy ? <Loader2 className="size-4 animate-spin" /> : <Flame className="size-4" />}
             Generate
-            {studioFormat === "meme" && studioMemeCount > 1 ? ` ×${studioMemeCount}` : ""}
+            {studioCount > 1 ? ` ×${studioCount}` : ""}
           </Button>
           {studioOuts.length > 0 && (
             <Button
@@ -754,7 +758,7 @@ export function DiscoveryReport({
             {studioError}
           </p>
         )}
-        <div className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {studioOuts.map((out, idx) => {
             const src = studioImageSrc(out);
             return (
@@ -816,6 +820,13 @@ export function DiscoveryReport({
                       </Button>
                     )}
                   </div>
+                  <PublishPanel
+                    out={out}
+                    brandName={brand.displayName}
+                    intelMarkdown={geminiIntel?.markdown ?? null}
+                    defaultPlatform={studioPlatform}
+                    ready={models.readyText}
+                  />
                 </div>
               </div>
             );
@@ -824,10 +835,8 @@ export function DiscoveryReport({
             <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-primary/40 bg-primary/5 px-4 py-8">
               <Loader2 className="size-8 animate-spin text-primary" />
               <p className="font-mono text-xs uppercase tracking-wider text-primary">
-                Cooking meme {studioLoadingSlot}
-                {studioFormat === "meme" && studioMemeCount > 1
-                  ? ` of ${studioMemeCount}`
-                  : ""}
+                Cooking {studioFormat === "meme" ? "meme" : "variation"} {studioLoadingSlot}
+                {studioCount > 1 ? ` of ${studioCount}` : ""}
                 …
               </p>
               <p className="text-xs text-muted-foreground">
@@ -1002,6 +1011,196 @@ export function DiscoveryReport({
             className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain"
             onClick={(e) => e.stopPropagation()}
           />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PUBLISH_PLATFORMS = ["linkedin", "instagram", "x", "youtube"];
+
+function publishVariationText(variation: PublishVariation): string {
+  const tags = variation.hashtags.join(" ");
+  return [variation.caption, tags].filter(Boolean).join("\n\n");
+}
+
+function PublishPanel({
+  out,
+  brandName,
+  intelMarkdown,
+  defaultPlatform,
+  ready,
+}: {
+  out: CreativeResult;
+  brandName: string;
+  intelMarkdown: string | null;
+  defaultPlatform: string;
+  ready: boolean;
+}) {
+  const [platform, setPlatform] = useState(
+    PUBLISH_PLATFORMS.includes(defaultPlatform) ? defaultPlatform : "x",
+  );
+  const [count, setCount] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [plan, setPlan] = useState<PublishPlan | null>(null);
+  const [stagingIdx, setStagingIdx] = useState<number | null>(null);
+  const [staged, setStaged] = useState<Record<number, StagePostResult>>({});
+
+  function selectPlatform(next: string): void {
+    if (next === platform) return;
+    setPlatform(next);
+    setPlan(null);
+    setError(null);
+    setStaged({});
+  }
+
+  async function runPlan(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    setStaged({});
+    try {
+      const next = await generatePublishPlan({
+        brand_name: brandName,
+        platform,
+        asset_caption: out.text,
+        asset_context: [out.overlay_text, out.why_slaps].filter(Boolean).join(" — "),
+        intel_markdown: intelMarkdown ?? undefined,
+        image_b64: out.image_data_base64 ?? undefined,
+        variations: count,
+      });
+      setPlan(next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "publish plan failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stageVariation(idx: number, variation: PublishVariation): Promise<void> {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `Open ${platform} in the headless browser and stage this post with the image attached? Nothing gets published — you review and hit post yourself.`,
+      )
+    ) {
+      return;
+    }
+    setStagingIdx(idx);
+    setError(null);
+    try {
+      const result = await stagePlatformPost({
+        platform,
+        caption: publishVariationText(variation),
+        media_png_b64: out.image_data_base64 ?? undefined,
+        approved: true,
+      });
+      setStaged((prev) => ({ ...prev, [idx]: result }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "staging failed");
+    } finally {
+      setStagingIdx(null);
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded-xl border border-border/40 bg-background/40 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-ui text-xs text-muted-foreground">publish</span>
+        {PUBLISH_PLATFORMS.map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => selectPlatform(p)}
+            className={chipClass(platform === p)}
+          >
+            {p}
+          </button>
+        ))}
+        <span className="font-ui ml-1 text-xs text-muted-foreground">variations</span>
+        {[1, 2, 3].map((n) => (
+          <button key={n} type="button" onClick={() => setCount(n)} className={chipClass(count === n)}>
+            {n}
+          </button>
+        ))}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy || !ready}
+          onClick={() => void runPlan()}
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+          {plan ? "Regenerate captions" : "Captions"}
+        </Button>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {plan && (
+        <div className="space-y-2">
+          {plan.variations.map((variation, idx) => {
+            const stagedResult = staged[idx];
+            return (
+              <div
+                key={`${platform}-${idx}`}
+                className="space-y-1.5 rounded-lg border border-border/40 p-2.5"
+              >
+                <p className="text-xs leading-relaxed whitespace-pre-wrap">
+                  {variation.title ? `${variation.title}\n` : ""}
+                  {variation.caption}
+                </p>
+                {variation.description && (
+                  <p className="text-xs text-muted-foreground whitespace-pre-wrap">
+                    {variation.description}
+                  </p>
+                )}
+                {variation.hashtags.length > 0 && (
+                  <p className="text-xs text-primary">{variation.hashtags.join(" ")}</p>
+                )}
+                {variation.why && (
+                  <p className="text-[11px] text-muted-foreground">Why it travels: {variation.why}</p>
+                )}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void copyText(publishVariationText(variation))}
+                  >
+                    <Copy className="size-3.5" />
+                    Copy
+                  </Button>
+                  {platform !== "youtube" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={stagingIdx !== null}
+                      onClick={() => void stageVariation(idx, variation)}
+                    >
+                      {stagingIdx === idx ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Send className="size-3.5" />
+                      )}
+                      Stage on {platform}
+                    </Button>
+                  )}
+                </div>
+                {stagedResult && (
+                  <div className="space-y-1 pt-1">
+                    <p className={`text-xs ${stagedResult.ok ? "text-primary" : "text-destructive"}`}>
+                      {stagedResult.detail}
+                    </p>
+                    {stagedResult.screenshot_jpeg_b64 && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`data:image/jpeg;base64,${stagedResult.screenshot_jpeg_b64}`}
+                        alt={`${platform} staged post screenshot`}
+                        className="max-h-48 w-auto rounded-lg border border-border/40"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

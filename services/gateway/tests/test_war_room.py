@@ -77,6 +77,40 @@ async def test_intel_forwards_operator_key(
     assert called.kwargs["operator_headers"]["X-Gemini-Key"] == "AIza-operator"
 
 
+async def test_publish_plan_forwards_operator_headers(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock = AsyncMock(return_value={"platform": "linkedin", "variations": []})
+    monkeypatch.setattr("app.routes.generate_publish_plan", mock)
+    response = await client.post(
+        "/creative/publish-plan",
+        json={"brand_name": "Pixis", "platform": "linkedin", "asset_caption": "roast"},
+        headers={"X-Text-Model": "gptoss"},
+    )
+    assert response.status_code == 200
+    called = mock.await_args
+    assert called is not None
+    assert called.kwargs["operator_headers"]["X-Text-Model"] == "gptoss"
+
+
+async def test_social_stage_post_requires_approval(client: AsyncClient) -> None:
+    response = await client.post(
+        "/social/stage-post",
+        json={"platform": "x", "caption": "ship it", "approved": False},
+    )
+    assert response.status_code == 400
+    assert "approval" in response.json()["detail"]
+
+
+async def test_social_stage_post_requires_connection(client: AsyncClient) -> None:
+    response = await client.post(
+        "/social/stage-post",
+        json={"platform": "x", "caption": "ship it", "approved": True},
+    )
+    assert response.status_code == 400
+    assert "not connected" in response.json()["detail"]
+
+
 async def test_social_comment_requires_approval(client: AsyncClient) -> None:
     response = await client.post(
         "/social/comment",
