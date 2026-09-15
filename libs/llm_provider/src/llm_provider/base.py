@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from pydantic import BaseModel
@@ -49,6 +50,21 @@ class LLMProvider(Protocol):
         endpoint included), so a low-latency classification task should pass
         "low" rather than silently risking a truncated response. Providers
         that don't support the concept ignore it.
+        """
+        ...
+
+    def complete_stream(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        reasoning_effort: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Yield text deltas for the same request as `complete`.
+
+        Callers that need progressive UI should prefer this. Providers that
+        cannot stream may yield a single chunk equal to `complete()`.
         """
         ...
 

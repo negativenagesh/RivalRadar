@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from llm_provider.base import ImageResult, LLMProvider, LLMProviderError, Message
 
 
@@ -24,6 +26,22 @@ class RoutingLLMProvider:
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
         )
+
+    async def complete_stream(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        reasoning_effort: str | None = None,
+    ) -> AsyncIterator[str]:
+        async for chunk in self._text.complete_stream(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        ):
+            yield chunk
 
     async def generate_image_concept(
         self,

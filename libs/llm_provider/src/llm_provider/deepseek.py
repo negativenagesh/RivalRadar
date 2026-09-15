@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import cast
 
 from openai import APIStatusError, AsyncOpenAI
@@ -57,6 +58,33 @@ class DeepSeekProvider:
         except APIStatusError as exc:
             raise translate_vendor_error(exc, vendor="DeepSeek") from exc
         return message_text(response.choices[0].message)
+
+    async def complete_stream(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        reasoning_effort: str | None = None,
+    ) -> AsyncIterator[str]:
+        from llm_provider.stream_util import stream_chat_deltas
+
+        thinking: dict[str, str] = {"type": "disabled"}
+        extra: dict[str, object] = {"thinking": thinking}
+        if reasoning_effort == "high":
+            extra = {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+        budget = max(max_tokens, 1024)
+        async for piece in stream_chat_deltas(
+            self._client,
+            model=self._model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=budget,
+            vendor="DeepSeek",
+            extra_body=extra,
+        ):
+            yield piece
+
 
     async def generate_image_concept(
         self,

@@ -21,6 +21,7 @@ class FakeLLMProvider:
         self.last_image_brief: str | None = None
         self.last_aspect_ratio: str | None = None
         self.complete_calls = 0
+        self.stream_chunks: list[str] | None = None
 
     async def complete(
         self,
@@ -33,6 +34,24 @@ class FakeLLMProvider:
         self.complete_calls += 1
         self.last_messages = messages
         return self.completion
+
+    async def complete_stream(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        reasoning_effort: str | None = None,
+    ):
+        self.complete_calls += 1
+        self.last_messages = messages
+        chunks = self.stream_chunks
+        if chunks is None:
+            # Chunk into ~24-char pieces so stream consumers get multiple deltas.
+            text = self.completion
+            chunks = [text[i : i + 24] for i in range(0, len(text), 24)] or [""]
+        for piece in chunks:
+            yield piece
 
     async def generate_image_concept(
         self,

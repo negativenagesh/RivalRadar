@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import re
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
@@ -132,6 +133,28 @@ class GeminiOpenAICompatProvider:
         except APIStatusError as exc:
             raise translate_openai_error(exc) from exc
         return response.choices[0].message.content or ""
+
+    async def complete_stream(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        reasoning_effort: str | None = None,
+    ) -> AsyncIterator[str]:
+        from llm_provider.stream_util import stream_chat_deltas
+
+        extra_body = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+        async for piece in stream_chat_deltas(
+            self._client,
+            model=self._model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            vendor="Gemini",
+            extra_body=extra_body or None,
+        ):
+            yield piece
 
     async def generate_image_concept(
         self,
