@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 STAGE_PAUSE_MIN_S = 1.0
 STAGE_PAUSE_MAX_S = 3.0
-_ALLOWED = {"linkedin", "x", "instagram"}
+_ALLOWED = {"linkedin", "x", "instagram", "youtube"}
 _MAX_CAPTION = 3000
 
 _LINKEDIN_START = [
@@ -66,8 +66,6 @@ def validate_stage(*, platform: str, caption: str, approved: bool) -> str:
     if not approved:
         raise StagePostError("human approval required")
     plat = normalize_platform(platform)
-    if plat == "youtube":
-        raise StagePostError("youtube staging not supported for image posts")
     if plat not in _ALLOWED:
         raise StagePostError(f"stage post not supported on {plat}")
     body = (caption or "").strip()
@@ -179,6 +177,91 @@ async def _stage_instagram(page: Page, caption: str, media_path: str | None) -> 
     await _fill_caption(page, field, caption, delay=20)
 
 
+
+_YOUTUBE_TITLE = [
+    "#textbox",
+    "input#textbox",
+    "div#textbox[contenteditable='true']",
+    "ytcp-social-suggestions-textbox#title-textarea div#textbox",
+]
+_YOUTUBE_DESC = [
+    "ytcp-social-suggestions-textbox#description-textarea div#textbox",
+    "div#description-textarea div#textbox",
+]
+_YOUTUBE_FILE = [
+    "input[type='file']",
+    "input[type='file'][accept*='image']",
+    "input[type='file'][accept*='video']",
+]
+
+
+async def _stage_youtube(page: Page, caption: str, media_path: str | None) -> None:
+    """Open YouTube Studio upload drawer, fill title/description, stop before Publish."""
+    await page.goto(
+        "https://studio.youtube.com/",
+        wait_until="domcontentloaded",
+        timeout=30_000,
+    )
+    await settle_page(page, quiet_ms=250)
+    await stage_pause()
+    # Create → Upload videos (button labels vary by locale).
+    opened = await _click_first(
+        page,
+        [
+            "ytcp-button#create-icon",
+            "#create-icon",
+            "button[aria-label*='Create' i]",
+            "tp-yt-paper-icon-button#create-icon",
+        ],
+    )
+    if opened:
+        await stage_pause()
+        await _click_first(
+            page,
+            [
+                "tp-yt-paper-item:has-text('Upload videos')",
+                "tp-yt-paper-item:has-text('Upload')",
+                "ytcp-text-dropdown-trigger:has-text('Upload')",
+            ],
+        )
+        await stage_pause()
+    # Direct upload URL fallback.
+    if media_path and not await page.locator("input[type='file']").count():
+        await page.goto(
+            "https://www.youtube.com/upload",
+            wait_until="domcontentloaded",
+            timeout=30_000,
+        )
+        await settle_page(page, quiet_ms=200)
+        await stage_pause()
+    if media_path:
+        # Image attaches as community/custom thumbnail when the dialog allows file pickers.
+        attached = await _set_image(page, media_path)
+        if not attached:
+            for sel in _YOUTUBE_FILE:
+                loc = page.locator(sel).first
+                try:
+                    if await loc.count() == 0:
+                        continue
+                    await loc.set_input_files(media_path, timeout=5000)
+                    attached = True
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+        await stage_pause()
+    parts = caption.strip().split("\n", 1)
+    title = parts[0].strip()[:95] or "RivalRadar staged post"
+    description = parts[1].strip() if len(parts) > 1 else caption.strip()
+    title_field = await _wait_first(page, _YOUTUBE_TITLE)
+    if title_field is not None:
+        await _fill_caption(page, title_field, title, delay=15)
+        await stage_pause()
+    desc_field = await _wait_first(page, _YOUTUBE_DESC)
+    if desc_field is not None:
+        await _fill_caption(page, desc_field, description[:5000], delay=12)
+    # Never click Next/Publish — leave the upload/details draft open.
+
+
 async def _stage_on_platform(
     page: Page, plat: str, caption: str, media_path: str | None
 ) -> None:
@@ -186,6 +269,8 @@ async def _stage_on_platform(
         await _stage_linkedin(page, caption, media_path)
     elif plat == "x":
         await _stage_x(page, caption, media_path)
+    elif plat == "youtube":
+        await _stage_youtube(page, caption, media_path)
     else:
         await _stage_instagram(page, caption, media_path)
 
@@ -200,9 +285,10 @@ async def stage_post(
 ) -> dict[str, Any]:
     plat = validate_stage(platform=platform, caption=caption, approved=approved)
     sessions = platform_sessions or {}
-    cookies = cookies_from_sessions(sessions, platforms={plat, "twitter"} if plat == "x" else {plat})
+    cookie_plats = {plat, "twitter"} if plat == "x" else {plat, "google"} if plat == "youtube" else {plat}
+    cookies = cookies_from_sessions(sessions, platforms=cookie_plats)
     storage = storage_state_from_sessions(
-        sessions, platforms={plat, "twitter"} if plat == "x" else {plat}
+        sessions, platforms=cookie_plats
     )
     if not cookies and not storage:
         raise StagePostError(f"not connected to {plat}")
