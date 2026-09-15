@@ -824,6 +824,9 @@ export function DiscoveryReport({
                     out={out}
                     brandName={brand.displayName}
                     intelMarkdown={geminiIntel?.markdown ?? null}
+                    factsJson={studioFormat === "meme" ? studioFactsJson : factsJson}
+                    format={studioFormat}
+                    spice={studioSpice}
                     defaultPlatform={studioPlatform}
                     ready={models.readyText}
                   />
@@ -1028,12 +1031,18 @@ function PublishPanel({
   out,
   brandName,
   intelMarkdown,
+  factsJson,
+  format,
+  spice,
   defaultPlatform,
   ready,
 }: {
   out: CreativeResult;
   brandName: string;
   intelMarkdown: string | null;
+  factsJson: string;
+  format: string;
+  spice: number;
   defaultPlatform: string;
   ready: boolean;
 }) {
@@ -1064,9 +1073,13 @@ function PublishPanel({
         brand_name: brandName,
         platform,
         asset_caption: out.text,
+        overlay_text: out.overlay_text ?? undefined,
         asset_context: [out.overlay_text, out.why_slaps].filter(Boolean).join(" — "),
+        image_concept: out.image_concept ?? undefined,
         intel_markdown: intelMarkdown ?? undefined,
-        image_b64: out.image_data_base64 ?? undefined,
+        facts_json: factsJson,
+        format,
+        spice,
         variations: count,
       });
       setPlan(next);

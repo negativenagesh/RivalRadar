@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -17,12 +18,28 @@ PLATFORMS = frozenset({"linkedin", "instagram", "x", "youtube"})
 
 _CHAR_CAPS = {"linkedin": 2900, "instagram": 2100, "x": 270, "youtube": 5000}
 
-_HASHTAG_FILLER: dict[str, list[str]] = {
-    "linkedin": ["#marketing", "#growth", "#brandstrategy"],
-    "instagram": ["#marketing", "#socialmedia", "#growth", "#branding", "#contentmarketing"],
-    "x": ["#marketing"],
-    "youtube": ["#marketing", "#growth", "#brandstrategy"],
-}
+# Agent-emitted tags only: # + lowercase alnum/underscore. No filler lists.
+_TAG_RE = re.compile(r"^#[a-z0-9_]{1,59}$")
+
+# Never keep these if the model slips — they are the old predefined filler set.
+_BANNED_GENERIC = frozenset(
+    {
+        "#marketing",
+        "#growth",
+        "#branding",
+        "#brandstrategy",
+        "#socialmedia",
+        "#contentmarketing",
+        "#viral",
+        "#business",
+        "#entrepreneur",
+        "#success",
+        "#motivation",
+        "#digitalmarketing",
+        "#ai",
+        "#tech",
+    }
+)
 
 
 class PublishVariation(BaseModel):
@@ -42,6 +59,9 @@ class PublishPlanRequest(BaseModel):
     spice: int = Field(default=3, ge=1, le=5)
     asset_caption: str = ""
     overlay_text: str | None = None
+    asset_context: str | None = None
+    image_concept: str | None = None
+    intel_markdown: str | None = None
     variations: int = Field(default=3, ge=1, le=3)
     facts_json: str | None = None
 
@@ -53,6 +73,8 @@ class PublishPlanResponse(BaseModel):
 
 
 def _clean_hashtags(raw: Any, platform: str, limit: int) -> list[str]:
+    """Normalize agent hashtags. Never invent or fill — empty in ⇒ empty out."""
+    del platform  # platform only affects the caller's limit; keep signature stable for tests
     out: list[str] = []
     seen: set[str] = set()
     for tag in raw if isinstance(raw, list) else []:
@@ -61,26 +83,27 @@ def _clean_hashtags(raw: Any, platform: str, limit: int) -> list[str]:
             continue
         if not text.startswith("#"):
             text = f"#{text}"
-        if len(text) < 2 or len(text) > 60 or text in seen:
+        if not _TAG_RE.match(text) or text in seen or text in _BANNED_GENERIC:
             continue
         seen.add(text)
         out.append(text)
-    if not out:
-        out = list(_HASHTAG_FILLER.get(platform, []))
     return out[:limit]
 
 
 def _fallback_variations(request: PublishPlanRequest) -> list[PublishVariation]:
+    """Caption-only safety net when the LLM fails. Hashtags stay empty — agent-only."""
     base = (request.asset_caption or f"{request.brand_name} drop").strip()
     cap = _CHAR_CAPS[request.platform]
     caption = base[:cap]
     return [
         PublishVariation(
             caption=caption,
-            hashtags=_clean_hashtags([], request.platform, 5),
-            title=f"{request.brand_name} — {request.format}"[:95] if request.platform == "youtube" else "",
+            hashtags=[],
+            title=f"{request.brand_name} — {request.format}"[:95]
+            if request.platform == "youtube"
+            else "",
             description=caption if request.platform == "youtube" else "",
-            why="fallback: asset caption + platform hashtag staples",
+            why="fallback: asset caption only (no invented hashtags)",
         )
     ]
 
@@ -116,16 +139,23 @@ async def generate_publish_plan(
     request: PublishPlanRequest, provider: LLMProvider
 ) -> PublishPlanResponse:
     facts = (request.facts_json or "")[:6000]
+    intel = (request.intel_markdown or "")[:4000]
+    image_concept = (request.image_concept or "")[:1500]
+    asset_context = (request.asset_context or "")[:800]
     user = (
         f"Brand: {request.brand_name}\n"
         f"Platform: {request.platform}\n"
         f"Format of the generated asset: {request.format} (spice {request.spice}/5)\n"
         f"Asset caption/text: {request.asset_caption or '(image only)'}\n"
         f"Asset overlay text: {request.overlay_text or 'none'}\n"
+        f"Asset context (why it slaps / angle): {asset_context or 'none'}\n"
+        f"Image concept / visual described: {image_concept or 'none — invent tags from caption + facts'}\n"
         f"Voice: {request.voice_notes or 'sharp, human'}\n"
         f"Forbidden: {request.forbidden_claims or 'none listed'}\n"
-        f"Write exactly {request.variations} variation(s).\n\n"
-        f"FACTS + roast pack (angle fuel, do not quote metrics as claims):\n{facts}"
+        f"Write exactly {request.variations} variation(s).\n"
+        "Hashtags must be invented from the fields above + FACTS/intel — never generic filler.\n\n"
+        f"FACTS + roast pack (angle fuel, do not quote metrics as claims):\n{facts or '(none)'}\n\n"
+        f"INTEL BRIEF (optional angle fuel):\n{intel or '(none)'}"
     )
     raw_text = ""
     try:
