@@ -12,11 +12,15 @@ from llm_provider import (
     get_llm_provider,
     ping_vendor,
     provider_from_operator,
+    server_model_defaults,
 )
 
 router = APIRouter()
 
-KEYS_MISSING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip."
+KEYS_MISSING = (
+    "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / "
+    "GEMINI_API_KEY in the server .env (defaults: gpt-oss text, Agnes image)."
+)
 
 
 class PingRequest(BaseModel):
@@ -49,6 +53,13 @@ def _llm_http(exc: LLMProviderError) -> HTTPException:
         {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
     )
     return HTTPException(status_code=exc.status_code, detail=exc.detail, headers=headers)
+
+
+@router.get("/models/defaults")
+async def model_defaults() -> dict[str, object]:
+    """Which Mission models the server can drive from env keys alone."""
+    defaults: dict[str, object] = server_model_defaults()
+    return defaults
 
 
 @router.post("/drafts/generate", response_model=DraftResponse)

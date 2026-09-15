@@ -4,6 +4,7 @@ from llm_provider.factory import (
     ping_vendor,
     provider_from_key,
     provider_from_operator,
+    server_model_defaults,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "ping_vendor",
     "provider_from_key",
     "provider_from_operator",
+    "server_model_defaults",
 ]

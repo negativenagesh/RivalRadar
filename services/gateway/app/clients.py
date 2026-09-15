@@ -5,7 +5,22 @@ from fastapi import HTTPException
 
 from app.config import settings
 
-GEMINI_MISSING = "Paste a Gemini, DeepSeek, or NVIDIA key in the Models chip. Agnes paints images only."
+GEMINI_MISSING = (
+    "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / "
+    "GEMINI_API_KEY in the server .env (defaults: gpt-oss text, Agnes image)."
+)
+
+
+async def fetch_model_defaults() -> dict[str, Any]:
+    """Server-env Mission model defaults (gpt-oss / Agnes) from generation."""
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=10.0) as client:
+        try:
+            response = await client.get("/models/defaults")
+            response.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            return {"text_model": None, "image_model": None, "available": False, "source": "server-env"}
+        result: dict[str, Any] = response.json()
+        return result
 
 
 def _reraise_upstream(exc: httpx.HTTPStatusError) -> NoReturn:

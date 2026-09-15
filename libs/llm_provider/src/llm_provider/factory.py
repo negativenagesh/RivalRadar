@@ -25,6 +25,37 @@ from llm_provider.routing import RoutingLLMProvider
 TEXT_MODELS = frozenset({"gemini", "deepseek", "gptoss"})
 IMAGE_MODELS = frozenset({"nano_banana", "agnes", "nvidia_flux", "none"})
 
+# Mission defaults when the operator pasted no keys: gpt-oss text + Agnes image,
+# driven by server-side env keys (NVIDIA_API_KEY / AGNES_API_KEY).
+TEXT_FALLBACK_ORDER = ("gptoss", "gemini", "deepseek")
+IMAGE_FALLBACK_ORDER = ("agnes", "nano_banana", "nvidia_flux")
+
+_KEY_ENV = {
+    "gemini": "GEMINI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "gptoss": "NVIDIA_API_KEY",
+    "nano_banana": "GEMINI_API_KEY",
+    "agnes": "AGNES_API_KEY",
+    "nvidia_flux": "NVIDIA_API_KEY",
+}
+
+_ENV_VENDOR = {
+    "GEMINI_API_KEY": "gemini",
+    "DEEPSEEK_API_KEY": "deepseek",
+    "NVIDIA_API_KEY": "nvidia",
+    "AGNES_API_KEY": "agnes",
+}
+
+
+def _env(name: str) -> str:
+    return os.environ.get(name, "").strip()
+
+
+def _model_key(model: str, keys: dict[str, str]) -> str:
+    """Effective key for a model id from merged operator+env keys."""
+    vendor = _ENV_VENDOR[_KEY_ENV[model]]
+    return keys.get(vendor, "")
+
 
 @lru_cache(maxsize=1)
 def get_llm_provider() -> LLMProvider:
@@ -113,37 +144,84 @@ def provider_from_operator(
     text_model: str | None = None,
     image_model: str | None = None,
 ) -> LLMProvider:
-    """Uncached Mission stack: text vendor + image vendor from operator headers."""
-    text_id = (text_model or "gemini").strip().lower()
-    if text_id not in TEXT_MODELS:
+    """Uncached Mission stack: operator header keys win; server env keys are the fallback.
+
+    Defaults with zero operator keys: gpt-oss text + Agnes image, from server
+    NVIDIA_API_KEY / AGNES_API_KEY (MISSION_TEXT_MODEL / MISSION_IMAGE_MODEL override).
+    """
+    keys = {
+        "gemini": (gemini_key or "").strip() or _env("GEMINI_API_KEY"),
+        "deepseek": (deepseek_key or "").strip() or _env("DEEPSEEK_API_KEY"),
+        "nvidia": (nvidia_key or "").strip() or _env("NVIDIA_API_KEY"),
+        "agnes": (agnes_key or "").strip() or _env("AGNES_API_KEY"),
+    }
+
+    requested_text = (text_model or "").strip().lower() or _env("MISSION_TEXT_MODEL") or "gptoss"
+    if requested_text not in TEXT_MODELS:
         raise ValueError("Text model must be gemini, deepseek, or gptoss.")
-    gemini = (gemini_key or "").strip()
-    agnes = (agnes_key or "").strip()
-    image_id = (image_model or "").strip().lower() or (
-        "nano_banana" if gemini else "agnes" if agnes else "none"
-    )
-    if image_id not in IMAGE_MODELS:
-        raise ValueError("Image model must be nano_banana, agnes, nvidia_flux, or none.")
-
+    text_order = [requested_text, *[m for m in TEXT_FALLBACK_ORDER if m != requested_text]]
+    text_id = next((m for m in text_order if _model_key(m, keys)), None)
+    if text_id is None:
+        raise ValueError(
+            "Paste a key in the Models chip, or set NVIDIA_API_KEY / GEMINI_API_KEY on the server."
+        )
     if text_id == "gemini":
-        text: LLMProvider = _gemini(_need(gemini_key, "Gemini"))
+        text: LLMProvider = _gemini(keys["gemini"])
     elif text_id == "deepseek":
-        text = _deepseek(_need(deepseek_key, "DeepSeek"))
+        text = _deepseek(keys["deepseek"])
     else:
-        text = _gptoss(_need(nvidia_key, "NVIDIA"))
+        text = _gptoss(keys["nvidia"])
 
-    # Gemini key present → Nano Banana only (operator asked: use Gemini for pixels).
-    image: LLMProvider | None
-    if gemini:
-        image = text if text_id == "gemini" else _gemini(gemini)
-    elif image_id == "agnes":
-        image = _agnes(_need(agnes_key, "Agnes"))
-    elif image_id == "nvidia_flux":
-        image = _flux(_need(nvidia_key, "NVIDIA"))
-    else:
-        image = None
+    requested_image = (image_model or "").strip().lower() or _env("MISSION_IMAGE_MODEL") or "agnes"
+    if requested_image not in IMAGE_MODELS:
+        raise ValueError("Image model must be nano_banana, agnes, nvidia_flux, or none.")
+    image: LLMProvider | None = None
+    if requested_image != "none":
+        image_order = [requested_image, *[m for m in IMAGE_FALLBACK_ORDER if m != requested_image]]
+        for image_id in image_order:
+            if image_id == "nano_banana" and keys["gemini"]:
+                image = text if text_id == "gemini" else _gemini(keys["gemini"])
+                break
+            if image_id == "agnes" and keys["agnes"]:
+                image = _agnes(keys["agnes"])
+                break
+            if image_id == "nvidia_flux" and keys["nvidia"]:
+                image = _flux(keys["nvidia"])
+                break
 
     return RoutingLLMProvider(text, image)
+
+
+def server_model_defaults() -> dict[str, object]:
+    """Which Mission models the server can drive from env keys alone (no operator keys)."""
+    text_id = next(
+        (
+            m
+            for m in (
+                _env("MISSION_TEXT_MODEL") or "gptoss",
+                *TEXT_FALLBACK_ORDER,
+            )
+            if _env(_KEY_ENV[m])
+        ),
+        None,
+    )
+    image_id = next(
+        (
+            m
+            for m in (
+                _env("MISSION_IMAGE_MODEL") or "agnes",
+                *IMAGE_FALLBACK_ORDER,
+            )
+            if m != "none" and _env(_KEY_ENV[m])
+        ),
+        None,
+    )
+    return {
+        "text_model": text_id,
+        "image_model": image_id,
+        "available": text_id is not None,
+        "source": "server-env",
+    }
 
 
 async def ping_vendor(vendor: str, api_key: str) -> dict[str, str]:

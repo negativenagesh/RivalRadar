@@ -66,10 +66,12 @@ export function loadOperatorState(): OperatorState {
     deepseek: read(DEEPSEEK_KEY_STORAGE),
     nvidia: read(NVIDIA_KEY_STORAGE),
     agnes: read(AGNES_KEY_STORAGE),
-    textModel: TEXT_MODELS.includes(textRaw as TextModel) ? (textRaw as TextModel) : "gemini",
+    // Defaults: gpt-oss text + Agnes image — server env keys drive them when
+    // the operator hasn't pasted anything.
+    textModel: TEXT_MODELS.includes(textRaw as TextModel) ? (textRaw as TextModel) : "gptoss",
     imageModel: IMAGE_MODELS.includes(imageRaw as ImageModel)
       ? (imageRaw as ImageModel)
-      : "nano_banana",
+      : "agnes",
   };
 }
 
@@ -99,7 +101,7 @@ export function saveImageModel(model: ImageModel): ImageModel {
 }
 
 export function resolveTextModel(state: OperatorState): TextModel | null {
-  const order: TextModel[] = [state.textModel, "gemini", "deepseek", "gptoss"];
+  const order: TextModel[] = [state.textModel, "gptoss", "gemini", "deepseek"];
   const seen = new Set<TextModel>();
   for (const model of order) {
     if (seen.has(model)) continue;
@@ -112,10 +114,11 @@ export function resolveTextModel(state: OperatorState): TextModel | null {
 }
 
 export function resolveImageModel(state: OperatorState): ImageModel | null {
-  if (hasOperatorKey(state.gemini)) return "nano_banana";
   if (state.imageModel === "agnes" && hasOperatorKey(state.agnes)) return "agnes";
   if (state.imageModel === "nvidia_flux" && hasOperatorKey(state.nvidia)) return "nvidia_flux";
+  if (state.imageModel === "nano_banana" && hasOperatorKey(state.gemini)) return "nano_banana";
   if (hasOperatorKey(state.agnes)) return "agnes";
+  if (hasOperatorKey(state.gemini)) return "nano_banana";
   if (hasOperatorKey(state.nvidia)) return "nvidia_flux";
   return null;
 }
@@ -133,9 +136,18 @@ export function imageModelLabel(model: ImageModel | null): string {
   return "no image model";
 }
 
-export function chipLabel(state: OperatorState): string {
+export function chipLabel(
+  state: OperatorState,
+  serverDefaults?: { text_model: string | null; available: boolean } | null,
+): string {
   const text = resolveTextModel(state);
-  if (!text) return "Models";
+  if (!text) {
+    if (serverDefaults?.available && serverDefaults.text_model) {
+      const label = textModelLabel(serverDefaults.text_model as TextModel);
+      return `${label} · server`;
+    }
+    return "Models";
+  }
   if (text === "deepseek") return `DeepSeek ${maskOperatorKey(state.deepseek)}`;
   if (text === "gptoss") return `OSS-20B ${maskOperatorKey(state.nvidia)}`;
   return `Gemini ${maskOperatorKey(state.gemini)}`;

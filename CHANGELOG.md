@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+### Added
+- **Keyless Mission defaults — gpt-oss + Agnes** (`libs/llm_provider/factory.py`, `services/gateway`, `frontend/operator-models*`) — the Models chip now defaults to GPT-OSS 20B (text) and Agnes Image 2.5 Flash; when the operator has pasted no keys, `provider_from_operator` falls back to server-side `NVIDIA_API_KEY` / `AGNES_API_KEY` / `GEMINI_API_KEY` env vars (`MISSION_TEXT_MODEL` / `MISSION_IMAGE_MODEL` override). New `GET /models/defaults` (generation → gateway proxy) reports which server models are live; the frontend chip shows e.g. `GPT-OSS 20B · server` and Mission no longer hard-400s at the gateway when headers are empty. Image selection no longer force-locks to Nano Banana when a Gemini key exists — the operator's pick wins when its key exists. `docker-compose` frontend now binds `HOSTNAME=0.0.0.0` so the container is reachable on localhost.
+
 ### Changed
 - Format studio memes: Gen-Z Meme Lord prompt (viral absurdity, letter-perfect overlay spelling, no gibberish UI text in-frame); operators can queue **1–3 memes** sequentially with per-slot loading; gateway intel/creative timeouts raised (240s / 180s) to stop `ReadTimeout` on multi-agent intel and image paints.
 - Meme generation now feeds a **brand + rival roast pack** (dossier: category/ICP/pillars; scoreboard metrics + visual%; format mix/themes; rival/brand post receipts). Captions may name rivals and cite real scout numbers; painted frames still never include rival logos or cloned post art.
