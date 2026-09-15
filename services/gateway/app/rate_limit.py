@@ -32,12 +32,20 @@ _SKIP_PREFIXES = ("/health", "/ready", "/docs", "/openapi", "/redoc")
 
 
 def client_ip(request: Request) -> str:
+    """Best-effort client IP behind Render/Cloudflare.
+
+    Prefer edge-provided headers that clients cannot set. Only then use the
+    rightmost X-Forwarded-For hop (appended by the trusted proxy). Never trust
+    the leftmost XFF value — attackers can prepend spoofed IPs.
+    """
+    for key in ("cf-connecting-ip", "true-client-ip", "x-real-ip"):
+        raw = request.headers.get(key)
+        if raw and raw.strip():
+            return raw.strip()
     forwarded = request.headers.get("x-forwarded-for") or ""
-    if forwarded:
-        return forwarded.split(",")[0].strip() or "unknown"
-    real = request.headers.get("x-real-ip") or request.headers.get("cf-connecting-ip")
-    if real:
-        return real.strip()
+    parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+    if parts:
+        return parts[-1]
     return request.client.host if request.client else "unknown"
 
 

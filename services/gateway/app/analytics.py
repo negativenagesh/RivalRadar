@@ -28,10 +28,14 @@ class PageviewPayload(BaseModel):
 
 
 def client_ip(headers: dict[str, str], fallback: str | None) -> str:
-    for key in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for"):
-        raw = headers.get(key) or headers.get(key.title())
-        if raw:
-            return raw.split(",")[0].strip()
+    for key in ("cf-connecting-ip", "true-client-ip", "x-real-ip"):
+        raw = headers.get(key)
+        if raw and raw.strip():
+            return raw.strip()
+    forwarded = headers.get("x-forwarded-for") or ""
+    parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+    if parts:
+        return parts[-1]
     return fallback or "unknown"
 
 

@@ -30,7 +30,7 @@ def test_memory_rate_limiter_blocks() -> None:
     assert retry >= 1
 
 
-def test_visitor_id_is_ip_anchored() -> None:
+def test_visitor_id_ignores_spoofed_xff_prefix() -> None:
     scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -41,24 +41,41 @@ def test_visitor_id_is_ip_anchored() -> None:
         "raw_path": b"/",
         "query_string": b"",
         "headers": [
-            (b"user-agent", b"TestAgent/1.0"),
-            (b"x-forwarded-for", b"203.0.113.9"),
-            (b"x-rr-vid", b"attacker-rotating-token"),
+            (b"x-forwarded-for", b"198.51.100.1, 203.0.113.9"),
         ],
         "client": ("127.0.0.1", 12345),
         "server": ("test", 80),
     }
-    req = Request(scope)
-    a = visitor_id(req)
-    scope2 = dict(scope)
-    scope2["headers"] = [
-        (b"user-agent", b"TotallyDifferent/9.9"),
-        (b"x-forwarded-for", b"203.0.113.9"),
-        (b"x-rr-vid", b"another-token"),
-    ]
-    b = visitor_id(Request(scope2))
-    assert a == b
-    assert len(a) == 32
+    # Rightmost hop wins when no CF / X-Real-IP header is present.
+    assert visitor_id(Request(scope)) == visitor_id(
+        Request(
+            {
+                **scope,
+                "headers": [(b"x-forwarded-for", b"203.0.113.9")],
+            }
+        )
+    )
+
+    # CF-Connecting-IP beats a spoofed XFF chain.
+    with_cf = Request(
+        {
+            **scope,
+            "headers": [
+                (b"cf-connecting-ip", b"203.0.113.9"),
+                (b"x-forwarded-for", b"198.51.100.1, 203.0.113.9"),
+            ],
+        }
+    )
+    spoofed = Request(
+        {
+            **scope,
+            "headers": [
+                (b"cf-connecting-ip", b"203.0.113.9"),
+                (b"x-forwarded-for", b"1.2.3.4, 203.0.113.9"),
+            ],
+        }
+    )
+    assert visitor_id(with_cf) == visitor_id(spoofed)
 
 
 @pytest.mark.asyncio

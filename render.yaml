@@ -12,7 +12,7 @@ services:
     plan: free
     dockerfilePath: ./deploy/Dockerfile.api
     dockerContext: .
-    healthCheckPath: /health
+    healthCheckPath: /ready
     envVars:
       - key: MISSION_TEXT_MODEL
         value: gptoss
