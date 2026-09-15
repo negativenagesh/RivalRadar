@@ -9,6 +9,12 @@
   <a href="https://github.com/negativenagesh/RivalRadar/commits/main"><img src="https://img.shields.io/github/last-commit/negativenagesh/RivalRadar?style=for-the-badge&color=a3e635&labelColor=111111" alt="Last commit" /></a>
 </p>
 
+<p align="center">
+  <a href="https://rival-radar-nine.vercel.app"><img src="https://img.shields.io/badge/Frontend-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="Deployed on Vercel" /></a>
+  <a href="https://rivalradar-api-fl5j.onrender.com/health"><img src="https://img.shields.io/badge/API-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white&labelColor=111111" alt="API on Render" /></a>
+  <a href="DEPLOY.md"><img src="https://img.shields.io/badge/Deploy-guide-a3e635?style=for-the-badge&labelColor=111111" alt="Deploy guide" /></a>
+</p>
+
 An agent that watches competitor social content, spots what's trending, and drafts on-brand response posts (memes, product visuals, copy) in your brand's actual voice — queued for one-click human approval before publishing.
 
 Most competitor-monitoring tools stop at "here's what they posted." RivalRadar goes one step further: it clusters competitor activity into a weekly trend-and-gap digest, then actually drafts your response — a caption in your brand's voice, and an image concept — and runs it through a brand-safety check before a human ever sees it. The human still approves every single thing that goes out; the agent's job is to make sure what lands on their desk is already 80% of the way there.
@@ -57,6 +63,15 @@ docker compose up --build
 - Per-service docs: `services/<name>/README.md`
 
 Operator LLM / image keys stay in **browser localStorage** (Models chip) and are forwarded as `X-Gemini-Key` / `X-DeepSeek-Key` / `X-Nvidia-Key` / `X-Agnes-Key` — never committed.
+
+## Live deploy
+
+| Surface | URL |
+|---------|-----|
+| **Frontend (Vercel)** | https://rival-radar-nine.vercel.app |
+| **API (Render)** | https://rivalradar-api-fl5j.onrender.com |
+
+Setup (env keys, CORS, Supabase, cold-start): [DEPLOY.md](DEPLOY.md).
 
 ## Mission War Room
 
