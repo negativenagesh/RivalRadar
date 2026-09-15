@@ -844,16 +844,6 @@ export function DiscoveryReport({
                       </Button>
                     )}
                   </div>
-                  <PublishPanel
-                    out={out}
-                    brandName={brand.displayName}
-                    intelMarkdown={geminiIntel?.markdown ?? null}
-                    factsJson={studioFormat === "meme" ? studioFactsJson : factsJson}
-                    format={studioFormat}
-                    spice={studioSpice}
-                    defaultPlatform={studioPlatform}
-                    ready={models.readyText}
-                  />
                 </div>
               </div>
             );
@@ -874,6 +864,29 @@ export function DiscoveryReport({
             </div>
           )}
         </div>
+        {studioOuts.length > 0 && (
+          <div className="space-y-3 rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
+            <div className="space-y-1">
+              <h4 className="font-display text-base font-bold text-primary">Post to platform</h4>
+              <p className="text-sm text-muted-foreground">
+                Publish Strategist writes viral, platform-native captions + hashtags (LinkedIn /
+                Instagram / X / YouTube). Pick an asset, generate up to 3 variations, then Post —
+                the headless browser opens the composer with image + caption staged. You hit publish
+                yourself.
+              </p>
+            </div>
+            <PublishPanel
+              outs={studioOuts}
+              brandName={brand.displayName}
+              intelMarkdown={geminiIntel?.markdown ?? null}
+              factsJson={studioFormat === "meme" ? studioFactsJson : factsJson}
+              format={studioFormat}
+              spice={studioSpice}
+              defaultPlatform={studioPlatform}
+              ready={models.readyText}
+            />
+          </div>
+        )}
       </section>
 
       <section className="space-y-4 text-left">
@@ -1060,7 +1073,7 @@ function publishVariationText(variation: PublishVariation, platform: string): st
 }
 
 function PublishPanel({
-  out,
+  outs,
   brandName,
   intelMarkdown,
   factsJson,
@@ -1069,7 +1082,7 @@ function PublishPanel({
   defaultPlatform,
   ready,
 }: {
-  out: CreativeResult;
+  outs: CreativeResult[];
   brandName: string;
   intelMarkdown: string | null;
   factsJson: string;
@@ -1078,10 +1091,12 @@ function PublishPanel({
   defaultPlatform: string;
   ready: boolean;
 }) {
+  const [assetIdx, setAssetIdx] = useState(0);
+  const out = outs[Math.min(assetIdx, Math.max(outs.length - 1, 0))] ?? outs[0];
   const [platform, setPlatform] = useState(
     PUBLISH_PLATFORMS.includes(defaultPlatform) ? defaultPlatform : "x",
   );
-  const [count, setCount] = useState(1);
+  const [count, setCount] = useState(3);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveDraft, setLiveDraft] = useState("");
@@ -1090,6 +1105,20 @@ function PublishPanel({
   const [stagingAll, setStagingAll] = useState(false);
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [staged, setStaged] = useState<Record<number, StagePostResult>>({});
+
+  useEffect(() => {
+    if (assetIdx >= outs.length) setAssetIdx(Math.max(outs.length - 1, 0));
+  }, [outs.length, assetIdx]);
+
+  function selectAsset(idx: number): void {
+    if (idx === assetIdx) return;
+    setAssetIdx(idx);
+    setPlan(null);
+    setError(null);
+    setStaged({});
+    setSelected({});
+    setLiveDraft("");
+  }
 
   function selectPlatform(next: string): void {
     if (next === platform) return;
@@ -1101,29 +1130,33 @@ function PublishPanel({
   }
 
   async function runPlan(): Promise<void> {
+    if (!out) return;
     setBusy(true);
     setError(null);
     setStaged({});
     setSelected({});
     setLiveDraft("");
     try {
-      const next = await streamPublishPlan({
-        brand_name: brandName,
-        platform,
-        asset_caption: out.text,
-        overlay_text: out.overlay_text ?? undefined,
-        asset_context: [out.overlay_text, out.why_slaps].filter(Boolean).join(" — "),
-        image_concept: out.image_concept ?? undefined,
-        intel_markdown: intelMarkdown ?? undefined,
-        facts_json: factsJson,
-        format,
-        spice,
-        variations: count,
-      }, (event) => {
-        if (event.event === "delta" && event.text) {
-          setLiveDraft((prev) => `${prev}${event.text}`);
-        }
-      });
+      const next = await streamPublishPlan(
+        {
+          brand_name: brandName,
+          platform,
+          asset_caption: out.text,
+          overlay_text: out.overlay_text ?? undefined,
+          asset_context: [out.overlay_text, out.why_slaps].filter(Boolean).join(" — "),
+          image_concept: out.image_concept ?? undefined,
+          intel_markdown: intelMarkdown ?? undefined,
+          facts_json: factsJson,
+          format,
+          spice,
+          variations: count,
+        },
+        (event) => {
+          if (event.event === "delta" && event.text) {
+            setLiveDraft((prev) => `${prev}${event.text}`);
+          }
+        },
+      );
       setPlan(next);
       setLiveDraft("");
       const initial: Record<number, boolean> = {};
@@ -1139,6 +1172,7 @@ function PublishPanel({
   }
 
   async function stageVariation(idx: number, variation: PublishVariation): Promise<void> {
+    if (!out) return;
     if (
       typeof window !== "undefined" &&
       !window.confirm(
@@ -1165,18 +1199,16 @@ function PublishPanel({
   }
 
   async function stageSelected(): Promise<void> {
-    if (!plan) return;
-    const idxs = plan.variations
-      .map((_, idx) => idx)
-      .filter((idx) => selected[idx]);
+    if (!plan || !out) return;
+    const idxs = plan.variations.map((_, idx) => idx).filter((idx) => selected[idx]);
     if (idxs.length === 0) {
-      setError("Select at least one variation to stage.");
+      setError("Select at least one variation to post.");
       return;
     }
     if (
       typeof window !== "undefined" &&
       !window.confirm(
-        `Stage ${idxs.length} variation(s) on ${platform} via the headless browser? Nothing auto-publishes.`,
+        `Post ${idxs.length} variation(s) to ${platform} via the headless browser? Composer opens staged — nothing auto-publishes.`,
       )
     ) {
       return;
@@ -1202,53 +1234,139 @@ function PublishPanel({
     setStagingAll(false);
   }
 
+  if (!out) return null;
+
+  const thumbSrc =
+    out.image_data_base64 && out.image_mime_type
+      ? `data:${out.image_mime_type};base64,${out.image_data_base64}`
+      : null;
+
   return (
-    <div className="space-y-2 rounded-xl border border-border/40 bg-background/40 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-ui text-xs text-muted-foreground">publish</span>
-        {PUBLISH_PLATFORMS.map((p) => (
-          <button
-            key={p}
-            type="button"
-            onClick={() => selectPlatform(p)}
-            className={chipClass(platform === p)}
-          >
-            {p}
-          </button>
-        ))}
-        <span className="font-ui ml-1 text-xs text-muted-foreground">variations</span>
-        {[1, 2, 3].map((n) => (
-          <button key={n} type="button" onClick={() => setCount(n)} className={chipClass(count === n)}>
-            {n}
-          </button>
-        ))}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy || !ready}
-          onClick={() => void runPlan()}
-        >
-          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-          {plan ? "Regenerate captions" : "Captions"}
-        </Button>
+    <div className="space-y-4">
+      {outs.length > 1 && (
+        <div className="space-y-2">
+          <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+            Asset to post
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {outs.map((item, idx) => {
+              const src =
+                item.image_data_base64 && item.image_mime_type
+                  ? `data:${item.image_mime_type};base64,${item.image_data_base64}`
+                  : null;
+              return (
+                <button
+                  key={`asset-${idx}`}
+                  type="button"
+                  onClick={() => selectAsset(idx)}
+                  className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
+                    assetIdx === idx
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border/50 bg-background/50 text-muted-foreground hover:border-primary/40"
+                  }`}
+                >
+                  {src ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={src} alt="" className="size-8 rounded-md object-cover" />
+                  ) : (
+                    <span className="flex size-8 items-center justify-center rounded-md bg-muted font-mono text-[10px]">
+                      #{idx + 1}
+                    </span>
+                  )}
+                  <span className="max-w-28 truncate">
+                    {item.overlay_text || item.text || `Asset ${idx + 1}`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-start">
+        {thumbSrc && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={thumbSrc}
+            alt="Selected studio asset"
+            className="h-24 w-24 rounded-xl border border-border/40 object-cover"
+          />
+        )}
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+              Platform
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {PUBLISH_PLATFORMS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => selectPlatform(p)}
+                  className={chipClass(platform === p)}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+              Caption variations (max 3)
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setCount(n)}
+                  className={chipClass(count === n)}
+                >
+                  {n}
+                </button>
+              ))}
+              <Button size="sm" disabled={busy || !ready} onClick={() => void runPlan()}>
+                {busy ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="size-3.5" />
+                )}
+                {plan ? "Regenerate viral captions" : "Generate viral captions"}
+              </Button>
+            </div>
+            {!ready && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Add a text-model key in Models (defaults to gpt-oss when the server key is set).
+              </p>
+            )}
+          </div>
+        </div>
       </div>
-      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
       {busy && liveDraft && (
-        <div className="rounded-lg border border-dashed border-primary/40 p-2 text-left text-xs">
+        <div className="rounded-xl border border-dashed border-primary/40 bg-background/60 p-3 text-left text-xs">
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-primary">
+            Publish Strategist drafting…
+          </p>
           <MarkdownReport source={liveDraft} />
         </div>
       )}
+
       {plan && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              variant="outline"
               disabled={stagingAll || stagingIdx !== null}
               onClick={() => void stageSelected()}
             >
-              {stagingAll ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
-              Stage selected on {platform}
+              {stagingAll ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Send className="size-3.5" />
+              )}
+              Post selected on {platform}
             </Button>
             <button
               type="button"
@@ -1263,24 +1381,34 @@ function PublishPanel({
             >
               Select all
             </button>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => setSelected({})}
+            >
+              Clear
+            </button>
           </div>
           {plan.variations.map((variation, idx) => {
             const stagedResult = staged[idx];
             return (
               <div
                 key={`${platform}-${idx}`}
-                className="space-y-1.5 rounded-lg border border-border/40 p-2.5"
+                className="space-y-2 rounded-xl border border-border/50 bg-background/70 p-3"
               >
                 <label className="flex items-start gap-2 text-left">
                   <input
                     type="checkbox"
-                    className="mt-0.5"
+                    className="mt-1"
                     checked={Boolean(selected[idx])}
                     onChange={(e) =>
                       setSelected((prev) => ({ ...prev, [idx]: e.target.checked }))
                     }
                   />
-                  <span className="min-w-0 flex-1 text-left text-xs leading-relaxed">
+                  <span className="min-w-0 flex-1 text-left text-sm leading-relaxed">
+                    <span className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Variation {idx + 1}
+                    </span>
                     {variation.title ? (
                       <p className="mb-1 font-medium">{variation.title}</p>
                     ) : null}
@@ -1288,7 +1416,7 @@ function PublishPanel({
                   </span>
                 </label>
                 {variation.description && (
-                  <p className="text-xs text-muted-foreground whitespace-pre-wrap">
+                  <p className="whitespace-pre-wrap text-xs text-muted-foreground">
                     {variation.description}
                   </p>
                 )}
@@ -1296,7 +1424,9 @@ function PublishPanel({
                   <p className="text-xs text-primary">{variation.hashtags.join(" ")}</p>
                 )}
                 {variation.why && (
-                  <p className="text-[11px] text-muted-foreground">Why it travels: {variation.why}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Why it travels: {variation.why}
+                  </p>
                 )}
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <Button
@@ -1305,11 +1435,10 @@ function PublishPanel({
                     onClick={() => void copyText(publishVariationText(variation, platform))}
                   >
                     <Copy className="size-3.5" />
-                    Copy
+                    Copy caption
                   </Button>
                   <Button
                     size="sm"
-                    variant="outline"
                     disabled={stagingIdx !== null || stagingAll}
                     onClick={() => void stageVariation(idx, variation)}
                   >
@@ -1318,20 +1447,27 @@ function PublishPanel({
                     ) : (
                       <Send className="size-3.5" />
                     )}
-                    Stage on {platform}
+                    Post on {platform}
                   </Button>
                 </div>
                 {stagedResult && (
-                  <div className="space-y-1 pt-1">
-                    <p className={`text-xs ${stagedResult.ok ? "text-primary" : "text-destructive"}`}>
-                      {stagedResult.detail}
+                  <div className="space-y-1 border-t border-border/40 pt-2">
+                    <p
+                      className={`text-xs ${stagedResult.ok ? "text-primary" : "text-destructive"}`}
+                    >
+                      {stagedResult.ok
+                        ? `Staged in ${platform} composer — review & hit publish yourself.`
+                        : stagedResult.detail}
                     </p>
+                    {stagedResult.detail && stagedResult.ok && (
+                      <p className="text-[11px] text-muted-foreground">{stagedResult.detail}</p>
+                    )}
                     {stagedResult.screenshot_jpeg_b64 && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={`data:image/jpeg;base64,${stagedResult.screenshot_jpeg_b64}`}
                         alt={`${platform} staged post screenshot`}
-                        className="max-h-48 w-auto rounded-lg border border-border/40"
+                        className="max-h-56 w-auto rounded-lg border border-border/40"
                       />
                     )}
                   </div>
