@@ -276,15 +276,6 @@ class SocialFeedConnector:
             "action",
             {"detail": f"found_posts count={len(posts)} platform={platform} source=oss"},
         )
-        await self._emit(
-            "action",
-            {
-                "detail": (
-                    f"ingested_posts count={len(posts)} platform={platform} "
-                    f"window={self._window.date_from}→{self._window.date_to} source=oss"
-                )
-            },
-        )
         for p in posts:
             self._count_media(platform, p)
             await self._emit(
@@ -302,6 +293,15 @@ class SocialFeedConnector:
             await self._emit_stored_media_frame(p, platform=platform)
         summary = self._media_summary(platform)
         logger.info("scout media summary platform=%s source=oss %s", platform, summary)
+        await self._emit(
+            "action",
+            {
+                "detail": (
+                    f"ingested_posts count={len(posts)} platform={platform} "
+                    f"window={self._window.date_from}→{self._window.date_to} source=oss {summary}"
+                )
+            },
+        )
         await self._emit(
             "action",
             {"detail": f"media_summary platform={platform} source=oss {summary}"},
@@ -577,17 +577,17 @@ class SocialFeedConnector:
             else:
                 consecutive_older = 0
 
+        summary = self._media_summary(platform)
         await self._emit(
             "action",
             {
                 "detail": (
                     f"ingested_posts count={kept} platform={platform} "
                     f"window={self._window.date_from}→{self._window.date_to} "
-                    f"skipped_outside={skipped_outside} source=browser"
+                    f"skipped_outside={skipped_outside} source=browser {summary}"
                 ),
             },
         )
-        summary = self._media_summary(platform)
         logger.info("scout media summary platform=%s source=browser %s", platform, summary)
         await self._emit(
             "action",
@@ -890,6 +890,21 @@ class SocialFeedConnector:
                 if key:
                     post["media_keys"] = [key]
                     post["image_url"] = f"/ingestion/media/{key}"
+                    logger.info(
+                        "media_fallback=screenshot post=%s key=%s platform=%s",
+                        post["external_post_id"],
+                        key,
+                        platform,
+                    )
+                    await self._emit(
+                        "action",
+                        {
+                            "detail": (
+                                f"media_fallback=screenshot platform={platform} "
+                                f"post={post['external_post_id']}"
+                            )
+                        },
+                    )
         except Exception:  # noqa: BLE001
             logger.debug("post screenshot skipped", exc_info=True)
 
@@ -960,7 +975,7 @@ class SocialFeedConnector:
         if not keys:
             return
         key = keys[0]
-        if key.endswith(".mp4"):
+        if key.endswith(self._VIDEO_EXTS):
             return
         try:
             path = self._object_store.resolve_path(key)

@@ -22,7 +22,14 @@ def _ext_from_content_type(content_type: str) -> str:
         return ".webp"
     if "gif" in ct:
         return ".gif"
-    if "mp4" in ct:
+    if "webm" in ct:
+        return ".webm"
+    if "quicktime" in ct or ct.endswith("/mov"):
+        return ".mov"
+    if "matroska" in ct or "x-mkv" in ct:
+        return ".mkv"
+    if "mp4" in ct or ct.startswith("video/"):
+        # Unknown video/* must not collapse to .jpg (breaks Findings <video>).
         return ".mp4"
     return ".jpg"
 
