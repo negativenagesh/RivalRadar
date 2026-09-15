@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from llm_provider import ImageResult, Message
 
 
@@ -42,7 +43,7 @@ class FakeLLMProvider:
         temperature: float = 0.7,
         max_tokens: int = 1024,
         reasoning_effort: str | None = None,
-    ):
+    ) -> AsyncIterator[str]:
         self.complete_calls += 1
         self.last_messages = messages
         chunks = self.stream_chunks
