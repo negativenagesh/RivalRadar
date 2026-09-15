@@ -27,6 +27,7 @@ class RawPost(TypedDict):
     views: NotRequired[int]
     media_urls: NotRequired[list[str]]
     media_keys: NotRequired[list[str]]
+    media_kind: NotRequired[str]  # "video" | "image" — video means a playable file
     comment_sample: NotRequired[list[CommentSample]]
 
 

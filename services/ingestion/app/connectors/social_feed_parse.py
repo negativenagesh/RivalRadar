@@ -406,10 +406,9 @@ async def parse_post_page(
     ):
         caption = ""
 
-    media_url = data.get("ogImage") or data.get("videoSrc") or data.get("ogVideo")
-    imgs = data.get("imgCandidates") or []
-    if not media_url and isinstance(imgs, list) and imgs:
-        media_url = max((str(u) for u in imgs if isinstance(u, str)), key=len, default=None)
+    # Playable video first: og:video is the CDN mp4 on reels; a <video> src is
+    # often a blob: (MSE) URL which is not downloadable — fall back to poster.
+    media_url, media_kind = _select_media(data)
 
     posted_at = _parse_iso(data.get("published"))
     if posted_at is None:
@@ -431,6 +430,7 @@ async def parse_post_page(
         "external_post_id": external_id,
         "caption": caption[:2000] or f"{platform} post",
         "media_url": media_url,
+        "media_kind": media_kind,
         "likes": likes,
         "comments": comments,
         "shares": shares,
@@ -438,6 +438,23 @@ async def parse_post_page(
         "posted_at": posted_at,
         "post_url": post_url,
     }
+
+
+def _select_media(data: dict[str, Any]) -> tuple[str | None, str]:
+    """Pick the downloadable media URL + kind. Playable video (og:video, or an
+    http(s) <video> src) beats poster thumbnails; blob:/data: srcs are skipped."""
+    og_video = data.get("ogVideo")
+    video_src = data.get("videoSrc")
+    if isinstance(video_src, str) and not video_src.startswith("http"):
+        video_src = None
+    media_url = og_video or video_src
+    if media_url:
+        return str(media_url), "video"
+    media_url = data.get("ogImage")
+    imgs = data.get("imgCandidates") or []
+    if not media_url and isinstance(imgs, list) and imgs:
+        media_url = max((str(u) for u in imgs if isinstance(u, str)), key=len, default=None)
+    return (str(media_url) if media_url else None), "image"
 
 
 def _parse_iso(raw: Any) -> datetime | None:
