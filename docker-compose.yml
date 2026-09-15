@@ -141,6 +141,11 @@ services:
       COMPLIANCE_SERVICE_URL: http://compliance:8000
       CONNECT_AGENT_URL: ${CONNECT_AGENT_URL:-http://connect-agent:8765}
       CONNECT_VIEWER_URL: ${CONNECT_VIEWER_URL:-http://localhost:7900/vnc.html?autoconnect=1&resize=scale}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      DISALLOW_ENV_SOCIAL_COOKIES: ${DISALLOW_ENV_SOCIAL_COOKIES:-true}
+      CONNECTION_VAULT_KEY: ${CONNECTION_VAULT_KEY:-}
     ports:
       - "8000:8000"
     extra_hosts:

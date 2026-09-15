@@ -1,0 +1,65 @@
+# Render Blueprint — backend API (gateway + generation).
+# Set secrets in the Render dashboard (never commit keys):
+#   NVIDIA_API_KEY, AGNES_API_KEY, DATABASE_URL, CONNECTION_VAULT_KEY,
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CORS_ORIGINS
+# Frontend: Vercel with NEXT_PUBLIC_GATEWAY_URL → this service URL.
+# Social platform cookies are NEVER loaded from env — users sign in via Connect browser.
+
+services:
+  - type: web
+    name: rivalradar-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./deploy/Dockerfile.api
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: MISSION_TEXT_MODEL
+        value: gptoss
+      - key: MISSION_IMAGE_MODEL
+        value: agnes
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: AGNES_API_KEY
+        sync: false
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: NVIDIA_TEXT_MODEL
+        value: openai/gpt-oss-20b
+      - key: AGNES_BASE_URL
+        value: https://apihub.agnes-ai.com/v1
+      - key: AGNES_IMAGE_MODEL
+        value: agnes-image-2.5-flash
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rivalradar-db
+          property: connectionString
+      - key: REDIS_URL
+        sync: false
+      - key: CONNECTION_VAULT_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DISALLOW_ENV_SOCIAL_COOKIES
+        value: "true"
+      - key: GENERATION_SERVICE_URL
+        value: http://127.0.0.1:8003
+      # Optional downstreams (set when you run full compose elsewhere)
+      - key: INGESTION_SERVICE_URL
+        sync: false
+      - key: INTELLIGENCE_SERVICE_URL
+        sync: false
+      - key: COMPLIANCE_SERVICE_URL
+        sync: false
+      - key: CONNECT_AGENT_URL
+        sync: false
+      - key: CONNECT_VIEWER_URL
+        sync: false
+
+databases:
+  - name: rivalradar-db
+    plan: free
