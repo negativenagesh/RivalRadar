@@ -157,4 +157,46 @@ describe("DiscoveryReport war room", () => {
     expect(streamMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/agents writing/i)).not.toBeInTheDocument();
   });
+
+  it("shows the selected format name in the studio cooking loader", async () => {
+    const { generateCreative } = await import("@/lib/api");
+    type Creative = Awaited<ReturnType<typeof generateCreative>>;
+    let resolveCreative!: (value: Creative) => void;
+    vi.mocked(generateCreative).mockImplementation(
+      () =>
+        new Promise<Creative>((resolve) => {
+          resolveCreative = resolve;
+        }),
+    );
+    window.localStorage.setItem("rivalradar.operator.geminiKey", "AIza-dummy-key-1234");
+
+    const { userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(
+      <GeminiKeyProvider>
+        <DiscoveryReport
+          facts={facts}
+          permissions={DEFAULT_PERMISSIONS}
+          onPermissionsChange={() => undefined}
+          brand={{ ...DEFAULT_BRAND, displayName: "Pixis" }}
+        />
+      </GeminiKeyProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Product flex + human story" }));
+    const generate = screen.getAllByRole("button").find((btn) => btn.textContent?.trim() === "Generate");
+    expect(generate).toBeTruthy();
+    await user.click(generate!);
+
+    expect(await screen.findByText(/Cooking Product flex \+ human story 1/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Cooking meme/i)).not.toBeInTheDocument();
+
+    resolveCreative({
+      kind: "studio",
+      text: "product story caption",
+      image_concept: null,
+      image_mime_type: null,
+      image_data_base64: null,
+    });
+  });
 });
