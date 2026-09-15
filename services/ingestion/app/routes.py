@@ -23,8 +23,11 @@ from app.schemas import (
     IngestionRunRead,
     SocialCommentRequest,
     SocialCommentResult,
+    SocialStageRequest,
+    SocialStageResult,
     YoutubeStatusRead,
 )
+from app.stage_post import StagePostError, stage_post
 
 router = APIRouter()
 
@@ -155,6 +158,10 @@ async def get_media(media_key: str) -> StreamingResponse:
         ".png": "image/png",
         ".webp": "image/webp",
         ".gif": "image/gif",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska",
     }.get(suffix, "application/octet-stream")
     return StreamingResponse(object_store.open(media_key), media_type=media_type)
 
@@ -174,5 +181,24 @@ async def social_comment(body: SocialCommentRequest) -> SocialCommentResult:
     return SocialCommentResult(
         ok=bool(result.get("ok")),
         detail=str(result.get("detail") or "dropped"),
+        screenshot_jpeg_b64=result.get("screenshot_jpeg_b64"),
+    )
+
+
+@router.post("/social/stage-post", response_model=SocialStageResult)
+async def social_stage_post(body: SocialStageRequest) -> SocialStageResult:
+    try:
+        result = await stage_post(
+            platform=body.platform,
+            caption=body.caption,
+            media_png_b64=body.media_png_b64,
+            approved=body.approved,
+            platform_sessions=body.platform_sessions,
+        )
+    except StagePostError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SocialStageResult(
+        ok=bool(result.get("ok")),
+        detail=str(result.get("detail") or "staged"),
         screenshot_jpeg_b64=result.get("screenshot_jpeg_b64"),
     )
