@@ -126,3 +126,17 @@ class SocialCommentResult(BaseModel):
     ok: bool
     detail: str
     screenshot_jpeg_b64: str | None = None
+
+
+class SocialStageRequest(BaseModel):
+    platform: str
+    caption: str
+    media_png_b64: str | None = None
+    approved: bool = False
+    platform_sessions: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class SocialStageResult(BaseModel):
+    ok: bool
+    detail: str
+    screenshot_jpeg_b64: str | None = None
