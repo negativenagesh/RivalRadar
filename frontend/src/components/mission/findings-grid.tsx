@@ -252,16 +252,18 @@ function FindingsSide({
                   No {PLATFORM_LABELS[lane.platform] ?? lane.platform} drops in this lookback.
                 </p>
               ) : (
-                lane.days.map((group) => (
-                  <div key={`${lane.platform}-${group.day}`} className="space-y-3">
-                    <p className="font-accent text-sm italic text-muted-foreground">{group.day}</p>
-                    <div className="grid grid-cols-3 gap-2 xl:grid-cols-4">
-                      {group.rows.map((row) => (
-                        <PostTile key={row.post.id} row={row} onOpenImage={onOpenImage} />
-                      ))}
-                    </div>
-                  </div>
-                ))
+                <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:thin]">
+                  {lane.days
+                    .flatMap((group) => group.rows)
+                    .map((row) => (
+                      <div key={row.post.id} className="w-52 shrink-0 snap-start sm:w-60">
+                        <p className="font-accent mb-1 text-xs italic text-muted-foreground">
+                          {row.day}
+                        </p>
+                        <PostTile row={row} onOpenImage={onOpenImage} />
+                      </div>
+                    ))}
+                </div>
               )}
             </div>
           ))}
