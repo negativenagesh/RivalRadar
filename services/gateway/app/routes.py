@@ -61,6 +61,13 @@ from app.connect_sessions import (
 )
 from app.db import get_session
 from app.models import Draft, PipelineRun, PlatformConnection, ReviewState
+from app.quick_connect import (
+    PLATFORM_COOKIE_SPEC,
+    consume_pairing_code,
+    issue_pairing_code,
+    normalize_cookies,
+    probe_session,
+)
 from app.runs import create_pipeline_run, execute_pipeline_run
 from app.schemas import (
     ConnectionStatusRead,
@@ -69,8 +76,11 @@ from app.schemas import (
     ConnectSessionStart,
     DraftRead,
     EditRequest,
+    PairingCodeRead,
+    PairingCodeRequest,
     PipelineRunCreated,
     PipelineRunRead,
+    QuickConnectRequest,
 )
 from app.vault import decrypt_json, encrypt_json
 
@@ -870,6 +880,85 @@ async def cancel_connect_session(platform: str, session_id: str) -> None:
     if live is not None and live.platform == platform:
         pop_session(session_id)
     await agent_close_session(session_id)
+
+
+@router.post("/connect/pairing", response_model=PairingCodeRead)
+async def create_pairing_code(body: PairingCodeRequest | None = None) -> PairingCodeRead:
+    """Issue a one-time code the Chrome extension uses to vault cookies."""
+    workspace_id = (body.workspace_id if body else "default") or "default"
+    try:
+        code, expires_in = issue_pairing_code(workspace_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return PairingCodeRead(code=code, expires_in=expires_in, workspace_id=workspace_id)
+
+
+@router.post("/connections/{platform}/quick", response_model=ConnectionStatusRead)
+async def quick_connect(
+    platform: str,
+    body: QuickConnectRequest,
+    session: AsyncSession = Depends(get_session),
+) -> ConnectionStatusRead:
+    """Vault platform cookies from the RivalRadar Chrome extension (no noVNC)."""
+    platform = platform.lower()
+    if platform not in PLATFORM_COOKIE_SPEC:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Quick connect unsupported for {platform}. Use Browser login or pick LinkedIn/X/Instagram/TikTok/Threads.",
+        )
+    if not consume_pairing_code(body.code, body.workspace_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired pairing code. Open Connect in RivalRadar and copy a fresh code.",
+        )
+    try:
+        cookies = normalize_cookies(platform, body.cookies)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    ok, probe_detail = await probe_session(platform, cookies)
+    if not ok:
+        raise HTTPException(status_code=401, detail=probe_detail)
+
+    secret: dict[str, object] = {
+        "cookies": cookies,
+        "source": "chrome_extension",
+    }
+    blob = encrypt_json(secret)
+    expires_at = expires_at_from_cookies(cookies)
+    existing = await session.scalar(
+        select(PlatformConnection).where(
+            PlatformConnection.workspace_id == body.workspace_id,
+            PlatformConnection.platform == platform,
+        )
+    )
+    if existing is None:
+        existing = PlatformConnection(
+            workspace_id=body.workspace_id,
+            platform=platform,
+            auth_type="cookie",
+            encrypted_blob=blob,
+            expires_at=expires_at,
+            scopes=["read"],
+            status="connected",
+        )
+        session.add(existing)
+    else:
+        existing.auth_type = "cookie"
+        existing.encrypted_blob = blob
+        existing.expires_at = expires_at
+        existing.scopes = ["read"]
+        existing.status = "connected"
+    await session.commit()
+    await session.refresh(existing)
+    return ConnectionStatusRead(
+        platform=existing.platform,
+        status="connected",
+        auth_type=existing.auth_type,
+        expires_at=existing.expires_at,
+        scopes=list(existing.scopes or []),
+        detail=probe_detail,
+    )
 
 
 @router.post("/connections/{platform}", response_model=ConnectionStatusRead)

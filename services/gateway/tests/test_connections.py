@@ -99,3 +99,58 @@ async def test_connect_session_agent_offline(
     detail = response.json()["detail"].lower()
     assert "connect agent is offline" in detail
     assert "docker compose" in detail or "rivalradar-connect" in detail
+
+
+@pytest.mark.asyncio
+async def test_pairing_and_quick_connect(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _probe(platform: str, cookies: list[dict[str, object]]) -> tuple[bool, str]:
+        assert platform == "linkedin"
+        assert any(c["name"] == "li_at" for c in cookies)
+        return True, "LinkedIn session verified"
+
+    monkeypatch.setattr("app.routes.probe_session", _probe)
+
+    pair = await client.post("/connect/pairing", json={"workspace_id": "default"})
+    assert pair.status_code == 200
+    code = pair.json()["code"]
+    assert len(code) == 6
+
+    bad = await client.post(
+        "/connections/linkedin/quick",
+        json={"code": "XXXXXX", "cookies": [{"name": "li_at", "value": "x"}]},
+    )
+    assert bad.status_code == 400
+
+    missing = await client.post(
+        "/connections/linkedin/quick",
+        json={"code": code, "cookies": [{"name": "JSESSIONID", "value": "ajax:1"}]},
+    )
+    assert missing.status_code == 400
+
+    # Fresh code after failed attempt (previous may still be valid if not consumed)
+    pair2 = await client.post("/connect/pairing", json={})
+    code2 = pair2.json()["code"]
+    ok = await client.post(
+        "/connections/linkedin/quick",
+        json={
+            "code": code2,
+            "cookies": [
+                {"name": "li_at", "value": "AQFtest", "domain": ".linkedin.com", "httpOnly": True},
+                {"name": "JSESSIONID", "value": "ajax:9"},
+            ],
+        },
+    )
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["status"] == "connected"
+    assert body["auth_type"] == "cookie"
+    assert "verified" in (body.get("detail") or "").lower()
+
+    # Code is one-time
+    reuse = await client.post(
+        "/connections/linkedin/quick",
+        json={"code": code2, "cookies": [{"name": "li_at", "value": "AQFtest"}]},
+    )
+    assert reuse.status_code == 400

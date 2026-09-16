@@ -527,6 +527,19 @@ export function cancelConnectSession(platform: string, sessionId: string): Promi
   });
 }
 
+export type PairingCode = {
+  code: string;
+  expires_in: number;
+  workspace_id: string;
+};
+
+export function createPairingCode(workspaceId = "default"): Promise<PairingCode> {
+  return request<PairingCode>("/connect/pairing", {
+    method: "POST",
+    body: JSON.stringify({ workspace_id: workspaceId }),
+  });
+}
+
 export function ingestionMediaUrl(mediaKey: string): string {
   return `${GATEWAY_URL}/ingestion/media/${mediaKey}`;
 }

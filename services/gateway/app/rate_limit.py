@@ -23,7 +23,8 @@ LIMITS: dict[str, tuple[int, int]] = {
     "/ingestion/runs": (10, 3600),
     "/drafts/generate": (8, 3600),
     "/pipeline-runs": (30, 3600),
-    "/connections/": (30, 3600),
+    "/connect/pairing": (30, 3600),
+    "/connections/": (40, 3600),
     "/analytics/": (240, 3600),
     "*": (180, 3600),
 }

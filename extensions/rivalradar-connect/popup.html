@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>RivalRadar Connect</title>
+    <style>
+      :root {
+        --bg: #0f1419;
+        --panel: #1a222c;
+        --text: #e8eef4;
+        --muted: #8b9aab;
+        --accent: #3d9b6e;
+        --danger: #d45d5d;
+        --border: #2a3542;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        width: 320px;
+        font: 13px/1.45 "Segoe UI", system-ui, sans-serif;
+        color: var(--text);
+        background: var(--bg);
+      }
+      header {
+        padding: 14px 16px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+      }
+      header p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      form {
+        padding: 14px 16px 16px;
+        display: grid;
+        gap: 10px;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      input,
+      select {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 13px;
+        text-transform: none;
+        letter-spacing: normal;
+      }
+      input#code {
+        font-family: ui-monospace, monospace;
+        font-size: 18px;
+        letter-spacing: 0.2em;
+        text-align: center;
+        text-transform: uppercase;
+      }
+      button {
+        margin-top: 4px;
+        padding: 10px 12px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+      #status {
+        min-height: 2.4em;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      #status.err {
+        color: var(--danger);
+      }
+      #status.ok {
+        color: var(--accent);
+      }
+      .hint {
+        font-size: 11px;
+        color: var(--muted);
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>RivalRadar Connect</h1>
+      <p>Paste the code from the website, then connect.</p>
+    </header>
+    <form id="form">
+      <label>
+        Pairing code
+        <input id="code" name="code" maxlength="8" autocomplete="off" placeholder="ABC123" required />
+      </label>
+      <label>
+        Platform
+        <select id="platform" name="platform">
+          <option value="linkedin">LinkedIn</option>
+          <option value="x">X (Twitter)</option>
+          <option value="instagram">Instagram</option>
+          <option value="tiktok">TikTok</option>
+          <option value="threads">Threads</option>
+        </select>
+      </label>
+      <label>
+        API URL
+        <input
+          id="gateway"
+          name="gateway"
+          type="url"
+          placeholder="https://rivalradar-api-fl5j.onrender.com"
+        />
+      </label>
+      <p class="hint">Stay signed in to that platform in Chrome first.</p>
+      <button type="submit" id="go">Connect to RivalRadar</button>
+      <div id="status" role="status"></div>
+    </form>
+    <script src="popup.js"></script>
+  </body>
+</html>

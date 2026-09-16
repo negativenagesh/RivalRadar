@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   cancelConnectSession,
   completeConnectSession,
+  createPairingCode,
   deleteConnection,
   listConnections,
   startConnectSession,
@@ -20,6 +21,9 @@ import {
 import type { ConnectionStatus } from "@/lib/types";
 
 type PlatformId = string;
+type ConnectMode = "extension" | "browser";
+
+const EXTENSION_PLATFORMS = new Set(["linkedin", "x", "instagram", "tiktok", "threads"]);
 
 function statusTone(status: ConnectionStatus["status"]): string {
   if (status === "connected") return "text-primary";
@@ -45,6 +49,9 @@ export function ConnectCenter({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<PlatformId | null>(null);
+  const [mode, setMode] = useState<ConnectMode>("extension");
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingExpiresIn, setPairingExpiresIn] = useState(0);
   const [activeSession, setActiveSession] = useState<ConnectSession | null>(null);
 
   function rowFor(platform: string): ConnectionStatus | undefined {
@@ -58,6 +65,7 @@ export function ConnectCenter({
   }, [required, rows]);
 
   const ready = required.length === 0 || missing.length === 0;
+  const extensionAvailable = dialog ? EXTENSION_PLATFORMS.has(dialog) : false;
 
   useEffect(() => {
     onGateChange?.({ ready, missing });
@@ -85,6 +93,45 @@ export function ConnectCenter({
     };
   }, []);
 
+  // Countdown for pairing code display
+  useEffect(() => {
+    if (!pairingCode || pairingExpiresIn <= 0) return;
+    const t = window.setInterval(() => {
+      setPairingExpiresIn((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => window.clearInterval(t);
+    // Only restart when a new code is issued
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pairingExpiresIn ticks locally
+  }, [pairingCode]);
+
+  // Poll connections while extension dialog is open
+  useEffect(() => {
+    if (!dialog || mode !== "extension" || !pairingCode) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const next = await listConnections();
+        if (cancelled) return;
+        setRows(next);
+        const row = next.find((r) => r.platform === dialog);
+        if (row?.status === "connected") {
+          setDialog(null);
+          setPairingCode(null);
+          setActiveSession(null);
+          setError(null);
+        }
+      } catch {
+        // keep polling
+      }
+    };
+    const id = window.setInterval(() => void tick(), 2500);
+    void tick();
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [dialog, mode, pairingCode]);
+
   async function refresh() {
     setLoading(true);
     setError(null);
@@ -97,10 +144,49 @@ export function ConnectCenter({
     }
   }
 
+  async function issuePairing() {
+    if (!dialog) return;
+    setBusy(dialog);
+    setError(null);
+    try {
+      const pair = await createPairingCode();
+      setPairingCode(pair.code);
+      setPairingExpiresIn(pair.expires_in);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create pairing code");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function openConnect(platform: PlatformId) {
     setDialog(platform);
     setError(null);
+    setActiveSession(null);
+    setPairingCode(null);
+    setPairingExpiresIn(0);
+    const preferExtension = EXTENSION_PLATFORMS.has(platform);
+    setMode(preferExtension ? "extension" : "browser");
+    if (preferExtension) {
+      setBusy(platform);
+      try {
+        const pair = await createPairingCode();
+        setPairingCode(pair.code);
+        setPairingExpiresIn(pair.expires_in);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not create pairing code");
+        setMode("browser");
+      } finally {
+        setBusy(null);
+      }
+    } else {
+      await startBrowserSession(platform);
+    }
+  }
+
+  async function startBrowserSession(platform: PlatformId) {
     setBusy(platform);
+    setError(null);
     setActiveSession(null);
     try {
       const session = await startConnectSession(platform);
@@ -119,6 +205,26 @@ export function ConnectCenter({
     }
   }
 
+  async function switchMode(next: ConnectMode) {
+    if (!dialog || next === mode) return;
+    if (mode === "browser" && activeSession) {
+      try {
+        await cancelConnectSession(dialog, activeSession.session_id);
+      } catch {
+        // best-effort
+      }
+      setActiveSession(null);
+    }
+    setMode(next);
+    setError(null);
+    if (next === "extension") {
+      await issuePairing();
+    } else {
+      setPairingCode(null);
+      await startBrowserSession(dialog);
+    }
+  }
+
   async function confirmLoggedIn() {
     if (!dialog || !activeSession) return;
     setBusy(dialog);
@@ -127,6 +233,7 @@ export function ConnectCenter({
       await completeConnectSession(dialog, activeSession.session_id);
       setDialog(null);
       setActiveSession(null);
+      setPairingCode(null);
       await refresh();
     } catch (err) {
       setError(
@@ -144,6 +251,7 @@ export function ConnectCenter({
     const session = activeSession;
     setDialog(null);
     setActiveSession(null);
+    setPairingCode(null);
     setError(null);
     if (platform && session) {
       try {
@@ -179,9 +287,8 @@ export function ConnectCenter({
         </p>
         <h3 className="font-display text-xl font-bold">Connect Center</h3>
         <p className="font-accent text-sm italic text-muted-foreground">
-          Click Connect once per platform — we keep a Docker browser profile + encrypted
-          cookies so you stay signed in. Soft reconnect usually just confirms; only re-login
-          if a platform signed you out.
+          Fast path: Chrome extension + pairing code. Fallback: Connect browser (noVNC). We never
+          see your password.
         </p>
       </div>
 
@@ -253,9 +360,9 @@ export function ConnectCenter({
                 </p>
                 <p className={`font-ui text-[11px] ${statusTone(status)}`}>
                   {connected
-                    ? "Connected · session saved (profile + cookies) for scout"
+                    ? "Connected · session saved for scout"
                     : status === "needs_reconnect"
-                      ? "Session expired · reconnect to refresh cookies"
+                      ? "Session expired · reconnect to refresh"
                       : "Not connected · required for Start Scout"}
                 </p>
               </div>
@@ -309,49 +416,124 @@ export function ConnectCenter({
               <h4 id="connect-dialog-title" className="font-display text-2xl font-bold">
                 Connect {dialogLabel}
               </h4>
-              <p className="font-accent text-sm italic text-muted-foreground">
-                A Connect browser tab opens (noVNC). Sign in to {dialogLabel} yourself — we never
-                see your password. When you&apos;re in, confirm below and we capture the session.
-              </p>
             </div>
 
-            <ol className="font-ui space-y-3 text-sm text-muted-foreground">
-              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <span className="font-semibold text-foreground">1. Connect browser</span>
-                <p className="mt-1 text-xs">
-                  {activeSession
-                    ? activeSession.detail ||
-                      `Opened ${dialogLabel} login — switch to that tab and sign in.`
-                    : busy === dialog
-                      ? "Opening browser…"
-                      : "Waiting to open browser…"}
+            {extensionAvailable ? (
+              <div className="flex gap-1 rounded-2xl border border-border/50 bg-card/20 p-1">
+                <button
+                  type="button"
+                  className={
+                    mode === "extension"
+                      ? "flex-1 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
+                      : "flex-1 rounded-xl px-3 py-2 text-sm text-muted-foreground"
+                  }
+                  onClick={() => void switchMode("extension")}
+                >
+                  Extension (fast)
+                </button>
+                <button
+                  type="button"
+                  className={
+                    mode === "browser"
+                      ? "flex-1 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
+                      : "flex-1 rounded-xl px-3 py-2 text-sm text-muted-foreground"
+                  }
+                  onClick={() => void switchMode("browser")}
+                >
+                  Browser (noVNC)
+                </button>
+              </div>
+            ) : null}
+
+            {mode === "extension" && extensionAvailable ? (
+              <>
+                <ol className="font-ui space-y-3 text-sm text-muted-foreground">
+                  <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                    <span className="font-semibold text-foreground">1. Install extension once</span>
+                    <p className="mt-1 text-xs">
+                      Chrome → Extensions → Developer mode → Load unpacked →{" "}
+                      <code className="text-foreground">extensions/rivalradar-connect</code> in the
+                      repo (see README there).
+                    </p>
+                  </li>
+                  <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                    <span className="font-semibold text-foreground">2. Pairing code</span>
+                    <p className="mt-2 font-mono text-3xl font-bold tracking-[0.35em] text-foreground">
+                      {pairingCode ?? (busy === dialog ? "······" : "————")}
+                    </p>
+                    <p className="mt-1 text-xs">
+                      {pairingExpiresIn > 0
+                        ? `Expires in ${Math.floor(pairingExpiresIn / 60)}:${String(pairingExpiresIn % 60).padStart(2, "0")}`
+                        : pairingCode
+                          ? "Expired — refresh for a new code"
+                          : "Generating…"}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-2"
+                      disabled={busy === dialog}
+                      onClick={() => void issuePairing()}
+                    >
+                      Refresh code
+                    </Button>
+                  </li>
+                  <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                    <span className="font-semibold text-foreground">3. Extension → Connect</span>
+                    <p className="mt-1 text-xs">
+                      Stay signed in to {dialogLabel} in Chrome. Open the RivalRadar Connect
+                      extension, paste this code, pick {dialogLabel}, click Connect. This dialog
+                      closes automatically when linked.
+                    </p>
+                  </li>
+                </ol>
+                <p className="font-ui text-center text-xs text-muted-foreground">Waiting for extension…</p>
+              </>
+            ) : (
+              <>
+                <p className="font-accent text-sm italic text-muted-foreground">
+                  A Connect browser tab opens (noVNC). Sign in to {dialogLabel} yourself — we never
+                  see your password. When you&apos;re in, confirm below.
                 </p>
-                {activeSession?.viewer_url ? (
-                  <a
-                    href={activeSession.viewer_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-2 inline-flex text-xs font-semibold text-primary underline"
-                  >
-                    Open Connect browser
-                  </a>
-                ) : null}
-              </li>
-              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <span className="font-semibold text-foreground">2. Sign in on {dialogLabel}</span>
-                <p className="mt-1 text-xs">
-                  Use your normal account in the opened browser. Do not paste cookies or passwords
-                  here.
-                </p>
-              </li>
-              <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
-                <span className="font-semibold text-foreground">3. Confirm</span>
-                <p className="mt-1 text-xs">
-                  Click I&apos;ve logged in — RivalRadar grabs the session from that browser and
-                  saves it encrypted for scout.
-                </p>
-              </li>
-            </ol>
+                <ol className="font-ui space-y-3 text-sm text-muted-foreground">
+                  <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                    <span className="font-semibold text-foreground">1. Connect browser</span>
+                    <p className="mt-1 text-xs">
+                      {activeSession
+                        ? activeSession.detail ||
+                          `Opened ${dialogLabel} login — switch to that tab and sign in.`
+                        : busy === dialog
+                          ? "Opening browser…"
+                          : "Waiting to open browser…"}
+                    </p>
+                    {activeSession?.viewer_url ? (
+                      <a
+                        href={activeSession.viewer_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex text-xs font-semibold text-primary underline"
+                      >
+                        Open Connect browser
+                      </a>
+                    ) : null}
+                  </li>
+                  <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                    <span className="font-semibold text-foreground">2. Sign in on {dialogLabel}</span>
+                    <p className="mt-1 text-xs">
+                      Use your normal account in the opened browser. Do not paste cookies or
+                      passwords here.
+                    </p>
+                  </li>
+                  <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
+                    <span className="font-semibold text-foreground">3. Confirm</span>
+                    <p className="mt-1 text-xs">
+                      Click I&apos;ve logged in — RivalRadar grabs the session and saves it
+                      encrypted for scout.
+                    </p>
+                  </li>
+                </ol>
+              </>
+            )}
 
             {error && dialog && (
               <p className="rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -363,12 +545,14 @@ export function ConnectCenter({
               <Button variant="ghost" onClick={() => void closeDialog()}>
                 Cancel
               </Button>
-              <Button
-                disabled={busy === dialog || !activeSession}
-                onClick={() => void confirmLoggedIn()}
-              >
-                {busy === dialog ? "Saving session…" : "I've logged in"}
-              </Button>
+              {mode === "browser" ? (
+                <Button
+                  disabled={busy === dialog || !activeSession}
+                  onClick={() => void confirmLoggedIn()}
+                >
+                  {busy === dialog ? "Saving session…" : "I've logged in"}
+                </Button>
+              ) : null}
             </div>
           </div>
         </div>
