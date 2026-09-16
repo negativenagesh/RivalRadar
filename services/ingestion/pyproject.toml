@@ -18,6 +18,7 @@ dependencies = [
     "gallery-dl>=1.27",
     "linkedin-scraper>=3.1.0",
     "yt-dlp>=2025.1.0",
+    "fakeredis>=2.26.0",
 ]
 
 [tool.uv.sources]

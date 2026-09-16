@@ -64,17 +64,32 @@ async function request<T>(path: string, init?: RequestInit & { operator?: boolea
     headers["X-Text-Model"] = text ?? state.textModel;
     headers["X-Image-Model"] = image ?? state.imageModel;
   }
-  let response: Response;
-  try {
-    response = await fetch(`${GATEWAY_URL}${path}`, {
-      ...rest,
-      headers,
-      cache: "no-store",
-    });
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : "network error";
+  const url = `${GATEWAY_URL}${path}`;
+  let response: Response | undefined;
+  let lastErr: unknown;
+  // One retry after short wait — Render free tier cold starts often drop the first fetch.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      response = await fetch(url, {
+        ...rest,
+        headers,
+        cache: "no-store",
+      });
+      lastErr = undefined;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 2500));
+        continue;
+      }
+    }
+  }
+  if (!response) {
+    const reason = lastErr instanceof Error ? lastErr.message : "network error";
     throw new Error(
-      `Gateway unreachable (${reason}). Is it running at ${GATEWAY_URL}? Rebuild gateway + generation if /intel/report 404s.`,
+      `Gateway unreachable (${reason}). Is it running at ${GATEWAY_URL}? ` +
+        `If Start Scout fails, wait for Render wake (/ready shows ingestion=ok) then retry.`,
     );
   }
   if (!response.ok) {

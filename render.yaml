@@ -1,4 +1,4 @@
-# Render Blueprint — API (gateway+generation) + Connect agent (noVNC browser).
+# Render Blueprint — API (gateway+generation+ingestion Scout) + Connect agent (noVNC browser).
 # Fill secrets when prompted (never commit keys):
 #   NVIDIA_API_KEY, AGNES_API_KEY, CORS_ORIGINS
 # Optional: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -53,6 +53,10 @@ services:
         value: "true"
       - key: GENERATION_SERVICE_URL
         value: http://127.0.0.1:8003
+      - key: INGESTION_SERVICE_URL
+        value: http://127.0.0.1:8001
+      - key: OBJECT_STORE_ROOT
+        value: /data/objects
       # After connect service is live, set both to that service's public HTTPS URL
       # (viewer = same host + /vnc.html?autoconnect=1&resize=scale).
       - key: CONNECT_AGENT_URL

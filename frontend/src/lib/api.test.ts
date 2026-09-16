@@ -82,8 +82,13 @@ describe("api client", () => {
   });
 
   it("surfaces Failed to fetch as a gateway unreachable error", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
-    await expect(getLatestDigest()).rejects.toThrow(/Gateway unreachable/);
+    const pending = getLatestDigest();
+    const assertion = expect(pending).rejects.toThrow(/Gateway unreachable/);
+    await vi.runAllTimersAsync();
+    await assertion;
+    vi.useRealTimers();
   });
 
   it("sends X-Gemini-Key only on Mission LLM routes", async () => {
