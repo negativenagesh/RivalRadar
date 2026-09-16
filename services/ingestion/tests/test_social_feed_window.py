@@ -63,7 +63,9 @@ def test_order_targets_unchanged_on_chromium(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_linkedin_skips_oss_on_obscura(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_linkedin_tries_oss_then_fresh_browser_on_obscura(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "app.connectors.social_feed.browser_engine",
         lambda: "obscura",
@@ -75,15 +77,41 @@ async def test_linkedin_skips_oss_on_obscura(monkeypatch: pytest.MonkeyPatch) ->
         url="https://www.linkedin.com/company/pixisai",
     )
     c = SocialFeedConnector(run_id="t", targets=[target], window=window)
+
+    class _FakePage:
+        async def goto(self, *_a: object, **_k: object) -> None:
+            return None
+
+    class _FakeSession:
+        page = _FakePage()
+        recorded_video_path = None
+
+        async def __aenter__(self) -> _FakeSession:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.connectors.social_feed.BrowserSession",
+        lambda **_k: _FakeSession(),
+    )
+    monkeypatch.setattr(
+        "app.connectors.social_feed.await_or_abandon",
+        AsyncMock(side_effect=TimeoutError("timed out after 25s")),
+    )
     c._browser_fallback = AsyncMock()  # type: ignore[method-assign]
     c._emit = AsyncMock()  # type: ignore[method-assign]
+    c._commit_oss_posts = AsyncMock()  # type: ignore[method-assign]
 
     await c._scout_linkedin(target, record=False)
 
     c._browser_fallback.assert_awaited_once()
-    emitted = " ".join(
+    details = [
         str(call.args[1].get("detail", ""))
         for call in c._emit.await_args_list
         if call.args and call.args[0] == "action"
-    )
-    assert "obscura_skip_linkedin_scraper" in emitted
+    ]
+    assert any("oss_try platform=linkedin" in d for d in details)
+    assert any("timed out after" in d for d in details)
+    assert not any("obscura_skip_linkedin_scraper" in d for d in details)
