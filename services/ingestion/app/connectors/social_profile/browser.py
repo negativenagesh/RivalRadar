@@ -27,9 +27,13 @@ _CLOSE_S = 8.0
 
 
 def browser_engine() -> str:
-    """obscura (default on Render) or chromium (local fallback)."""
-    raw = (os.environ.get("BROWSER_ENGINE") or "obscura").strip().lower()
-    return raw if raw in {"obscura", "chromium"} else "obscura"
+    """obscura on Render/Docker; chromium for local/CI (unless overridden)."""
+    raw = (os.environ.get("BROWSER_ENGINE") or "").strip().lower()
+    if raw in {"obscura", "chromium"}:
+        return raw
+    if running_in_docker() or os.environ.get("RENDER"):
+        return "obscura"
+    return "chromium"
 
 
 def obscura_cdp_url() -> str:

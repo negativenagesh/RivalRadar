@@ -25,13 +25,22 @@ def test_chromium_args_include_docker_sandbox_workarounds(
     assert "--disable-dev-shm-usage" in docker
 
 
-def test_browser_engine_defaults_to_obscura(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_browser_engine_defaults_by_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BROWSER_ENGINE", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.setattr("app.connectors.social_profile.browser.running_in_docker", lambda: False)
+    assert browser_engine() == "chromium"
+    monkeypatch.setattr("app.connectors.social_profile.browser.running_in_docker", lambda: True)
+    assert browser_engine() == "obscura"
+    monkeypatch.setattr("app.connectors.social_profile.browser.running_in_docker", lambda: False)
+    monkeypatch.setenv("RENDER", "true")
     assert browser_engine() == "obscura"
     monkeypatch.setenv("BROWSER_ENGINE", "chromium")
     assert browser_engine() == "chromium"
     monkeypatch.setenv("BROWSER_ENGINE", "weird")
-    assert browser_engine() == "obscura"
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.setattr("app.connectors.social_profile.browser.running_in_docker", lambda: False)
+    assert browser_engine() == "chromium"
 
 
 def test_obscura_cdp_url(monkeypatch: pytest.MonkeyPatch) -> None:
