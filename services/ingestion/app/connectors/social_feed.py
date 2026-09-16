@@ -35,7 +35,11 @@ from app.connectors.social_feed_parse import (
     posted_at_from_url,
     settle_page,
 )
-from app.connectors.social_profile.browser import BrowserSession, await_or_abandon
+from app.connectors.social_profile.browser import (
+    BrowserSession,
+    await_or_abandon,
+    browser_engine,
+)
 from app.connectors.social_profile.targets import ProfileTarget
 from app.date_window import DateWindow
 from app.objectstore import ObjectStore
@@ -47,7 +51,9 @@ _SERVICE = "ingestion"
 _MAX_POSTS = 40
 _PLATFORM_BUDGET_S = 120
 _OSS_BUDGET_S = 50
-_LINKEDIN_OSS_BUDGET_S = 80
+# linkedin_scraper often ignores cancel on Obscura/CDP; keep Chromium OSS short
+# so browser fallback still fits inside the platform budget.
+_LINKEDIN_OSS_BUDGET_S = 25
 _GOTO_MS = 20_000
 _HEARTBEAT_S = 3
 _COLLECT_BUDGET_S = 40
@@ -55,6 +61,8 @@ _POST_BUDGET_S = 35
 # Reverse-chrono feeds: stop after this many posts older than date_from.
 _PAST_WINDOW_STOP = 3
 _SKIP_PLATFORMS = {"tiktok"}
+# On Obscura, HTTP OSS (Instaloader / gallery-dl) before LinkedIn browser work.
+_OBSCURA_SCOUT_PRIORITY = {"instagram": 0, "x": 1, "twitter": 1, "linkedin": 2}
 
 
 class SocialFeedConnector:
@@ -151,7 +159,8 @@ class SocialFeedConnector:
                     "detail": f"skip_platform platform={normalize_platform(t.platform)} reason=disabled"
                 },
             )
-        platforms = sorted({normalize_platform(t.platform) for t in self._targets if t.platform})
+        ordered = _order_targets_for_engine(self._targets)
+        platforms = sorted({normalize_platform(t.platform) for t in ordered if t.platform})
         all_cookies = cookies_from_sessions(self._platform_sessions, platforms=set(platforms))
         all_state = storage_state_from_sessions(self._platform_sessions, platforms=set(platforms))
         if all_cookies or all_state:
@@ -165,28 +174,34 @@ class SocialFeedConnector:
                     )
                 },
             )
+        engine = browser_engine()
+        oss_label = (
+            "instaloader,gallery-dl"
+            if engine == "obscura"
+            else "instaloader,gallery-dl,linkedin_scraper"
+        )
         await self._emit(
             "action",
             {
                 "detail": (
                     f"scouting_sequential platforms={platforms} "
-                    f"targets={len(self._targets)} budget_s={_PLATFORM_BUDGET_S} "
+                    f"targets={len(ordered)} budget_s={_PLATFORM_BUDGET_S} "
                     f"window={self._window.date_from}→{self._window.date_to} "
-                    f"oss=instaloader,gallery-dl,linkedin_scraper"
+                    f"engine={engine} oss={oss_label}"
                 )
             },
         )
 
         # One target at a time — parallel Chromium/Instaloader/gallery-dl fights
         # Connect cookies and produces interleaved event-log noise.
-        for i, target in enumerate(self._targets):
+        for i, target in enumerate(ordered):
             platform = normalize_platform(target.platform or "web")
             await self._emit(
                 "action",
                 {
                     "detail": (
                         f"scout_next platform={platform} "
-                        f"target={i + 1}/{len(self._targets)} handle={target.handle}"
+                        f"target={i + 1}/{len(ordered)} handle={target.handle}"
                     )
                 },
             )
@@ -363,6 +378,21 @@ class SocialFeedConnector:
     async def _scout_linkedin(self, target: ProfileTarget, *, record: bool) -> None:
         """OSS scrape on one Chromium; operator frames are post media, not profile scrolls."""
         platform = "linkedin"
+        # linkedin_scraper drives Playwright sync-style CDP calls that hang on
+        # Obscura and ignore CancelledError — skip OSS and use browser fallback.
+        if browser_engine() == "obscura":
+            await self._emit(
+                "action",
+                {
+                    "detail": (
+                        "oss_fallback platform=linkedin "
+                        "reason=obscura_skip_linkedin_scraper"
+                    )
+                },
+            )
+            await self._browser_fallback(target, record=record)
+            return
+
         url = _profile_entry_url(target, platform)
         handle = _handle_for(target, url)
         cookies = cookies_from_sessions(self._platform_sessions, platforms={platform})
@@ -1021,6 +1051,23 @@ class SocialFeedConnector:
                 sequence=seq,
             )
         )
+
+
+def _order_targets_for_engine(targets: list[ProfileTarget]) -> list[ProfileTarget]:
+    """Stable reorder: on Obscura, HTTP OSS platforms before LinkedIn browser work."""
+    if browser_engine() != "obscura" or len(targets) < 2:
+        return list(targets)
+    indexed = list(enumerate(targets))
+    indexed.sort(
+        key=lambda item: (
+            _OBSCURA_SCOUT_PRIORITY.get(
+                normalize_platform(item[1].platform or "web"),
+                9,
+            ),
+            item[0],
+        )
+    )
+    return [t for _, t in indexed]
 
 
 def _profile_entry_url(target: ProfileTarget, platform: str) -> str:

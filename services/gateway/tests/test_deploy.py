@@ -149,3 +149,22 @@ async def test_start_ingestion_returns_503_when_unreachable(
     res = await client.post("/ingestion/runs", json={"targets": []})
     assert res.status_code == 503
     assert "unreachable" in res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_ingestion_youtube_status_proxy(client: AsyncClient) -> None:
+    payload = {"api_key_configured": False, "preferred_source": "yt_dlp"}
+    with patch("app.routes.fetch_youtube_status", new=AsyncMock(return_value=payload)):
+        res = await client.get("/ingestion/youtube/status")
+    assert res.status_code == 200
+    assert res.json()["preferred_source"] == "yt_dlp"
+
+
+@pytest.mark.asyncio
+async def test_ingestion_youtube_status_503_when_down(client: AsyncClient) -> None:
+    with patch(
+        "app.routes.fetch_youtube_status",
+        new=AsyncMock(side_effect=RuntimeError("down")),
+    ):
+        res = await client.get("/ingestion/youtube/status")
+    assert res.status_code == 503

@@ -548,6 +548,15 @@ async def list_ingestion_accounts() -> list[dict[str, object]]:
     return await fetch_ingestion_accounts()
 
 
+@router.get("/ingestion/youtube/status")
+async def ingestion_youtube_status() -> dict[str, object]:
+    """Proxy ingestion's yt-dlp / Data API readiness (Connect center + deploy checks)."""
+    try:
+        return await fetch_youtube_status()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="Ingestion YouTube status unreachable") from exc
+
+
 @router.get("/drafts", response_model=list[DraftRead])
 async def list_drafts(session: AsyncSession = Depends(get_session)) -> list[Draft]:
     result = await session.scalars(select(Draft).order_by(Draft.created_at.desc()))
