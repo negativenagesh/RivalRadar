@@ -38,8 +38,9 @@ async def health() -> dict[str, str]:
 
 @app.get("/ready")
 async def ready() -> JSONResponse:
-    """Liveness for cold-start UI: gateway + generation (Mission LLM path)."""
+    """Liveness for cold-start UI: gateway + generation + ingestion (Scout)."""
     generation_ok = False
+    ingestion_ok = False
     detail = "generation unreachable"
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -48,16 +49,29 @@ async def ready() -> JSONResponse:
             detail = "ok" if generation_ok else f"generation status {response.status_code}"
     except Exception as exc:  # noqa: BLE001
         detail = str(exc)[:160]
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"{settings.ingestion_service_url.rstrip('/')}/health")
+            ingestion_ok = response.status_code == 200
+            if generation_ok and not ingestion_ok:
+                detail = f"ingestion status {response.status_code}"
+    except Exception as exc:  # noqa: BLE001
+        if generation_ok:
+            detail = f"ingestion unreachable: {str(exc)[:120]}"
+    ok = generation_ok and ingestion_ok
     body = {
-        "status": "ok" if generation_ok else "degraded",
+        "status": "ok" if ok else "degraded",
         "gateway": "ok",
         "generation": "ok" if generation_ok else "down",
-        "detail": detail,
+        "ingestion": "ok" if ingestion_ok else "down",
+        "detail": detail if ok else detail,
         "mission_defaults": {
             "text": "gptoss",
             "image": "agnes",
         },
     }
+    # Ready for Mission creative if generation is up; Scout needs ingestion too.
+    # Return 200 when generation is up so cold-start UI clears; surface ingestion in body.
     return JSONResponse(body, status_code=200 if generation_ok else 503)
 
 

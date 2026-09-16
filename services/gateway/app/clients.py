@@ -228,44 +228,80 @@ async def check_compliance(text: str) -> dict[str, Any]:
         return result
 
 
+def _reraise_ingestion_transport(exc: httpx.RequestError) -> NoReturn:
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Scout (ingestion) is unreachable. On Render the API image must include "
+            "ingestion — redeploy latest main, wait for /ready ingestion=ok, then retry. "
+            f"({exc.__class__.__name__})"
+        ),
+    ) from exc
+
+
 async def trigger_ingestion_run(body: dict[str, Any]) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=30.0) as client:
-        response = await client.post("/ingest/run", json=body)
-        response.raise_for_status()
-        result: dict[str, Any] = response.json()
-        return result
+    try:
+        async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=30.0) as client:
+            response = await client.post("/ingest/run", json=body)
+            response.raise_for_status()
+            result: dict[str, Any] = response.json()
+            return result
+    except httpx.HTTPStatusError as exc:
+        _reraise_upstream(exc)
+    except httpx.RequestError as exc:
+        _reraise_ingestion_transport(exc)
 
 
 async def fetch_ingestion_run(run_id: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
-        response = await client.get(f"/ingest/runs/{run_id}")
-        response.raise_for_status()
-        result: dict[str, Any] = response.json()
-        return result
+    try:
+        async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
+            response = await client.get(f"/ingest/runs/{run_id}")
+            response.raise_for_status()
+            result: dict[str, Any] = response.json()
+            return result
+    except httpx.HTTPStatusError as exc:
+        _reraise_upstream(exc)
+    except httpx.RequestError as exc:
+        _reraise_ingestion_transport(exc)
 
 
 async def cancel_ingestion_run(run_id: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=15.0) as client:
-        response = await client.post(f"/ingest/runs/{run_id}/cancel")
-        response.raise_for_status()
-        result: dict[str, Any] = response.json()
-        return result
+    try:
+        async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=15.0) as client:
+            response = await client.post(f"/ingest/runs/{run_id}/cancel")
+            response.raise_for_status()
+            result: dict[str, Any] = response.json()
+            return result
+    except httpx.HTTPStatusError as exc:
+        _reraise_upstream(exc)
+    except httpx.RequestError as exc:
+        _reraise_ingestion_transport(exc)
 
 
 async def fetch_ingestion_posts() -> list[dict[str, Any]]:
-    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
-        response = await client.get("/posts")
-        response.raise_for_status()
-        result: list[dict[str, Any]] = response.json()
-        return result
+    try:
+        async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
+            response = await client.get("/posts")
+            response.raise_for_status()
+            result: list[dict[str, Any]] = response.json()
+            return result
+    except httpx.HTTPStatusError as exc:
+        _reraise_upstream(exc)
+    except httpx.RequestError as exc:
+        _reraise_ingestion_transport(exc)
 
 
 async def fetch_ingestion_accounts() -> list[dict[str, Any]]:
-    async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
-        response = await client.get("/accounts")
-        response.raise_for_status()
-        result: list[dict[str, Any]] = response.json()
-        return result
+    try:
+        async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
+            response = await client.get("/accounts")
+            response.raise_for_status()
+            result: list[dict[str, Any]] = response.json()
+            return result
+    except httpx.HTTPStatusError as exc:
+        _reraise_upstream(exc)
+    except httpx.RequestError as exc:
+        _reraise_ingestion_transport(exc)
 
 
 async def fetch_ingestion_recording(run_id: str) -> httpx.Response:

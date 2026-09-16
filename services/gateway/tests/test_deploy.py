@@ -126,3 +126,18 @@ async def test_ready_degraded_when_generation_down(client: AsyncClient) -> None:
         res = await client.get("/ready")
     assert res.status_code == 503
     assert res.json()["generation"] == "down"
+
+
+@pytest.mark.asyncio
+async def test_start_ingestion_returns_503_when_unreachable(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def raise_503(_body: dict) -> dict:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail="Scout (ingestion) is unreachable")
+
+    monkeypatch.setattr("app.routes.trigger_ingestion_run", raise_503)
+    res = await client.post("/ingestion/runs", json={"targets": []})
+    assert res.status_code == 503
+    assert "unreachable" in res.json()["detail"].lower()
