@@ -11,13 +11,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 import websockets
-from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 from websockets.exceptions import ConnectionClosed
 
 logger = logging.getLogger(__name__)
+
+
+class LiveClient(Protocol):
+    client_state: WebSocketState
+
+    async def send_text(self, data: str) -> Any: ...
+
+    async def receive(self) -> Mapping[str, Any]: ...
 
 
 def http_base_to_ws(url: str) -> str:
@@ -36,7 +45,7 @@ def ingestion_live_upstream_url(ingestion_http_base: str, run_id: str) -> str:
 
 
 async def proxy_client_to_upstream(
-    client: WebSocket,
+    client: LiveClient,
     upstream_url: str,
     *,
     connect_timeout_s: float = 8.0,
