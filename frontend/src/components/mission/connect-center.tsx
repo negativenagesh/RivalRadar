@@ -451,7 +451,7 @@ export function ConnectCenter({
                   <li className="rounded-2xl border border-border/50 bg-card/30 px-3 py-3">
                     <span className="font-semibold text-foreground">1. Install extension once</span>
                     <p className="mt-1 text-xs">
-                      Chrome → Extensions → Developer mode → Load unpacked →{" "}
+                      In your browser (Chrome or Comet): <code className="text-foreground">chrome://extensions</code> → Developer mode → Load unpacked →{" "}
                       <code className="text-foreground">extensions/rivalradar-connect</code> in the
                       repo (see README there).
                     </p>

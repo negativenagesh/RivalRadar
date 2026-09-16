@@ -1,21 +1,25 @@
-# RivalRadar Connect (Chrome extension)
+# RivalRadar Connect (Chrome / Comet extension)
 
-Fast path to vault LinkedIn / X / Instagram / TikTok / Threads sessions **without** the noVNC Connect browser.
+Fast path to vault LinkedIn / X / Instagram / TikTok / Threads sessions **without** the noVNC Connect browser. Works in **Chrome**, **Comet**, Edge, Brave, Arc — any Chromium browser.
 
 ## Install (unpacked)
 
-1. Open `chrome://extensions`
+1. Open `chrome://extensions` in your browser (works in Comet too — type it in the address bar)
 2. Enable **Developer mode**
 3. **Load unpacked** → select this folder (`extensions/rivalradar-connect`)
 4. Pin the extension
+
+> **Comet**: same steps — Comet supports Chromium extensions. Open `chrome://extensions`, Developer mode, Load unpacked.
 
 ## Use
 
 1. On RivalRadar (Vercel or local), open **Connect** for a platform → **Extension** tab
 2. Copy the 6-character pairing code (expires in 5 minutes)
-3. Stay signed in to that platform in Chrome
+3. **Stay signed in to that platform in the same browser where the extension runs** (Chrome session ↔ Chrome extension, Comet session ↔ Comet extension)
 4. Click the extension → paste code → pick platform → **Connect to RivalRadar**
 5. The website detects `connected` and closes the dialog
+
+> Important: the extension reads cookies from the browser it's installed in. If you're signed into LinkedIn in Comet, install and run the extension **in Comet**, not Chrome.
 
 ## API URL
 
