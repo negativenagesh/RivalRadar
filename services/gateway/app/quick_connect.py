@@ -119,11 +119,14 @@ def normalize_cookies(platform: str, raw: list[dict[str, Any]]) -> list[dict[str
         value = str(item.get("value") or "").strip()
         if not name or not value:
             continue
-        if name.lower() not in allowed_names and not name.lower().startswith("session"):
-            # Keep unknown cookies that look session-like; drop obvious noise.
-            if name.lower() not in {"li_at", "auth_token", "ct0", "sessionid", "csrftoken"}:
-                continue
         key = name.lower()
+        # Keep platform allowlist, session* cookies, and common auth names; drop noise.
+        if (
+            key not in allowed_names
+            and not key.startswith("session")
+            and key not in {"li_at", "auth_token", "ct0", "sessionid", "csrftoken"}
+        ):
+            continue
         if key in seen:
             continue
         seen.add(key)
