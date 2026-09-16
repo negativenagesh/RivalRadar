@@ -20,13 +20,17 @@ LIMITS: dict[str, tuple[int, int]] = {
     "/intel/report": (15, 3600),
     "/social/stage-post": (15, 3600),
     "/social/comment": (20, 3600),
-    "/ingestion/runs": (10, 3600),
+    # Start Scout (POST) stays tight; status polls (GET) must be high — UI polls every few seconds.
+    "/ingestion/runs:POST": (10, 3600),
+    "/ingestion/runs:GET": (600, 3600),
+    "/ingestion/posts": (240, 3600),
+    "/ingestion/accounts": (240, 3600),
     "/drafts/generate": (8, 3600),
     "/pipeline-runs": (30, 3600),
     "/connect/pairing": (30, 3600),
     "/connections/": (40, 3600),
     "/analytics/": (240, 3600),
-    "*": (180, 3600),
+    "*": (300, 3600),
 }
 
 _SKIP_PREFIXES = ("/health", "/ready", "/docs", "/openapi", "/redoc")
@@ -56,9 +60,21 @@ def visitor_id(request: Request) -> str:
     return hashlib.sha256(ip.encode("utf-8")).hexdigest()[:32]
 
 
-def _match_limit(path: str) -> tuple[str, int, int]:
+def _match_limit(path: str, method: str = "GET") -> tuple[str, int, int]:
+    """Pick the tightest matching bucket. Method-specific keys win for ingestion runs."""
+    method = method.upper()
+    if path.startswith("/ingestion/runs"):
+        key = f"/ingestion/runs:{method}"
+        if key in LIMITS:
+            max_req, window = LIMITS[key]
+            return key, max_req, window
+        # Fallback for uncommon methods
+        max_req, window = LIMITS.get("/ingestion/runs:GET", LIMITS["*"])
+        return "/ingestion/runs:GET", max_req, window
     for prefix, (max_req, window) in LIMITS.items():
-        if prefix != "*" and path.startswith(prefix):
+        if prefix in {"*", "/ingestion/runs:POST", "/ingestion/runs:GET"}:
+            continue
+        if path.startswith(prefix):
             return prefix, max_req, window
     max_req, window = LIMITS["*"]
     return "*", max_req, window
@@ -92,7 +108,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS" or any(path.startswith(p) for p in _SKIP_PREFIXES):
             return await call_next(request)
 
-        bucket, max_req, window = _match_limit(path)
+        bucket, max_req, window = _match_limit(path, request.method)
         vid = visitor_id(request)
         request.state.visitor_id = vid
         allowed, retry_after = _limiter.allow(f"{vid}:{bucket}", max_req, window)

@@ -159,7 +159,7 @@ export function useIngestionLive(runId: string | null) {
           clearInterval(poll);
         }
       });
-    }, 800);
+    }, 4000);
 
     // Defer so we don't setState synchronously inside the effect body (eslint).
     void Promise.resolve().then(() => {

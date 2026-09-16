@@ -41,7 +41,15 @@ def test_database_ssl_connect_arg_is_require_mode() -> None:
         assert "ssl" not in db_mod._connect_args
 
 
-def test_memory_rate_limiter_blocks() -> None:
+def test_match_limit_splits_ingestion_get_and_post() -> None:
+    from app.rate_limit import _match_limit
+
+    get_bucket, get_max, _ = _match_limit("/ingestion/runs/abc", "GET")
+    post_bucket, post_max, _ = _match_limit("/ingestion/runs", "POST")
+    assert get_bucket == "/ingestion/runs:GET"
+    assert get_max == 600
+    assert post_bucket == "/ingestion/runs:POST"
+    assert post_max == 10
     limiter = MemoryRateLimiter()
     assert limiter.allow("v1:/creative/generate", 2, 60)[0] is True
     assert limiter.allow("v1:/creative/generate", 2, 60)[0] is True

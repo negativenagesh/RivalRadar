@@ -15,26 +15,36 @@ RUN uv sync --no-dev
 
 FROM python:3.12-slim AS runtime
 
-RUN useradd --create-home --uid 1000 appuser
+ENV CONNECT_IN_DOCKER=1 \
+    BROWSER_ENGINE=obscura \
+    OBSCURA_CDP_URL=http://127.0.0.1:9222 \
+    OBSCURA_VERSION=v0.2.2
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 1000 appuser
+
+RUN mkdir -p /opt/obscura \
+    && curl -fsSL -o /tmp/obscura.tar.gz \
+      "https://github.com/h4ckf0r0day/obscura/releases/download/${OBSCURA_VERSION}/obscura-x86_64-linux.tar.gz" \
+    && tar -xzf /tmp/obscura.tar.gz -C /opt/obscura \
+    && chmod +x /opt/obscura/obscura /opt/obscura/obscura-worker \
+    && ln -sf /opt/obscura/obscura /usr/local/bin/obscura \
+    && rm -f /tmp/obscura.tar.gz \
+    && mkdir -p /data/objects \
+    && chown -R appuser:appuser /data/objects /opt/obscura
+
 WORKDIR /build/services/ingestion
-
 COPY --from=builder --chown=appuser:appuser /build /build
-ENV PATH="/build/services/ingestion/.venv/bin:$PATH" \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    CONNECT_IN_DOCKER=1
+ENV PATH="/build/services/ingestion/.venv/bin:/usr/local/bin:$PATH"
 
-RUN playwright install --with-deps chromium && \
-    apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir yt-dlp gallery-dl && \
-    chmod -R a+rX /opt/ms-playwright
-
-RUN mkdir -p /data/objects && chown appuser:appuser /data/objects
+COPY --chown=appuser:appuser services/ingestion/docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 USER appuser
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/entrypoint.sh"]

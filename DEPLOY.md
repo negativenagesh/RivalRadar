@@ -2,7 +2,8 @@
 
 ## Architecture
 - **Vercel**: Next.js app in `frontend/`
-- **Render**: one Docker web service (`deploy/Dockerfile.api`) running **generation + ingestion (Scout) + gateway**
+- **Render**: one Docker web service (`deploy/Dockerfile.api`) running **Obscura CDP + generation + ingestion (Scout) + gateway**
+  - Scout browser: **Obscura** (~30 MB RAM) via Playwright CDP — not Chromium (fits free 512 MB)
   - Default models: **gpt-oss** (`NVIDIA_API_KEY`) + **Agnes** (`AGNES_API_KEY`)
 - **Supabase** (optional): visitor pageviews (`supabase/migrations/001_visitor_pageviews.sql`)
 - **Connect / social login**: prefer the **Chrome extension** (`extensions/rivalradar-connect`) + pairing code. noVNC Connect browser remains as fallback. No LinkedIn/X/IG cookies are loaded from env on deploy.
@@ -26,6 +27,8 @@
 | `GENERATION_SERVICE_URL` | `http://127.0.0.1:8003` |
 | `INGESTION_SERVICE_URL` | `http://127.0.0.1:8001` |
 | `OBJECT_STORE_ROOT` | `/data/objects` |
+| `BROWSER_ENGINE` | `obscura` |
+| `OBSCURA_CDP_URL` | `http://127.0.0.1:9222` |
 | `REDIS_URL` | `memory` (fine for Mission; set Upstash URL later for live scout WS) |
 | `DISALLOW_ENV_SOCIAL_COOKIES` | `true` |
 
@@ -52,7 +55,7 @@
    - `AGNES_API_KEY`
    - `CORS_ORIGINS` = your Vercel URL + localhost (see table)
 4. **Apply** — creates `rivalradar-api` + `rivalradar-db`
-5. Wait for the first Docker deploy (several minutes — image now includes Playwright Chromium for Scout). Health check is `/ready`.
+5. Wait for the first Docker deploy (Obscura binary is small — faster than former Playwright Chromium image). Health check is `/ready`.
 6. Copy the service URL, e.g. `https://rivalradar-api.onrender.com`
 7. Smoke test:
    ```bash
@@ -64,7 +67,7 @@
    # expect 202 JSON with run_id (not 500 / Failed to fetch)
    ```
 
-Free tier sleeps after idle. The navbar **Waking API…** chip polls until green. First Start Scout after sleep can take 1–2 minutes.
+Free tier sleeps after idle. The navbar **Waking API…** chip polls until green. First Start Scout after sleep can take 1–2 minutes. Live run status polls every ~4s (rate-limit safe).
 
 ## 3. Vercel
 1. Import repo → **Root Directory** = `frontend`
