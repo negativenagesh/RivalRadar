@@ -4,7 +4,7 @@ set -eu
 
 OBSCURA_PORT="${OBSCURA_PORT:-9222}"
 export BROWSER_ENGINE="${BROWSER_ENGINE:-obscura}"
-export OBSCURA_CDP_URL="${OBSCURA_CDP_URL:-http://127.0.0.1:${OBSCURA_PORT}}"
+export OBSCURA_CDP_URL="${OBSCURA_CDP_URL:-ws://127.0.0.1:${OBSCURA_PORT}}"
 
 if [ "${BROWSER_ENGINE}" = "obscura" ] && command -v obscura >/dev/null 2>&1; then
   OBSCURA_BIN="$(command -v obscura)"
@@ -13,11 +13,11 @@ if [ "${BROWSER_ENGINE}" = "obscura" ] && command -v obscura >/dev/null 2>&1; th
   if [ -L "$OBSCURA_BIN" ]; then
     OBSCURA_HOME="$(dirname "$(readlink -f "$OBSCURA_BIN" 2>/dev/null || readlink "$OBSCURA_BIN")")"
   fi
-  ( cd "$OBSCURA_HOME" && obscura serve --port "$OBSCURA_PORT" ) &
+  ( cd "$OBSCURA_HOME" && obscura serve --host 127.0.0.1 --port "$OBSCURA_PORT" --quiet ) &
   i=0
   while [ "$i" -lt 40 ]; do
-    if curl -fsS "http://127.0.0.1:${OBSCURA_PORT}/json/version" >/dev/null 2>&1 \
-      || curl -fsS "http://127.0.0.1:${OBSCURA_PORT}/json/list" >/dev/null 2>&1; then
+    if curl -fsS --http1.1 -X GET "http://127.0.0.1:${OBSCURA_PORT}/json/version" >/dev/null 2>&1 \
+      || curl -fsS --http1.1 -X GET "http://127.0.0.1:${OBSCURA_PORT}/json/list" >/dev/null 2>&1; then
       break
     fi
     i=$((i + 1))

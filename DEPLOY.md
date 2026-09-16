@@ -28,7 +28,7 @@
 | `INGESTION_SERVICE_URL` | `http://127.0.0.1:8001` |
 | `OBJECT_STORE_ROOT` | `/data/objects` |
 | `BROWSER_ENGINE` | `obscura` |
-| `OBSCURA_CDP_URL` | `http://127.0.0.1:9222` |
+| `OBSCURA_CDP_URL` | `ws://127.0.0.1:9222` |
 | `REDIS_URL` | `memory` (fine for Mission; set Upstash URL later for live scout WS) |
 | `DISALLOW_ENV_SOCIAL_COOKIES` | `true` |
 

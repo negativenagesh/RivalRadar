@@ -16,7 +16,8 @@ export MISSION_IMAGE_MODEL="${MISSION_IMAGE_MODEL:-agnes}"
 export REDIS_URL="${REDIS_URL:-memory}"
 export OBJECT_STORE_ROOT="${OBJECT_STORE_ROOT:-/data/objects}"
 export BROWSER_ENGINE="${BROWSER_ENGINE:-obscura}"
-export OBSCURA_CDP_URL="${OBSCURA_CDP_URL:-http://127.0.0.1:${OBSCURA_PORT}}"
+# Playwright connects over WebSocket (Obscura's native CDP transport).
+export OBSCURA_CDP_URL="${OBSCURA_CDP_URL:-ws://127.0.0.1:${OBSCURA_PORT}}"
 mkdir -p "$OBJECT_STORE_ROOT"
 
 # Never inject platform social cookies from env — users log in via Connect / extension.
@@ -41,7 +42,10 @@ if [[ "${BROWSER_ENGINE}" == "obscura" ]]; then
   # Run from install dir so obscura-worker is found beside the binary.
   OBSCURA_HOME="$(dirname "$(readlink -f "$(command -v obscura)" 2>/dev/null || command -v obscura)")"
   cd "$OBSCURA_HOME"
-  obscura serve --port "$OBSCURA_PORT" &
+  # --host 127.0.0.1: CDP stays loopback-only.
+  # --quiet: Render/platform HEAD probes on :9222 otherwise spam
+  #   "Unsupported HTTP method used - only GET is allowed" every second.
+  obscura serve --host 127.0.0.1 --port "$OBSCURA_PORT" --quiet &
   OBSCURA_PID=$!
   cd "$ROOT"
 fi
@@ -80,11 +84,17 @@ wait_healthy() {
 }
 
 if [[ -n "${OBSCURA_PID}" ]]; then
-  # Obscura has no HTTP /health — wait until CDP responds or process stays alive + brief settle.
+  # Prefer TCP listen check — avoid HEAD/non-GET probes that Obscura treats as WS upgrades.
   ready=0
   for _ in $(seq 1 60); do
-    if curl -fsS "http://127.0.0.1:${OBSCURA_PORT}/json/version" >/dev/null 2>&1 \
-      || curl -fsS "http://127.0.0.1:${OBSCURA_PORT}/json/list" >/dev/null 2>&1; then
+    if (echo >/dev/tcp/127.0.0.1/"${OBSCURA_PORT}") >/dev/null 2>&1; then
+      # Optional: confirm HTTP control plane with GET only (never HEAD/-I).
+      if curl -fsS --http1.1 -X GET "http://127.0.0.1:${OBSCURA_PORT}/json/version" >/dev/null 2>&1 \
+        || curl -fsS --http1.1 -X GET "http://127.0.0.1:${OBSCURA_PORT}/json/list" >/dev/null 2>&1; then
+        ready=1
+        break
+      fi
+      # Port open is enough for ws:// connect_over_cdp.
       ready=1
       break
     fi
@@ -94,18 +104,11 @@ if [[ -n "${OBSCURA_PID}" ]]; then
     fi
     sleep 1
   done
-  # Some builds expose only the WS endpoint; if process is alive after 3s, proceed.
-  if [[ "$ready" -ne 1 ]]; then
-    sleep 2
-    if kill -0 "$OBSCURA_PID" 2>/dev/null; then
-      ready=1
-      echo "obscura: no /json/version — proceeding with live process on :${OBSCURA_PORT}" >&2
-    fi
-  fi
   if [[ "$ready" -ne 1 ]]; then
     echo "obscura failed to listen on :${OBSCURA_PORT}" >&2
     exit 1
   fi
+  echo "obscura ready on ws://127.0.0.1:${OBSCURA_PORT}" >&2
 fi
 
 wait_healthy "generation" "http://127.0.0.1:${GEN_PORT}/health" "$GEN_PID"
