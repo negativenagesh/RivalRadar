@@ -37,7 +37,17 @@ def browser_engine() -> str:
 
 
 def obscura_cdp_url() -> str:
-    return (os.environ.get("OBSCURA_CDP_URL") or "http://127.0.0.1:9222").rstrip("/")
+    """Playwright must use the WS CDP endpoint (Obscura docs).
+
+    http(s):// is accepted for older env values and rewritten to ws(s):// so we
+    skip HTTP /json/version discovery (which races with non-GET probes on :9222).
+    """
+    raw = (os.environ.get("OBSCURA_CDP_URL") or "ws://127.0.0.1:9222").strip().rstrip("/")
+    if raw.startswith("http://"):
+        return "ws://" + raw[len("http://") :]
+    if raw.startswith("https://"):
+        return "wss://" + raw[len("https://") :]
+    return raw
 
 
 def running_in_docker() -> bool:

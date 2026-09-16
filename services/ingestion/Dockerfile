@@ -17,7 +17,7 @@ FROM python:3.12-slim AS runtime
 
 ENV CONNECT_IN_DOCKER=1 \
     BROWSER_ENGINE=obscura \
-    OBSCURA_CDP_URL=http://127.0.0.1:9222 \
+    OBSCURA_CDP_URL=ws://127.0.0.1:9222 \
     OBSCURA_VERSION=v0.2.2
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
