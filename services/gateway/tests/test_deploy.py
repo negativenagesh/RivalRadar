@@ -132,7 +132,7 @@ async def test_ready_degraded_when_generation_down(client: AsyncClient) -> None:
 async def test_start_ingestion_returns_503_when_unreachable(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def raise_503(_body: dict) -> dict:
+    async def raise_503(_body: dict[str, object]) -> dict[str, object]:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=503, detail="Scout (ingestion) is unreachable")
