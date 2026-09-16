@@ -175,11 +175,6 @@ class SocialFeedConnector:
                 },
             )
         engine = browser_engine()
-        oss_label = (
-            "instaloader,gallery-dl"
-            if engine == "obscura"
-            else "instaloader,gallery-dl,linkedin_scraper"
-        )
         await self._emit(
             "action",
             {
@@ -187,7 +182,7 @@ class SocialFeedConnector:
                     f"scouting_sequential platforms={platforms} "
                     f"targets={len(ordered)} budget_s={_PLATFORM_BUDGET_S} "
                     f"window={self._window.date_from}→{self._window.date_to} "
-                    f"engine={engine} oss={oss_label}"
+                    f"engine={engine} oss=instaloader,gallery-dl,linkedin_scraper"
                 )
             },
         )
@@ -374,18 +369,13 @@ class SocialFeedConnector:
                 elapsed += _HEARTBEAT_S
 
     async def _scout_linkedin(self, target: ProfileTarget, *, record: bool) -> None:
-        """OSS scrape on one Chromium; operator frames are post media, not profile scrolls."""
-        platform = "linkedin"
-        # linkedin_scraper drives Playwright sync-style CDP calls that hang on
-        # Obscura and ignore CancelledError — skip OSS and use browser fallback.
-        if browser_engine() == "obscura":
-            await self._emit(
-                "action",
-                {"detail": ("oss_fallback platform=linkedin reason=obscura_skip_linkedin_scraper")},
-            )
-            await self._browser_fallback(target, record=record)
-            return
+        """Try linkedin_scraper (bounded), then browser collect on a fresh session.
 
+        On Obscura, CompanyPostsScraper often ignores cancel — we still try it with
+        a short budget, then abandon and open a clean BrowserSession for scroll
+        collect so one hung CDP page cannot block Instagram/X.
+        """
+        platform = "linkedin"
         url = _profile_entry_url(target, platform)
         handle = _handle_for(target, url)
         cookies = cookies_from_sessions(self._platform_sessions, platforms={platform})
@@ -461,8 +451,6 @@ class SocialFeedConnector:
                         "action",
                         {"detail": f"oss_fallback platform=linkedin reason={exc}"},
                     )
-                # Stop OSS heartbeats before browser fallback — otherwise the
-                # event log keeps printing oss_working while collecting_posts runs.
                 stop.set()
                 hb.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -471,17 +459,25 @@ class SocialFeedConnector:
                     if record and session.recorded_video_path:
                         self._video_path = session.recorded_video_path
                     return
-                await self._scout_target_browser(session, target)
-                if record and session.recorded_video_path:
-                    self._video_path = session.recorded_video_path
+                # Chromium: reuse the same page for browser collect.
+                # Obscura: leave this (possibly wedged) CDP page and open a fresh session.
+                if browser_engine() != "obscura":
+                    await self._scout_target_browser(session, target)
+                    if record and session.recorded_video_path:
+                        self._video_path = session.recorded_video_path
+                    return
         except RuntimeError as exc:
-            await self._emit("error", {"detail": f"linkedin chromium: {exc}"})
+            await self._emit("error", {"detail": f"linkedin browser session: {exc}"})
         finally:
             if not stop.is_set():
                 stop.set()
                 hb.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await hb
+
+        if not oss_ok:
+            await self._browser_fallback(target, record=record)
+            return
         async with self._lock:
             if "browser" not in self._sources_used:
                 self._sources_used.append("browser")

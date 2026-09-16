@@ -41,12 +41,17 @@ def obscura_cdp_url() -> str:
 
     http(s):// is accepted for older env values and rewritten to ws(s):// so we
     skip HTTP /json/version discovery (which races with non-GET probes on :9222).
+
+    Bare ``ws://host:port`` is expanded to ``…/devtools/browser`` — Playwright
+    otherwise dials ``ws://host:port/`` and Obscura refuses the connection.
     """
     raw = (os.environ.get("OBSCURA_CDP_URL") or "ws://127.0.0.1:9222").strip().rstrip("/")
     if raw.startswith("http://"):
-        return "ws://" + raw[len("http://") :]
-    if raw.startswith("https://"):
-        return "wss://" + raw[len("https://") :]
+        raw = "ws://" + raw[len("http://") :]
+    elif raw.startswith("https://"):
+        raw = "wss://" + raw[len("https://") :]
+    if raw.startswith(("ws://", "wss://")) and "/devtools/" not in raw:
+        raw = f"{raw}/devtools/browser"
     return raw
 
 

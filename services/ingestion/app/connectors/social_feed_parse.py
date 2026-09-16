@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -32,7 +33,11 @@ _COUNT_RE = re.compile(
     re.I,
 )
 
-_NAV_DESTROY = ("execution context was destroyed", "most likely because of a navigation", "frame was detached")
+_NAV_DESTROY = (
+    "execution context was destroyed",
+    "most likely because of a navigation",
+    "frame was detached",
+)
 _TWITTER_EPOCH_MS = 1_288_834_974_657
 
 
@@ -171,7 +176,9 @@ async def _timed_evaluate(page: Page, expression: str, *, timeout_ms: int = 1000
         page.set_default_timeout(30000)
 
 
-async def safe_evaluate(page: Page, expression: str, *, retries: int = 2, timeout_ms: int = 10000) -> Any:
+async def safe_evaluate(
+    page: Page, expression: str, *, retries: int = 2, timeout_ms: int = 10000
+) -> Any:
     last: BaseException | None = None
     for attempt in range(retries):
         try:
@@ -231,6 +238,7 @@ async def collect_post_urls(
     profile_url: str,
     limit: int = 20,
     max_scrolls: int = 4,
+    scroll_pause_ms: int | None = None,
 ) -> list[str]:
     """Scroll a profile and collect unique post/detail URLs."""
     platform = normalize_platform(platform)
@@ -238,6 +246,9 @@ async def collect_post_urls(
     found: list[str] = []
     seen: set[str] = set()
     base = page.url or profile_url
+    # LinkedIn feeds need slower, jittered scrolls or cards never hydrate.
+    if scroll_pause_ms is None:
+        scroll_pause_ms = 1800 if platform == "linkedin" else 500
 
     for scroll_i in range(max_scrolls):
         hrefs = await _collect_hrefs(page)
@@ -247,7 +258,12 @@ async def collect_post_urls(
             path = urlparse(abs_url).path
             if pattern and not pattern.search(path) and not pattern.search(abs_url):
                 continue
-            if platform == "instagram" and "/p/" not in abs_url and "/reel/" not in abs_url and "/tv/" not in abs_url:
+            if (
+                platform == "instagram"
+                and "/p/" not in abs_url
+                and "/reel/" not in abs_url
+                and "/tv/" not in abs_url
+            ):
                 continue
             if (
                 platform == "linkedin"
@@ -265,8 +281,10 @@ async def collect_post_urls(
         if scroll_i + 1 >= max_scrolls:
             break
         try:
-            await page.mouse.wheel(0, 1600)
-            await page.wait_for_timeout(500)
+            dy = random.randint(1100, 2200) if platform == "linkedin" else 1600
+            await page.mouse.wheel(0, dy)
+            pause = scroll_pause_ms + (random.randint(200, 900) if platform == "linkedin" else 0)
+            await page.wait_for_timeout(pause)
             base = page.url or base
         except Exception as exc:  # noqa: BLE001
             if _is_nav_destroy(exc):
@@ -388,7 +406,9 @@ async def parse_post_page(
                 comments = max(comments, n)
             elif kind.startswith("view"):
                 views = max(views, n)
-            elif kind.startswith("share") or kind.startswith("repost") or kind.startswith("retweet"):
+            elif (
+                kind.startswith("share") or kind.startswith("repost") or kind.startswith("retweet")
+            ):
                 shares = max(shares, n)
 
     caption = (data.get("ogDesc") or data.get("ogTitle") or "").strip()

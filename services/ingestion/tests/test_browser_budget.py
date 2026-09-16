@@ -45,14 +45,17 @@ def test_browser_engine_defaults_by_environment(monkeypatch: pytest.MonkeyPatch)
 
 def test_obscura_cdp_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OBSCURA_CDP_URL", raising=False)
-    assert obscura_cdp_url() == "ws://127.0.0.1:9222"
+    assert obscura_cdp_url() == "ws://127.0.0.1:9222/devtools/browser"
     monkeypatch.setenv("OBSCURA_CDP_URL", "ws://127.0.0.1:9333/")
-    assert obscura_cdp_url() == "ws://127.0.0.1:9333"
+    assert obscura_cdp_url() == "ws://127.0.0.1:9333/devtools/browser"
     # Legacy http(s) env values are rewritten to ws(s) for Playwright.
     monkeypatch.setenv("OBSCURA_CDP_URL", "http://127.0.0.1:9333/")
-    assert obscura_cdp_url() == "ws://127.0.0.1:9333"
+    assert obscura_cdp_url() == "ws://127.0.0.1:9333/devtools/browser"
     monkeypatch.setenv("OBSCURA_CDP_URL", "https://cdp.example:9443")
-    assert obscura_cdp_url() == "wss://cdp.example:9443"
+    assert obscura_cdp_url() == "wss://cdp.example:9443/devtools/browser"
+    # Full debugger path is left intact.
+    monkeypatch.setenv("OBSCURA_CDP_URL", "ws://127.0.0.1:9222/devtools/browser")
+    assert obscura_cdp_url() == "ws://127.0.0.1:9222/devtools/browser"
 
 
 async def test_await_or_abandon_returns_before_hung_coro() -> None:
