@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       x11vnc \
       novnc \
       websockify \
+      nginx \
+      curl \
       fonts-liberation \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -25,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build/services/connect-agent
 COPY --from=builder /build /build
 COPY services/connect-agent/entrypoint.sh /entrypoint.sh
+COPY deploy/connect-nginx.conf /etc/rivalradar/connect-nginx.conf
 
 ENV PATH="/build/services/connect-agent/.venv/bin:$PATH" \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
@@ -37,14 +40,14 @@ ENV PATH="/build/services/connect-agent/.venv/bin:$PATH" \
 
 RUN playwright install --with-deps chromium \
     && chmod +x /entrypoint.sh \
-    && mkdir -p /tmp/.X11-unix /data/profiles \
+    && mkdir -p /tmp/.X11-unix /data/profiles /var/log/nginx /var/lib/nginx /var/cache/nginx \
     && chmod 1777 /tmp/.X11-unix \
     && chmod -R a+rwX /data/profiles \
-    && chmod -R a+rX /opt/ms-playwright
+    && chmod -R a+rX /opt/ms-playwright /etc/rivalradar
 
-EXPOSE 8765 7900
+EXPOSE 8765 7900 8080
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=25s --retries=5 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health').read()"
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
+    CMD python -c "import os,urllib.request; p=os.environ.get('PORT') or '8765'; urllib.request.urlopen(f'http://127.0.0.1:{p}/health').read()"
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -112,7 +112,7 @@ export function ConnectCenter({
       setError(
         err instanceof Error
           ? err.message
-          : "Could not open Connect browser — is connect-agent running in Compose?",
+          : "Could not open Connect browser — is rivalradar-connect / connect-agent running?",
       );
     } finally {
       setBusy(null);

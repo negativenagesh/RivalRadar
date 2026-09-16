@@ -8,10 +8,17 @@ import httpx
 
 from app.config import settings
 
-_OFFLINE_HINT = (
-    "Connect agent is offline. Start the stack with `docker compose up -d` "
-    "(includes connect-agent). Viewer: http://localhost:7900"
-)
+
+def offline_hint() -> str:
+    viewer = (settings.connect_viewer_url or "").strip() or "http://localhost:7900"
+    agent = (settings.connect_agent_url or "").strip() or "http://connect-agent:8765"
+    return (
+        "Connect agent is offline. "
+        "Locally: `docker compose up -d connect-agent`. "
+        f"On Render: deploy the rivalradar-connect service and set "
+        f"CONNECT_AGENT_URL / CONNECT_VIEWER_URL on the API. "
+        f"(agent={agent}, viewer={viewer})"
+    )
 
 
 class ConnectAgentError(RuntimeError):
@@ -38,7 +45,7 @@ def public_viewer_url() -> str | None:
 
 async def agent_health() -> bool:
     try:
-        async with httpx.AsyncClient(base_url=settings.connect_agent_url, timeout=3.0) as client:
+        async with httpx.AsyncClient(base_url=settings.connect_agent_url, timeout=5.0) as client:
             response = await client.get("/health")
             return response.status_code == 200
     except Exception:  # noqa: BLE001
@@ -66,7 +73,7 @@ async def agent_start_session(
         async with httpx.AsyncClient(base_url=settings.connect_agent_url, timeout=90.0) as client:
             response = await client.post("/sessions", json=payload)
     except httpx.HTTPError as exc:
-        raise ConnectAgentError(_OFFLINE_HINT) from exc
+        raise ConnectAgentError(offline_hint()) from exc
     if response.status_code >= 400:
         raise ConnectAgentError(_detail_from_response(response), status_code=502)
     result: dict[str, Any] = response.json()

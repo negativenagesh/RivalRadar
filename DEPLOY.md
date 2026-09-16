@@ -66,10 +66,21 @@ Free tier sleeps after idle. The navbar **Waking API…** chip polls until green
 2. Env: `NEXT_PUBLIC_GATEWAY_URL=https://YOUR-API.onrender.com`
 3. Deploy / redeploy after changing the gateway URL (build-time inlined).
 
-## 4. Optional full stack (Scout / stage-post / Connect)
-Mission creative + publish captions + intel work on the Render API alone.
-Scout, stage-post, comment-drop, and Connect noVNC still need `ingestion` + `connect-agent`
-(Docker Compose / a paid host with Playwright).
+## 4. Connect browser (LinkedIn / X / Instagram) on Render
+
+Mission creative works without Connect. To open the noVNC login browser from Vercel:
+
+1. Blueprint deploys **`rivalradar-connect`** (Playwright + noVNC on one port).
+2. Open that service → copy its URL, e.g. `https://rivalradar-connect-xxxx.onrender.com`
+3. On **rivalradar-api** → Environment, set:
+   - `CONNECT_AGENT_URL=https://rivalradar-connect-xxxx.onrender.com`
+   - `CONNECT_VIEWER_URL=https://rivalradar-connect-xxxx.onrender.com/vnc.html?autoconnect=1&resize=scale`
+4. Save (API restarts). Click **Connect LinkedIn** on the Vercel site → a Connect browser tab should open.
+5. Sign in yourself → **I've logged in**.
+
+If `rivalradar-connect` crashes / OOM on free tier, upgrade that service to **Starter** (Chromium needs RAM). Locally you can instead run `docker compose up -d connect-agent` and point a tunnel, or use the full Compose stack.
+
+## 5. Optional full stack (Scout / stage-post)
 
 ## Rate limits (per edge IP)
 - `/creative/generate` 20/hour

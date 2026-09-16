@@ -58,6 +58,20 @@ class Settings(BaseSettings):
             return _normalize_database_url(value)
         return value
 
+    @field_validator("connect_agent_url", mode="before")
+    @classmethod
+    def _blank_agent_url(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return "http://connect-agent:8765"
+        return value
+
+    @field_validator("connect_viewer_url", mode="before")
+    @classmethod
+    def _blank_viewer_url(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return "http://localhost:7900/vnc.html?autoconnect=1&resize=scale"
+        return value
+
     @property
     def database_ssl(self) -> bool:
         return _host_needs_ssl(self.database_url)
