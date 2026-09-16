@@ -40,14 +40,24 @@ class CookiesBody(BaseModel):
 
 
 def _viewer_url() -> str | None:
+    """Browser-facing noVNC URL.
+
+    Prefer an explicit PUBLIC_VIEWER_URL, but ignore localhost defaults when
+    running on Render (RENDER_EXTERNAL_URL) so operators don't get
+    localhost:7900 from the Docker image ENV.
+    """
     value = (os.environ.get("PUBLIC_VIEWER_URL") or "").strip()
-    if value:
-        return value
-    # Render injects RENDER_EXTERNAL_URL for the public service host.
     external = (os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    if value and not _is_local_viewer(value):
+        return value
     if external:
         return f"{external}/vnc.html?autoconnect=1&resize=scale"
-    return None
+    return value or None
+
+
+def _is_local_viewer(url: str) -> bool:
+    lower = url.lower()
+    return "localhost" in lower or "127.0.0.1" in lower
 
 
 @app.get("/health")

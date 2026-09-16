@@ -36,7 +36,7 @@ ENV PATH="/build/services/connect-agent/.venv/bin:$PATH" \
     VNC_PORT=5900 \
     NOVNC_PORT=7900 \
     CONNECT_IN_DOCKER=1 \
-    PUBLIC_VIEWER_URL=http://localhost:7900/vnc.html?autoconnect=1&resize=scale
+    PUBLIC_VIEWER_URL=
 
 RUN playwright install --with-deps chromium \
     && chmod +x /entrypoint.sh \
