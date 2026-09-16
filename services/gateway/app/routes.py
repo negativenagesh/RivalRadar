@@ -736,8 +736,15 @@ async def start_connect_session(
     raw_viewer = agent.get("viewer_url")
     if isinstance(raw_viewer, str) and raw_viewer.strip():
         viewer = raw_viewer.strip()
-    else:
-        viewer = public_viewer_url()
+    configured = public_viewer_url()
+    # Prefer gateway CONNECT_VIEWER_URL when the agent still returns localhost
+    # (old image ENV default) so Render/Vercel operators open the public noVNC.
+    if configured and (
+        not viewer
+        or "localhost" in viewer.lower()
+        or "127.0.0.1" in viewer.lower()
+    ):
+        viewer = configured
     detail = str(
         agent.get("detail")
         or (

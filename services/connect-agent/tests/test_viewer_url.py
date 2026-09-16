@@ -1,4 +1,3 @@
-
 from app.main import _viewer_url
 
 
@@ -14,6 +13,17 @@ def test_viewer_url_prefers_public_env(monkeypatch) -> None:
 def test_viewer_url_from_render_external(monkeypatch) -> None:
     monkeypatch.delenv("PUBLIC_VIEWER_URL", raising=False)
     monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://rivalradar-connect.onrender.com/")
+    assert _viewer_url() == (
+        "https://rivalradar-connect.onrender.com/vnc.html?autoconnect=1&resize=scale"
+    )
+
+
+def test_viewer_url_ignores_localhost_when_render_set(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "PUBLIC_VIEWER_URL",
+        "http://localhost:7900/vnc.html?autoconnect=1&resize=scale",
+    )
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://rivalradar-connect.onrender.com")
     assert _viewer_url() == (
         "https://rivalradar-connect.onrender.com/vnc.html?autoconnect=1&resize=scale"
     )
