@@ -57,6 +57,10 @@ services:
         value: http://127.0.0.1:8001
       - key: OBJECT_STORE_ROOT
         value: /data/objects
+      - key: BROWSER_ENGINE
+        value: obscura
+      - key: OBSCURA_CDP_URL
+        value: http://127.0.0.1:9222
       # After connect service is live, set both to that service's public HTTPS URL
       # (viewer = same host + /vnc.html?autoconnect=1&resize=scale).
       - key: CONNECT_AGENT_URL

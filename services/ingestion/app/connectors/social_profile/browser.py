@@ -26,6 +26,20 @@ _LAUNCH_S = 25.0
 _CLOSE_S = 8.0
 
 
+def browser_engine() -> str:
+    """obscura on Render/Docker; chromium for local/CI (unless overridden)."""
+    raw = (os.environ.get("BROWSER_ENGINE") or "").strip().lower()
+    if raw in {"obscura", "chromium"}:
+        return raw
+    if running_in_docker() or os.environ.get("RENDER"):
+        return "obscura"
+    return "chromium"
+
+
+def obscura_cdp_url() -> str:
+    return (os.environ.get("OBSCURA_CDP_URL") or "http://127.0.0.1:9222").rstrip("/")
+
+
 def running_in_docker() -> bool:
     if os.environ.get("CONNECT_IN_DOCKER") == "1":
         return True
@@ -72,8 +86,7 @@ async def await_or_abandon[T](awaitable: Awaitable[T], seconds: float) -> T:
 
 class BrowserSession:
     """Owns one Playwright browser + context for the lifetime of an
-    ingestion run. Recording (if requested) is Playwright's built-in
-    per-context video capture -- written on context close, no extra deps.
+    ingestion run. Default engine is Obscura via CDP (light RAM on Render).
     """
 
     def __init__(
@@ -92,35 +105,73 @@ class BrowserSession:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
+        self._owns_browser = True  # False when attached to shared Obscura CDP
         self.page: Page | None = None
 
     async def __aenter__(self) -> BrowserSession:
         self._playwright = await await_or_abandon(async_playwright().start(), _LAUNCH_S)
+        engine = browser_engine()
         try:
-            self._browser = await await_or_abandon(
-                self._playwright.chromium.launch(
-                    headless=self._headless,
-                    args=_chromium_args(headless=self._headless),
+            if engine == "obscura":
+                await self._connect_obscura()
+            else:
+                await self._launch_chromium()
+        except TimeoutError:
+            await self._force_stop()
+            raise RuntimeError(f"{engine} browser launch timed out") from None
+        except Exception:
+            await self._force_stop()
+            raise
+
+        return self
+
+    async def _connect_obscura(self) -> None:
+        assert self._playwright is not None
+        cdp = obscura_cdp_url()
+        logger.info("browser engine=obscura cdp=%s", cdp)
+        self._browser = await await_or_abandon(
+            self._playwright.chromium.connect_over_cdp(cdp),
+            _LAUNCH_S,
+        )
+        self._owns_browser = False
+        # Prefer an existing default context from obscura serve; else create one.
+        if self._browser.contexts:
+            self._context = self._browser.contexts[0]
+        else:
+            self._context = await await_or_abandon(
+                self._browser.new_context(
+                    viewport={"width": 1280, "height": 900},
+                    user_agent=CONNECT_UA,
+                    locale="en-US",
                 ),
                 _LAUNCH_S,
             )
-        except TimeoutError:
-            await self._force_stop()
-            raise RuntimeError("Chromium launch timed out") from None
+        if self._cookies or self._storage_state:
+            await self._inject_cookies(self._cookies)
+        self.page = await await_or_abandon(self._context.new_page(), _LAUNCH_S)
 
+    async def _launch_chromium(self) -> None:
+        assert self._playwright is not None
+        logger.info("browser engine=chromium")
+        self._browser = await await_or_abandon(
+            self._playwright.chromium.launch(
+                headless=self._headless,
+                args=_chromium_args(headless=self._headless),
+            ),
+            _LAUNCH_S,
+        )
+        self._owns_browser = True
         context_kwargs: dict[str, Any] = {
             "viewport": {"width": 1280, "height": 900},
             "user_agent": CONNECT_UA,
             "locale": "en-US",
             "timezone_id": "America/Los_Angeles",
-            # Extra stability + realism
             "screen": {"width": 1280, "height": 900},
             "color_scheme": "light",
             "reduced_motion": "no-preference",
             "forced_colors": "none",
+            "bypass_csp": False,
         }
-        # Block heavy resources to avoid OOM on Render free tier
-        context_kwargs["bypass_csp"] = False
         if self._storage_state:
             context_kwargs["storage_state"] = self._storage_state
         if self._record:
@@ -128,17 +179,12 @@ class BrowserSession:
             context_kwargs["record_video_dir"] = str(self._video_dir)
             context_kwargs["record_video_size"] = {"width": 1280, "height": 800}
 
-        try:
-            self._context = await await_or_abandon(
-                self._browser.new_context(**context_kwargs), _LAUNCH_S
-            )
-            if not self._storage_state or self._cookies:
-                await self._inject_cookies(self._cookies)
-            self.page = await await_or_abandon(self._context.new_page(), _LAUNCH_S)
-        except TimeoutError:
-            await self._force_stop()
-            raise RuntimeError("Chromium context timed out") from None
-        return self
+        self._context = await await_or_abandon(
+            self._browser.new_context(**context_kwargs), _LAUNCH_S
+        )
+        if not self._storage_state or self._cookies:
+            await self._inject_cookies(self._cookies)
+        self.page = await await_or_abandon(self._context.new_page(), _LAUNCH_S)
 
     async def _inject_cookies(self, cookies: list[dict[str, Any]]) -> None:
         assert self._context is not None
@@ -167,12 +213,21 @@ class BrowserSession:
             except Exception:  # noqa: BLE001
                 logger.debug("browser stop ignored", exc_info=True)
 
-        if self._context is not None:
-            await _quiet(self._context.close())
+        # When attached to Obscura CDP, only close our page — leave the shared server up.
+        if self.page is not None and not self._owns_browser:
+            await _quiet(self.page.close())
+            self.page = None
             self._context = None
-        if self._browser is not None:
-            await _quiet(self._browser.close())
-            self._browser = None
+            if self._browser is not None:
+                await _quiet(self._browser.close())  # disconnect CDP client
+                self._browser = None
+        else:
+            if self._context is not None:
+                await _quiet(self._context.close())
+                self._context = None
+            if self._browser is not None:
+                await _quiet(self._browser.close())
+                self._browser = None
         if self._playwright is not None:
             await _quiet(self._playwright.stop())
             self._playwright = None
@@ -184,7 +239,7 @@ class BrowserSession:
         tb: TracebackType | None,
     ) -> None:
         video_path: Path | None = None
-        if self._context is not None:
+        if self._owns_browser and self._context is not None:
             page_video = self.page.video if self.page else None
             try:
                 await await_or_abandon(self._context.close(), _CLOSE_S)
@@ -205,5 +260,10 @@ class BrowserSession:
 
     async def screenshot_jpeg_b64(self) -> str:
         assert self.page is not None
-        data = await self.page.screenshot(type="jpeg", quality=40)
-        return base64.b64encode(data).decode("ascii")
+        try:
+            data = await self.page.screenshot(type="jpeg", quality=40)
+            return base64.b64encode(data).decode("ascii")
+        except Exception as exc:  # noqa: BLE001
+            # Obscura may lack full compositor/screenshot; keep scout going.
+            logger.warning("screenshot skipped (%s)", exc)
+            return ""

@@ -1,4 +1,5 @@
 # RivalRadar API for Render: gateway + generation + ingestion (Scout) in one service.
+# Scout uses Obscura (~30MB) via CDP instead of Chromium — fits free 512MB tier.
 # Frontend stays on Vercel. Set NVIDIA_API_KEY + AGNES_API_KEY in the dashboard.
 FROM python:3.12-slim AS builder
 
@@ -25,28 +26,33 @@ RUN uv sync --no-install-project --no-dev && uv sync --no-dev
 
 FROM python:3.12-slim AS runtime
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    CONNECT_IN_DOCKER=1
+ENV CONNECT_IN_DOCKER=1 \
+    BROWSER_ENGINE=obscura \
+    OBSCURA_CDP_URL=http://127.0.0.1:9222 \
+    OBSCURA_VERSION=v0.2.2
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 appuser
+
+# Obscura headless browser (x86_64 Linux for Render). Keep worker beside binary.
+RUN mkdir -p /opt/obscura \
+    && curl -fsSL -o /tmp/obscura.tar.gz \
+      "https://github.com/h4ckf0r0day/obscura/releases/download/${OBSCURA_VERSION}/obscura-x86_64-linux.tar.gz" \
+    && tar -xzf /tmp/obscura.tar.gz -C /opt/obscura \
+    && chmod +x /opt/obscura/obscura /opt/obscura/obscura-worker \
+    && ln -sf /opt/obscura/obscura /usr/local/bin/obscura \
+    && rm -f /tmp/obscura.tar.gz \
+    && mkdir -p /data/objects \
+    && chown -R appuser:appuser /data/objects /opt/obscura
 
 WORKDIR /build
 COPY --from=builder --chown=appuser:appuser /build /build
 COPY --chown=appuser:appuser deploy/start-api.sh /build/deploy/start-api.sh
 RUN chmod +x /build/deploy/start-api.sh
 
-# Playwright Chromium for Scout (LinkedIn / IG / X). Heavy but required for Start Scout.
-ENV PATH="/build/services/ingestion/.venv/bin:/build/services/generation/.venv/bin:/build/services/gateway/.venv/bin:$PATH"
-RUN playwright install --with-deps chromium \
-    && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
-    && chmod -R a+rX /opt/ms-playwright \
-    && mkdir -p /data/objects \
-    && chown -R appuser:appuser /data/objects /opt/ms-playwright
-
-ENV MISSION_TEXT_MODEL=gptoss \
+ENV PATH="/build/services/ingestion/.venv/bin:/build/services/generation/.venv/bin:/build/services/gateway/.venv/bin:/usr/local/bin:$PATH" \
+    MISSION_TEXT_MODEL=gptoss \
     MISSION_IMAGE_MODEL=agnes \
     GENERATION_INTERNAL_PORT=8003 \
     INGESTION_INTERNAL_PORT=8001 \
@@ -58,7 +64,7 @@ ENV MISSION_TEXT_MODEL=gptoss \
 
 USER appuser
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
     CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/ready" || exit 1
 
 CMD ["/build/deploy/start-api.sh"]
