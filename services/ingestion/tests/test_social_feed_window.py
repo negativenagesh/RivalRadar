@@ -4,11 +4,10 @@ from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock
 
 import pytest
-
 from app.connectors.social_feed import (
     _PAST_WINDOW_STOP,
-    _order_targets_for_engine,
     SocialFeedConnector,
+    _order_targets_for_engine,
 )
 from app.connectors.social_profile.targets import ProfileTarget
 from app.date_window import DateWindow
@@ -41,7 +40,9 @@ def test_order_targets_prioritizes_http_oss_on_obscura(monkeypatch: pytest.Monke
         lambda: "obscura",
     )
     targets = [
-        ProfileTarget(handle="pixisai", platform="linkedin", url="https://linkedin.com/company/pixisai"),
+        ProfileTarget(
+            handle="pixisai", platform="linkedin", url="https://linkedin.com/company/pixisai"
+        ),
         ProfileTarget(handle="pixis", platform="instagram", url="https://instagram.com/pixis"),
         ProfileTarget(handle="pixisai", platform="x", url="https://x.com/pixisai"),
     ]

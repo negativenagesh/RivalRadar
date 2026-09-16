@@ -346,9 +346,7 @@ class SocialFeedConnector:
         self, platform: str, *, handle: str, url: str
     ) -> tuple[RawAccount, list[RawPost]]:
         stop = asyncio.Event()
-        hb = asyncio.create_task(
-            self._oss_heartbeat(platform=platform, stop=stop)
-        )
+        hb = asyncio.create_task(self._oss_heartbeat(platform=platform, stop=stop))
         try:
             return await await_or_abandon(
                 self._oss_fetch(platform, handle=handle, url=url),
@@ -383,12 +381,7 @@ class SocialFeedConnector:
         if browser_engine() == "obscura":
             await self._emit(
                 "action",
-                {
-                    "detail": (
-                        "oss_fallback platform=linkedin "
-                        "reason=obscura_skip_linkedin_scraper"
-                    )
-                },
+                {"detail": ("oss_fallback platform=linkedin reason=obscura_skip_linkedin_scraper")},
             )
             await self._browser_fallback(target, record=record)
             return
@@ -559,9 +552,7 @@ class SocialFeedConnector:
             )
 
         await self._emit("action", {"detail": f"collecting_posts platform={platform}"})
-        post_urls = await self._collect_post_urls_bounded(
-            page, platform=platform, profile_url=url
-        )
+        post_urls = await self._collect_post_urls_bounded(page, platform=platform, profile_url=url)
 
         await self._emit(
             "action",
@@ -688,20 +679,13 @@ class SocialFeedConnector:
     ) -> str:
         try:
             return await await_or_abandon(
-                self._ingest_post(
-                    session, handle=handle, platform=platform, post_url=post_url
-                ),
+                self._ingest_post(session, handle=handle, platform=platform, post_url=post_url),
                 _POST_BUDGET_S,
             )
         except TimeoutError:
             await self._emit(
                 "error",
-                {
-                    "detail": (
-                        f"ingest_post timed out after {_POST_BUDGET_S}s "
-                        f"{post_url[:120]}"
-                    )
-                },
+                {"detail": (f"ingest_post timed out after {_POST_BUDGET_S}s {post_url[:120]}")},
             )
             return "failed"
 
@@ -775,8 +759,7 @@ class SocialFeedConnector:
                 "action",
                 {
                     "detail": (
-                        f"skipped_post reason=outside_window day={day.isoformat()} "
-                        f"{post_url[:120]}"
+                        f"skipped_post reason=outside_window day={day.isoformat()} {post_url[:120]}"
                     )
                 },
             )
@@ -1029,7 +1012,9 @@ class SocialFeedConnector:
                 "jpeg_b64": base64.b64encode(data).decode("ascii"),
                 "mime": mime,
                 "platform": platform,
-                "url": next((t[5:] for t in post.get("theme_tags") or [] if t.startswith("link:")), ""),
+                "url": next(
+                    (t[5:] for t in post.get("theme_tags") or [] if t.startswith("link:")), ""
+                ),
                 "handle": handle,
                 "label": f"{handle or post['external_post_id']} media",
             },
