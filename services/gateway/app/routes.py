@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 import uuid
 from collections.abc import AsyncIterator
 
@@ -41,6 +42,7 @@ from app.clients import (
     trigger_digest_generation,
     trigger_ingestion_run,
 )
+from app.config import settings
 from app.connect_agent import (
     ConnectAgentError,
     agent_close_session,
@@ -83,6 +85,9 @@ from app.schemas import (
     QuickConnectRequest,
 )
 from app.vault import decrypt_json, encrypt_json
+from app.ws_proxy import ingestion_live_upstream_url, proxy_client_to_upstream
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -458,8 +463,23 @@ async def cancel_ingestion_run_route(run_id: str) -> dict[str, object]:
 
 @router.websocket("/ingestion/runs/{run_id}/live")
 async def ingestion_run_live_feed(websocket: WebSocket, run_id: str) -> None:
-    """Live scout feed — same Redis stream ingestion publishes to."""
+    """Live scout feed.
+
+    Prefer proxying to ingestion's WS — events are published there. With
+    REDIS_URL=memory, gateway FakeRedis never sees those events.
+    Falls back to the local bus when the upstream is unreachable (tests /
+    shared Redis still works via subscribe).
+    """
     await websocket.accept()
+    upstream = ingestion_live_upstream_url(settings.ingestion_service_url, run_id)
+    try:
+        await proxy_client_to_upstream(websocket, upstream)
+        return
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ingestion live proxy failed (%s); falling back to local bus", exc)
+
     event_bus = get_event_bus()
     try:
         async for event in event_bus.subscribe(run_id):

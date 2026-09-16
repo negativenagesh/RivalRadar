@@ -29,7 +29,7 @@
 | `OBJECT_STORE_ROOT` | `/data/objects` |
 | `BROWSER_ENGINE` | `obscura` |
 | `OBSCURA_CDP_URL` | `ws://127.0.0.1:9222` |
-| `REDIS_URL` | `memory` (fine for Mission; set Upstash URL later for live scout WS) |
+| `REDIS_URL` | `memory` (fine for Mission; Scout live WS is proxied gateway→ingestion so FakeRedis is OK) |
 | `DISALLOW_ENV_SOCIAL_COOKIES` | `true` |
 
 ### Optional (analytics)
