@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 _CODE_ALPHABET = string.ascii_uppercase + string.digits
@@ -153,41 +151,21 @@ def normalize_cookies(platform: str, raw: list[dict[str, Any]]) -> list[dict[str
     if missing:
         raise ValueError(
             f"Missing required cookie(s) for {platform}: {', '.join(missing)}. "
-            "Open that site in Chrome, stay signed in, then click Connect in the extension."
+            "Open that site in your browser (Chrome or Comet), stay signed in, then click Connect."
         )
     return out
 
 
 async def probe_session(platform: str, cookies: list[dict[str, Any]]) -> tuple[bool, str]:
-    """Best-effort session check. Returns (ok, detail). Network errors → soft accept."""
-    cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-    headers = {"Cookie": cookie_header, "User-Agent": "RivalRadar/1.0"}
-    try:
-        if platform == "linkedin":
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
-                res = await client.get(
-                    "https://www.linkedin.com/voyager/api/me",
-                    headers={**headers, "csrf-token": "ajax:1"},
-                )
-            if res.status_code in {200, 201}:
-                return True, "LinkedIn session verified"
-            if res.status_code in {401, 403}:
-                return False, "LinkedIn rejected the session cookie — sign in again in Chrome"
-            return True, f"LinkedIn probe returned {res.status_code} — stored unverified"
-        if platform == "x":
-            ct0 = next((c["value"] for c in cookies if c["name"] == "ct0"), "")
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
-                res = await client.get(
-                    "https://api.x.com/1.1/account/verify_credentials.json",
-                    headers={**headers, "x-csrf-token": ct0},
-                )
-            if res.status_code == 200:
-                return True, "X session verified"
-            if res.status_code in {401, 403}:
-                return False, "X rejected the session — sign in again in Chrome"
-            return True, f"X probe returned {res.status_code} — stored unverified"
-        # Instagram / TikTok / Threads: accept after required cookies present.
-        return True, f"{platform} cookies accepted (no live probe)"
-    except Exception as exc:  # noqa: BLE001
-        logger.info("quick-connect probe soft-fail for %s: %s", platform, exc)
-        return True, f"{platform} cookies stored (probe unreachable)"
+    """Accept when required auth cookies exist; live probes are unreliable from datacenter IPs.
+
+    LinkedIn/X often return 401/403 to server-side requests even with valid user cookies
+    (IP reputation, CSRF checks, Comet/Chromium fingerprinting). So we do NOT reject on
+    probe failure — the scout will surface auth issues at run time instead.
+    """
+    required = PLATFORM_COOKIE_SPEC.get(platform.lower(), {}).get("required", [])
+    have = {c["name"].lower() for c in cookies}
+    missing = [n.lower() for n in required if n.lower() not in have]
+    if missing:
+        return False, f"Missing auth cookie(s): {', '.join(missing)}"
+    return True, f"{platform} session cookies accepted (verified at scout time)"
