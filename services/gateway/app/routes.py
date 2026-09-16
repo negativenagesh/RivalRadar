@@ -160,9 +160,10 @@ async def _vaulted_sessions(
 ) -> dict[str, object]:
     from app.vault_sessions import load_vaulted_platform_sessions
 
-    return await load_vaulted_platform_sessions(
+    loaded = await load_vaulted_platform_sessions(
         session, workspace_id=workspace_id, platforms=platforms
     )
+    return {k: v for k, v in loaded.items()}
 
 
 @router.get("/models/defaults")
