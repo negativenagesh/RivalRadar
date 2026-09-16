@@ -21,6 +21,7 @@ from playwright.async_api import Locator, Page
 from app.connectors.session_cookies import cookies_from_sessions, storage_state_from_sessions
 from app.connectors.social_feed_parse import normalize_platform, settle_page
 from app.connectors.social_profile.browser import BrowserSession
+from app.pacing import action_pause, check_rate_limit, jittered_pause, random_scroll, record_action
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,15 @@ _INSTAGRAM_CAPTION = [
 
 class StagePostError(ValueError):
     pass
+
+
+class RateLimitError(StagePostError):
+    def __init__(self, platform: str, retry_after: float) -> None:
+        super().__init__(
+            f"{platform} rate limited — wait {int(retry_after)}s before next action. "
+            "This protects your account from platform throttles."
+        )
+        self.retry_after = retry_after
 
 
 async def stage_pause() -> None:
@@ -125,22 +135,24 @@ async def _wait_first(page: Page, selectors: list[str]) -> Locator | None:
 async def _stage_linkedin(page: Page, caption: str, media_path: str | None) -> None:
     await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=25_000)
     await settle_page(page, quiet_ms=200)
-    await stage_pause()
+    await jittered_pause(2.0, 4.0, label="linkedin feed load")
+    await random_scroll(page)
     if not await _click_first(page, _LINKEDIN_START):
         raise StagePostError("could not find the linkedin composer")
+    await jittered_pause(1.5, 3.0, label="linkedin composer open")
     editor = await _wait_first(page, _LINKEDIN_EDITOR)
     if editor is None:
         raise StagePostError("linkedin editor did not open")
     if media_path:
         await _set_image(page, media_path)
-        await stage_pause()
-    await _fill_caption(page, editor, caption, delay=20)
+        await jittered_pause(2.0, 5.0, label="linkedin image attach")
+    await _fill_caption(page, editor, caption, delay=random.randint(30, 80))
 
 
 async def _stage_x(page: Page, caption: str, media_path: str | None) -> None:
     await page.goto("https://x.com/compose/post", wait_until="domcontentloaded", timeout=25_000)
     await settle_page(page, quiet_ms=200)
-    await stage_pause()
+    await jittered_pause(2.0, 4.0, label="x compose load")
     composer = page.locator("div[data-testid='tweetTextarea_0']").first
     try:
         await composer.wait_for(state="visible", timeout=8000)
@@ -152,29 +164,31 @@ async def _stage_x(page: Page, caption: str, media_path: str | None) -> None:
             await file_input.set_input_files(media_path, timeout=5000)
         except Exception:  # noqa: BLE001
             await _set_image(page, media_path)
-        await stage_pause()
+        await jittered_pause(2.0, 5.0, label="x image attach")
     await composer.click(timeout=4000)
-    await page.keyboard.type(caption, delay=15)
+    await page.keyboard.type(caption, delay=random.randint(25, 70))
 
 
 async def _stage_instagram(page: Page, caption: str, media_path: str | None) -> None:
     await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=25_000)
     await settle_page(page, quiet_ms=200)
-    await stage_pause()
+    await jittered_pause(2.0, 4.0, label="instagram home load")
+    await random_scroll(page)
     if not await _click_first(page, _INSTAGRAM_NEW_POST):
         raise StagePostError("could not find the instagram new-post button")
+    await jittered_pause(1.5, 3.0, label="instagram composer open")
     if media_path:
         if not await _set_image(page, media_path):
             raise StagePostError("could not attach image in instagram composer")
-        await stage_pause()
+        await jittered_pause(2.0, 5.0, label="instagram image attach")
     for _ in range(2):
         if not await _click_first(page, _INSTAGRAM_NEXT):
             break
-        await stage_pause()
+        await jittered_pause(1.5, 3.5, label="instagram next")
     field = await _wait_first(page, _INSTAGRAM_CAPTION)
     if field is None:
         raise StagePostError("instagram caption field not found")
-    await _fill_caption(page, field, caption, delay=20)
+    await _fill_caption(page, field, caption, delay=random.randint(30, 80))
 
 
 
@@ -284,6 +298,12 @@ async def stage_post(
     platform_sessions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     plat = validate_stage(platform=platform, caption=caption, approved=approved)
+
+    # Rate limit check (protects account from platform throttles)
+    allowed, retry_after = check_rate_limit(plat)
+    if not allowed:
+        raise RateLimitError(plat, retry_after or 60.0)
+
     sessions = platform_sessions or {}
     cookie_plats = {plat, "twitter"} if plat == "x" else {plat, "google"} if plat == "youtube" else {plat}
     cookies = cookies_from_sessions(sessions, platforms=cookie_plats)
@@ -305,11 +325,15 @@ async def stage_post(
             page = session.page
             try:
                 await _stage_on_platform(page, plat, text, media_path)
+                # Simulate reading the composed post before staging
+                await random_scroll(page)
+                await jittered_pause(3.0, 6.0, label="review post")
             except StagePostError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 raise StagePostError(f"could not stage on {plat}: {exc}") from exc
-            await stage_pause()
+            record_action(plat)
+            await action_pause(plat)
             # Deliberately stop here: never click Post / Share / Tweet.
             jpeg = await session.screenshot_jpeg_b64()
             return {

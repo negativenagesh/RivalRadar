@@ -10,6 +10,7 @@ from typing import Any
 from app.connectors.session_cookies import cookies_from_sessions, storage_state_from_sessions
 from app.connectors.social_feed_parse import normalize_platform, settle_page
 from app.connectors.social_profile.browser import BrowserSession
+from app.pacing import action_pause, check_rate_limit, jittered_pause, random_scroll, record_action
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,14 @@ class CommentDropError(ValueError):
     pass
 
 
+class CommentRateLimitError(CommentDropError):
+    def __init__(self, platform: str, retry_after: float) -> None:
+        super().__init__(
+            f"{platform} rate limited — wait {int(retry_after)}s. Protects your account."
+        )
+        self.retry_after = retry_after
+
+
 async def human_pause() -> None:
     await asyncio.sleep(random.uniform(PAUSE_MIN_S, PAUSE_MAX_S))
 
@@ -74,6 +83,12 @@ async def drop_comment(
     platform_sessions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     plat = validate_drop(platform=platform, url=url, text=text, approved=approved)
+
+    # Rate limit check
+    allowed, retry_after = check_rate_limit(plat)
+    if not allowed:
+        raise CommentRateLimitError(plat, retry_after or 60.0)
+
     sessions = platform_sessions or {}
     cookies = cookies_from_sessions(sessions, platforms={plat, "twitter"} if plat == "x" else {plat})
     storage = storage_state_from_sessions(
@@ -87,6 +102,8 @@ async def drop_comment(
         page = session.page
         await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
         await settle_page(page, quiet_ms=200)
+        await jittered_pause(2.0, 4.0, label="post page load")
+        await random_scroll(page)
         await human_pause()
         filled = False
         for sel in _COMPOSERS[plat]:
@@ -95,13 +112,14 @@ async def drop_comment(
                 if await loc.count() == 0:
                     continue
                 await loc.click(timeout=4000)
+                await jittered_pause(1.0, 2.5, label="comment focus")
                 await loc.fill(text.strip(), timeout=4000)
                 filled = True
                 break
             except Exception:  # noqa: BLE001
                 try:
                     await loc.click(timeout=3000)
-                    await page.keyboard.type(text.strip(), delay=40)
+                    await page.keyboard.type(text.strip(), delay=random.randint(40, 90))
                     filled = True
                     break
                 except Exception:  # noqa: BLE001
@@ -122,6 +140,8 @@ async def drop_comment(
                 continue
         if not submitted:
             await page.keyboard.press("Enter")
+        record_action(plat)
+        await action_pause(plat)
         jpeg = await session.screenshot_jpeg_b64()
         return {
             "ok": True,
