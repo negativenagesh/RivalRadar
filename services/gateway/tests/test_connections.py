@@ -105,7 +105,7 @@ async def test_connect_session_agent_offline(
 async def test_pairing_and_quick_connect(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _probe(platform: str, cookies: list) -> tuple[bool, str]:
+    async def _probe(platform: str, cookies: list[dict[str, object]]) -> tuple[bool, str]:
         assert platform == "linkedin"
         assert any(c["name"] == "li_at" for c in cookies)
         return True, "LinkedIn session verified"
