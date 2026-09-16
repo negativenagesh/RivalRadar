@@ -41,7 +41,13 @@ class CookiesBody(BaseModel):
 
 def _viewer_url() -> str | None:
     value = (os.environ.get("PUBLIC_VIEWER_URL") or "").strip()
-    return value or None
+    if value:
+        return value
+    # Render injects RENDER_EXTERNAL_URL for the public service host.
+    external = (os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    if external:
+        return f"{external}/vnc.html?autoconnect=1&resize=scale"
+    return None
 
 
 @app.get("/health")

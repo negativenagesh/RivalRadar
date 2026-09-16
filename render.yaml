@@ -1,8 +1,12 @@
-# Render Blueprint — backend API (gateway + generation).
+# Render Blueprint — API (gateway+generation) + Connect agent (noVNC browser).
 # Fill secrets when prompted (never commit keys):
 #   NVIDIA_API_KEY, AGNES_API_KEY, CORS_ORIGINS
 # Optional: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-# Frontend (Vercel): NEXT_PUBLIC_GATEWAY_URL → this service URL.
+# After first deploy, set on rivalradar-api (Environment):
+#   CONNECT_AGENT_URL=https://<rivalradar-connect>.onrender.com
+#   CONNECT_VIEWER_URL=https://<rivalradar-connect>.onrender.com/vnc.html?autoconnect=1&resize=scale
+# Connect needs RAM for Chromium — if free tier OOMs, bump rivalradar-connect to Starter.
+# Frontend (Vercel): NEXT_PUBLIC_GATEWAY_URL → rivalradar-api URL.
 # Social platform cookies are NEVER loaded from env — users sign in via Connect browser.
 
 services:
@@ -35,7 +39,6 @@ services:
         fromDatabase:
           name: rivalradar-db
           property: connectionString
-      # Mission works without Redis; live scout WS needs a real Redis later.
       - key: REDIS_URL
         value: memory
       - key: CONNECTION_VAULT_KEY
@@ -50,6 +53,38 @@ services:
         value: "true"
       - key: GENERATION_SERVICE_URL
         value: http://127.0.0.1:8003
+      # After connect service is live, set both to that service's public HTTPS URL
+      # (viewer = same host + /vnc.html?autoconnect=1&resize=scale).
+      - key: CONNECT_AGENT_URL
+        value: ""
+      - key: CONNECT_VIEWER_URL
+        value: ""
+
+  - type: web
+    name: rivalradar-connect
+    runtime: docker
+    # Chromium + Xvfb usually needs more than free 512MB; upgrade if the service OOMs.
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/connect-agent/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    disk:
+      name: connect-profiles
+      mountPath: /data/profiles
+      sizeGB: 1
+    envVars:
+      - key: CONNECT_IN_DOCKER
+        value: "1"
+      - key: CONNECT_PORT
+        value: "8765"
+      - key: NOVNC_PORT
+        value: "7900"
+      - key: VNC_PORT
+        value: "5900"
+      # RENDER_EXTERNAL_URL is injected by Render; app builds viewer from it if unset.
+      - key: PUBLIC_VIEWER_URL
+        value: ""
 
 databases:
   - name: rivalradar-db

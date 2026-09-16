@@ -692,8 +692,9 @@ async def start_connect_session(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Connect agent is offline. Start the stack with `docker compose up -d` "
-                "(connect-agent is included). Viewer: http://localhost:7900"
+                "Connect agent is offline. Locally run `docker compose up -d connect-agent`. "
+                "On Render, deploy rivalradar-connect and set CONNECT_AGENT_URL + "
+                "CONNECT_VIEWER_URL on rivalradar-api to that service's public URL."
             ),
         )
 
