@@ -5,8 +5,7 @@
 - **Render**: one Docker web service (`deploy/Dockerfile.api`) running **generation + gateway**
   - Default models: **gpt-oss** (`NVIDIA_API_KEY`) + **Agnes** (`AGNES_API_KEY`)
 - **Supabase** (optional): visitor pageviews (`supabase/migrations/001_visitor_pageviews.sql`)
-- **Connect / social login**: users sign in themselves inside the Connect headless browser.
-  No LinkedIn/X/IG cookies are loaded from env on deploy.
+- **Connect / social login**: prefer the **Chrome extension** (`extensions/rivalradar-connect`) + pairing code. noVNC Connect browser remains as fallback. No LinkedIn/X/IG cookies are loaded from env on deploy.
 
 ## Render env vars (what to paste)
 
@@ -66,19 +65,29 @@ Free tier sleeps after idle. The navbar **Waking API…** chip polls until green
 2. Env: `NEXT_PUBLIC_GATEWAY_URL=https://YOUR-API.onrender.com`
 3. Deploy / redeploy after changing the gateway URL (build-time inlined).
 
-## 4. Connect browser (LinkedIn / X / Instagram) on Render
+## 4. Connect (preferred: Chrome extension)
 
-Mission creative works without Connect. To open the noVNC login browser from Vercel:
+Mission creative works without Connect. For LinkedIn / X / Instagram / TikTok / Threads:
+
+### Fast path — Chrome extension (no noVNC cold start)
+
+1. Deploy / merge so gateway has `POST /connect/pairing` + `POST /connections/{platform}/quick` (this release).
+2. No new Render env vars required for the extension path.
+3. On your machine: Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → `extensions/rivalradar-connect`
+4. In the extension popup, set **API URL** to your Render gateway (e.g. `https://rivalradar-api-fl5j.onrender.com`)
+5. On Vercel RivalRadar → Connect → **Extension (fast)** → copy code → paste in extension → Connect
+6. Dialog auto-closes when status is `connected`
+
+### Fallback — Connect browser (noVNC) on Render
 
 1. Blueprint deploys **`rivalradar-connect`** (Playwright + noVNC on one port).
 2. Open that service → copy its URL, e.g. `https://rivalradar-connect-xxxx.onrender.com`
 3. On **rivalradar-api** → Environment, set:
    - `CONNECT_AGENT_URL=https://rivalradar-connect-xxxx.onrender.com`
    - `CONNECT_VIEWER_URL=https://rivalradar-connect-xxxx.onrender.com/vnc.html?autoconnect=1&resize=scale`
-4. Save (API restarts). Click **Connect LinkedIn** on the Vercel site → a Connect browser tab should open.
-5. Sign in yourself → **I've logged in**.
+4. Save (API restarts). On the site use Connect → **Browser (noVNC)** → sign in → **I've logged in**.
 
-If `rivalradar-connect` crashes / OOM on free tier, upgrade that service to **Starter** (Chromium needs RAM). Locally you can instead run `docker compose up -d connect-agent` and point a tunnel, or use the full Compose stack.
+If `rivalradar-connect` crashes / OOM on free tier, prefer the extension path or upgrade Connect to **Starter**. Locally: `docker compose up -d connect-agent`.
 
 ## 5. Optional full stack (Scout / stage-post)
 
@@ -86,6 +95,8 @@ If `rivalradar-connect` crashes / OOM on free tier, upgrade that service to **St
 - `/creative/generate` 20/hour
 - `/creative/publish-plan` 30/hour
 - `/intel/report` 15/hour
+- `/connect/pairing` 30/hour
+- `/connections/` 40/hour
 - other API ~180/hour
 
 ## Checklist
@@ -95,3 +106,5 @@ If `rivalradar-connect` crashes / OOM on free tier, upgrade that service to **St
 - [ ] Navbar shows **API online** after cold start
 - [ ] (Optional) Supabase table + keys on Render
 - [ ] No social cookies in any env
+- [ ] Chrome extension loaded; API URL points at Render gateway
+- [ ] (Optional) Connect agent URL + viewer URL if using noVNC fallback

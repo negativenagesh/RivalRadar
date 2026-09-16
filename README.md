@@ -93,7 +93,7 @@ flowchart TD
 | Step | What happens |
 |------|----------------|
 | **Context** | Brand dossier (voice, ICP, pillars, forbidden claims) + rival profiles (`whyTheyMatter`, socials) |
-| **Connect** | Operator logs into LinkedIn / X / Instagram / YouTube sessions used by scout + sniper |
+| **Connect** | Chrome extension (fast) or noVNC browser login — vaulted cookies for scout + sniper |
 | **Live Scout** | Concurrent browser/OSS collect into the lookback window; posts stream into findings |
 | **War room** | Scoreboard + agent intel + Format Studio + Comment sniper |
 

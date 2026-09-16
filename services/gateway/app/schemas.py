@@ -78,3 +78,19 @@ class ConnectSessionRead(BaseModel):
     detail: str | None = None
     agent_online: bool = True
     viewer_url: str | None = None
+
+
+class PairingCodeRequest(BaseModel):
+    workspace_id: str = "default"
+
+
+class PairingCodeRead(BaseModel):
+    code: str
+    expires_in: int
+    workspace_id: str = "default"
+
+
+class QuickConnectRequest(BaseModel):
+    code: str = Field(min_length=4, max_length=12)
+    cookies: list[dict[str, object]] = Field(default_factory=list, min_length=1)
+    workspace_id: str = "default"
