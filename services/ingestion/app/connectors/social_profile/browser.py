@@ -34,9 +34,20 @@ def running_in_docker() -> bool:
 
 def chromium_args(*, headless: bool = True) -> list[str]:
     """Docker Chromium needs no-sandbox + /dev/shm workarounds or launch hangs."""
-    args = ["--disable-blink-features=AutomationControlled"]
+    args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-features=TranslateUI",
+        "--metrics-recording-only",
+        "--safebrowsing-disable-auto-update",
+    ]
     if running_in_docker() or not headless:
-        args.extend(["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+        args.extend(["--no-sandbox", "--disable-gpu"])
     return args
 
 
@@ -102,7 +113,14 @@ class BrowserSession:
             "user_agent": CONNECT_UA,
             "locale": "en-US",
             "timezone_id": "America/Los_Angeles",
+            # Extra stability + realism
+            "screen": {"width": 1280, "height": 900},
+            "color_scheme": "light",
+            "reduced_motion": "no-preference",
+            "forced_colors": "none",
         }
+        # Block heavy resources to avoid OOM on Render free tier
+        context_kwargs["bypass_csp"] = False
         if self._storage_state:
             context_kwargs["storage_state"] = self._storage_state
         if self._record:
