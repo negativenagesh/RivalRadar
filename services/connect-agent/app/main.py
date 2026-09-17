@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.browser import manager
 
-app = FastAPI(title="RivalRadar Connect Agent", version="0.3.0")
+app = FastAPI(title="RivalRadar Connect Agent", version="0.4.0")
 
 
 class StartBody(BaseModel):

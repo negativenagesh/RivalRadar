@@ -1,7 +1,11 @@
 """Headed browser sessions for platform Connect (login → dump cookies).
 
+Local path only: Playwright Chromium + noVNC (browser-in-browser). Obscura is
+Scout-only and is never used here.
+
 Uses a persistent Chromium profile per platform under PROFILE_ROOT so logins
 survive reconnect. Vaulted cookies/storage_state are also re-seeded when present.
+Human-like settle scroll/timeouts run after load and before cookie dump.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+
+from app.pacing import idle_presence_loop, settle_after_load, settle_before_dump
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +49,8 @@ class LiveSession:
     context: BrowserContext | None = None
     page: Page | None = None
     persistent: bool = False
+    idle_stop: asyncio.Event | None = None
+    idle_task: asyncio.Task[None] | None = None
 
     @property
     def expired(self) -> bool:
@@ -159,7 +167,13 @@ class SessionManager:
             page = context.pages[0] if context.pages else await context.new_page()
             await page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
             live.page = page
+            await settle_after_load(page, platform)
             live.status = "awaiting_login"
+            live.idle_stop = asyncio.Event()
+            live.idle_task = asyncio.create_task(
+                idle_presence_loop(page, platform, should_stop=live.idle_stop),
+                name=f"connect-idle-{session_id}",
+            )
             viewer = (os.environ.get("PUBLIC_VIEWER_URL") or "").strip()
             if seeded or profile_dir.exists():
                 live.detail = (
@@ -201,10 +215,17 @@ class SessionManager:
             raise KeyError(session_id)
         if live.status == "expired":
             raise RuntimeError("session expired")
+        await self._stop_idle(live)
+        if live.page is not None:
+            try:
+                await settle_before_dump(live.page, live.platform)
+            except Exception:  # noqa: BLE001
+                logger.debug("settle-before-dump skipped", exc_info=True)
         cookies = [dict(c) for c in await live.context.cookies()]
         storage_state: dict[str, Any] | None = None
         try:
-            storage_state = await live.context.storage_state()
+            raw_state = await live.context.storage_state()
+            storage_state = dict(raw_state) if raw_state is not None else None
         except Exception:  # noqa: BLE001
             logger.debug("storage_state dump failed", exc_info=True)
         return {"cookies": cookies, "storage_state": storage_state}
@@ -220,7 +241,22 @@ class SessionManager:
             if live is not None:
                 await self._close_unlocked(live)
 
+    async def _stop_idle(self, live: LiveSession) -> None:
+        if live.idle_stop is not None:
+            live.idle_stop.set()
+        task = live.idle_task
+        live.idle_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                logger.debug("idle task stop failed for %s", live.session_id, exc_info=True)
+
     async def _close_unlocked(self, live: LiveSession) -> None:
+        await self._stop_idle(live)
         # Persistent profile stays on disk — only close the live context.
         if live.context is not None:
             try:
