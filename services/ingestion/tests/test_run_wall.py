@@ -126,6 +126,28 @@ async def test_sweep_orphaned_runs_marks_stale(
 
 
 @pytest.mark.asyncio
+async def test_sweep_orphaned_runs_clears_all_on_boot(
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """After OOM restart, even young runs are dead — sweep without age filter."""
+    from app.runs import sweep_orphaned_runs
+
+    fresh = IngestionRun(connector_type="auto", status=RunStatus.RUNNING)
+    session.add(fresh)
+    await session.commit()
+    await session.refresh(fresh)
+    run_id = fresh.id
+
+    n = await sweep_orphaned_runs(session_factory)
+    assert n == 1
+    updated = await session.get(IngestionRun, run_id)
+    assert updated is not None
+    assert updated.status == RunStatus.ERROR
+    assert updated.error_detail == "orphaned after service restart"
+
+
+@pytest.mark.asyncio
 async def test_expire_run_marks_error_without_cancel_semantics(
     session: AsyncSession,
     event_bus: object,
