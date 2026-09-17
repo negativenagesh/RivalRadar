@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 import uuid
 from typing import Any
 
@@ -31,9 +32,107 @@ _MOCK_SITE_BASE_URL = "http://localhost:8000/mock-site/profile"
 _FEED_PLATFORMS = {"instagram", "linkedin", "x", "tiktok", "threads", "twitter", "facebook"}
 # Hard wall so a wedged Playwright/CDP call cannot leave the run "running" forever.
 _RUN_WALL_S = 180.0
+_TERMINAL = {RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED}
 
 # In-process registry so cancel can interrupt the asyncio task for a run.
 _active_tasks: dict[str, asyncio.Task[Any]] = {}
+
+
+def _wall_detail(*, accounts: int, posts: int) -> str:
+    return (
+        f"run budget exceeded after {_RUN_WALL_S:.0f}s (partial accounts={accounts} posts={posts})"
+    )
+
+
+async def _mark_run_budget_exceeded(
+    factory: async_sessionmaker[AsyncSession],
+    run_id: str,
+    body: IngestionRunCreate,
+    connector: Connector,
+    event_bus: AgentEventBus | None = None,
+) -> bool:
+    """Finalize a wedged run on a fresh session (safe if scout still holds another)."""
+    acc_n, post_n = buffer_counts(connector)
+    window = body.resolved_window()
+    detail = _wall_detail(accounts=acc_n, posts=post_n)
+    result = IngestionRunResult(
+        accounts_ingested=acc_n,
+        posts_ingested=post_n,
+        posts_skipped_duplicate=0,
+        lookback_days=window.span_days,
+        date_from=window.date_from.isoformat(),
+        date_to=window.date_to.isoformat(),
+        sources_used=list(getattr(connector, "sources_used", []) or []),
+    ).model_dump()
+    async with factory() as session:
+        run = await session.get(IngestionRun, run_id)
+        if run is None or run.status in _TERMINAL:
+            return False
+        run.status = RunStatus.ERROR
+        run.error_detail = detail
+        run.result = result
+        await session.commit()
+    if event_bus is not None:
+        with contextlib.suppress(Exception):
+            await event_bus.close_run(run_id, status="error", detail=detail)
+    return True
+
+
+def _start_thread_watchdog(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    factory: async_sessionmaker[AsyncSession],
+    run_id: str,
+    body: IngestionRunCreate,
+    connector: Connector,
+    event_bus: AgentEventBus,
+    stop: threading.Event,
+) -> threading.Thread:
+    """Wall that still fires when the asyncio loop is blocked on CDP/Playwright.
+
+    Uses a dedicated async engine inside ``asyncio.run`` so we never share the
+    process engine across two event loops (undefined behavior with asyncpg).
+    ``factory`` is only used as a fallback when DATABASE_URL is sqlite in-memory
+    tests (shared fixture session).
+    """
+
+    def _watch() -> None:
+        if stop.wait(_RUN_WALL_S):
+            return
+        logger.error("run %s thread watchdog fired after %.0fs", run_id, _RUN_WALL_S)
+        task = get_active_run_task(run_id)
+        if task is not None and not task.done():
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(task.cancel)
+
+        async def _finalize() -> None:
+            from sqlalchemy.ext.asyncio import async_sessionmaker as _asm
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            url = settings.database_url
+            # In-memory sqlite fixtures must reuse the caller's factory/session.
+            if ":memory:" in url or url.startswith("sqlite"):
+                await _mark_run_budget_exceeded(factory, run_id, body, connector, event_bus)
+                return
+            engine = create_async_engine(
+                url,
+                echo=False,
+                connect_args={"ssl": "require"} if settings.database_ssl else {},
+            )
+            own = _asm(engine, expire_on_commit=False)
+            try:
+                await _mark_run_budget_exceeded(own, run_id, body, connector, event_bus)
+            finally:
+                await engine.dispose()
+
+        try:
+            asyncio.run(_finalize())
+        except Exception:  # noqa: BLE001
+            logger.exception("thread watchdog failed to finalize run %s", run_id)
+
+    thread = threading.Thread(target=_watch, name=f"run-wall-{run_id[:8]}", daemon=True)
+    thread.start()
+    return thread
 
 
 def register_run_task(run_id: str, task: asyncio.Task[Any]) -> None:
@@ -277,8 +376,11 @@ async def execute_run(
         connector = _build_connector(run_id, body, event_bus, object_store=store)
 
         async def _checkpoint() -> None:
+            # Own session — scout must not share the run session with checkpoints
+            # or a wall timeout will deadlock on AsyncSession.
             try:
-                await persist_raw_buffers(session, connector)
+                async with factory() as ckpt:
+                    await persist_raw_buffers(ckpt, connector)
             except Exception:  # noqa: BLE001
                 logger.exception("checkpoint persist failed for %s", run_id)
 
@@ -286,6 +388,17 @@ async def execute_run(
             setter = getattr(child, "set_checkpoint", None)
             if callable(setter):
                 setter(_checkpoint)
+
+        stop_watchdog = threading.Event()
+        _start_thread_watchdog(
+            loop=asyncio.get_running_loop(),
+            factory=factory,
+            run_id=run_id,
+            body=body,
+            connector=connector,
+            event_bus=event_bus,
+            stop=stop_watchdog,
+        )
 
         try:
             try:
@@ -296,32 +409,9 @@ async def execute_run(
             except TimeoutError:
                 logger.error("run %s exceeded wall budget %.0fs", run_id, _RUN_WALL_S)
                 with contextlib.suppress(Exception):
-                    await persist_raw_buffers(session, connector)
-                run = await session.get(IngestionRun, run_id)
-                assert run is not None
-                if run.status == RunStatus.CANCELLED:
-                    await event_bus.close_run(
-                        run_id, status="cancelled", detail="cancelled by operator"
-                    )
-                    return
-                acc_n, post_n = buffer_counts(connector)
-                window = body.resolved_window()
-                run.status = RunStatus.ERROR
-                run.error_detail = (
-                    f"run budget exceeded after {_RUN_WALL_S:.0f}s "
-                    f"(partial accounts={acc_n} posts={post_n})"
-                )
-                run.result = IngestionRunResult(
-                    accounts_ingested=acc_n,
-                    posts_ingested=post_n,
-                    posts_skipped_duplicate=0,
-                    lookback_days=window.span_days,
-                    date_from=window.date_from.isoformat(),
-                    date_to=window.date_to.isoformat(),
-                    sources_used=list(getattr(connector, "sources_used", []) or []),
-                ).model_dump()
-                await session.commit()
-                await event_bus.close_run(run_id, status="error", detail=run.error_detail)
+                    async with factory() as ckpt:
+                        await persist_raw_buffers(ckpt, connector)
+                await _mark_run_budget_exceeded(factory, run_id, body, connector, event_bus)
                 return
             recording_key = await _archive_recording(run_id, connector, store)
             sources = list(
@@ -346,10 +436,11 @@ async def execute_run(
 
             run = await session.get(IngestionRun, run_id)
             assert run is not None
-            if run.status == RunStatus.CANCELLED:
-                await event_bus.close_run(
-                    run_id, status="cancelled", detail="cancelled by operator"
-                )
+            if run.status in _TERMINAL:
+                if run.status == RunStatus.CANCELLED:
+                    await event_bus.close_run(
+                        run_id, status="cancelled", detail="cancelled by operator"
+                    )
                 return
             run.status = RunStatus.DONE
             run.result = payload
@@ -363,38 +454,44 @@ async def execute_run(
                 logger.debug("rollback after cancel failed", exc_info=True)
             persisted = 0
             try:
-                persisted = await persist_raw_buffers(session, connector)
+                async with factory() as ckpt:
+                    persisted = await persist_raw_buffers(ckpt, connector)
                 logger.info("persisted %s posts after cancel %s", persisted, run_id)
             except Exception:  # noqa: BLE001
                 logger.exception("persist after cancel failed for %s", run_id)
-            run = await session.get(IngestionRun, run_id)
-            if run is not None:
-                run.status = RunStatus.CANCELLED
-                run.error_detail = "cancelled by operator"
-                if persisted and not run.result:
-                    window = body.resolved_window()
-                    run.result = IngestionRunResult(
-                        accounts_ingested=0,
-                        posts_ingested=persisted,
-                        posts_skipped_duplicate=0,
-                        lookback_days=window.span_days,
-                        date_from=window.date_from.isoformat(),
-                        date_to=window.date_to.isoformat(),
-                    ).model_dump()
-                await session.commit()
+            async with factory() as finish:
+                run = await finish.get(IngestionRun, run_id)
+                if run is not None and run.status not in _TERMINAL:
+                    run.status = RunStatus.CANCELLED
+                    run.error_detail = "cancelled by operator"
+                    if persisted and not run.result:
+                        window = body.resolved_window()
+                        run.result = IngestionRunResult(
+                            accounts_ingested=0,
+                            posts_ingested=persisted,
+                            posts_skipped_duplicate=0,
+                            lookback_days=window.span_days,
+                            date_from=window.date_from.isoformat(),
+                            date_to=window.date_to.isoformat(),
+                        ).model_dump()
+                    await finish.commit()
             raise
         except Exception as exc:  # noqa: BLE001
-            run = await session.get(IngestionRun, run_id)
-            assert run is not None
-            if run.status == RunStatus.CANCELLED:
-                await event_bus.close_run(
-                    run_id, status="cancelled", detail="cancelled by operator"
-                )
-                return
-            run.status = RunStatus.ERROR
-            run.error_detail = str(exc)
-            await session.commit()
+            async with factory() as finish:
+                run = await finish.get(IngestionRun, run_id)
+                assert run is not None
+                if run.status in _TERMINAL:
+                    if run.status == RunStatus.CANCELLED:
+                        await event_bus.close_run(
+                            run_id, status="cancelled", detail="cancelled by operator"
+                        )
+                    return
+                run.status = RunStatus.ERROR
+                run.error_detail = str(exc)
+                await finish.commit()
             await event_bus.close_run(run_id, status="error", detail=str(exc))
+        finally:
+            stop_watchdog.set()
 
 
 async def cancel_run(

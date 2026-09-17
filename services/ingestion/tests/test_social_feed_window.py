@@ -97,3 +97,32 @@ async def test_linkedin_uses_browser_with_vault_on_obscura(
     ]
     assert any("obscura_browser_with_extension_vault" in d for d in details)
     assert any("cookies=1" in d for d in details)
+
+
+@pytest.mark.asyncio
+async def test_linkedin_obscura_skips_browser_without_vault_cookies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.connectors.social_feed.browser_engine",
+        lambda: "obscura",
+    )
+    window = DateWindow(date_from=date(2026, 9, 14), date_to=date(2026, 9, 16))
+    target = ProfileTarget(
+        handle="pixisai",
+        platform="linkedin",
+        url="https://www.linkedin.com/company/pixisai",
+    )
+    c = SocialFeedConnector(run_id="t", targets=[target], window=window)
+    c._browser_fallback = AsyncMock()  # type: ignore[method-assign]
+    c._emit = AsyncMock()  # type: ignore[method-assign]
+
+    await c._scout_linkedin(target, record=False)
+
+    c._browser_fallback.assert_not_awaited()
+    errors = [
+        str(call.args[1].get("detail", ""))
+        for call in c._emit.await_args_list
+        if call.args and call.args[0] == "error"
+    ]
+    assert any("Connect extension cookies" in d for d in errors)

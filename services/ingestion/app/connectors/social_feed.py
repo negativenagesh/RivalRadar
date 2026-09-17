@@ -399,6 +399,8 @@ class SocialFeedConnector:
                         )
                     },
                 )
+                # Login wall hangs forever without cookies — do not open Obscura.
+                return
             await self._browser_fallback(target, record=record)
             return
 
@@ -552,8 +554,21 @@ class SocialFeedConnector:
 
         await self._emit("nav", {"url": url, "platform": platform, "phase": "profile"})
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_MS)
+            await await_or_abandon(
+                page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_MS),
+                min(_PLATFORM_BUDGET_S, _GOTO_MS / 1000 + 5),
+            )
             await settle_page(page)
+        except TimeoutError:
+            await self._emit(
+                "error",
+                {"detail": f"profile nav timed out after {_GOTO_MS}ms {url}"},
+            )
+            async with self._lock:
+                self._accounts.append(
+                    RawAccount(handle=handle, display_name=handle, platform=platform)
+                )
+            return
         except Exception as exc:  # noqa: BLE001
             await self._emit("error", {"detail": f"profile nav failed {url}: {exc}"})
             async with self._lock:
@@ -650,6 +665,12 @@ class SocialFeedConnector:
         hb = asyncio.create_task(
             self._phase_heartbeat(label=f"collecting_posts platform={platform}", stop=stop)
         )
+        scrolls = 4 if platform == "linkedin" and browser_engine() == "obscura" else 8
+        budget = (
+            min(_COLLECT_BUDGET_S, 35)
+            if platform == "linkedin" and browser_engine() == "obscura"
+            else _COLLECT_BUDGET_S
+        )
         try:
             return await await_or_abandon(
                 collect_post_urls(
@@ -657,9 +678,9 @@ class SocialFeedConnector:
                     platform=platform,
                     profile_url=profile_url,
                     limit=_MAX_POSTS,
-                    max_scrolls=8,
+                    max_scrolls=scrolls,
                 ),
-                _COLLECT_BUDGET_S,
+                budget,
             )
         except TimeoutError:
             await self._emit(
