@@ -42,30 +42,35 @@ _active_tasks: dict[str, asyncio.Task[Any]] = {}
 async def sweep_orphaned_runs(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     *,
-    older_than_s: float = _RUN_WALL_S,
+    older_than_s: float | None = None,
 ) -> int:
-    """Mark stuck pending/running rows after a dyno restart (in-memory tasks are gone)."""
+    """Mark stuck pending/running rows after a dyno restart (in-memory tasks are gone).
+
+    LinkedIn/Obscura often OOMs the Render free container. Restart drops gateway
+    walls and asyncio tasks while Postgres still says ``running``. On boot, sweep
+    **all** in-flight rows (optional ``older_than_s`` is for targeted tests only).
+    """
     factory = session_factory or default_session_factory
-    cutoff = datetime.now(UTC) - timedelta(seconds=older_than_s)
     async with factory() as session:
-        rows = list(
-            (
-                await session.scalars(
-                    select(IngestionRun).where(
-                        IngestionRun.status.in_([RunStatus.PENDING, RunStatus.RUNNING]),
-                        IngestionRun.created_at < cutoff,
-                    )
-                )
-            ).all()
+        stmt = select(IngestionRun).where(
+            IngestionRun.status.in_([RunStatus.PENDING, RunStatus.RUNNING]),
         )
+        if older_than_s is not None:
+            cutoff = datetime.now(UTC) - timedelta(seconds=older_than_s)
+            stmt = stmt.where(IngestionRun.created_at < cutoff)
+        rows = list((await session.scalars(stmt)).all())
         if not rows:
             return 0
-        detail = f"orphaned after service restart (age>{older_than_s:.0f}s)"
+        detail = (
+            "orphaned after service restart"
+            if older_than_s is None
+            else f"orphaned after service restart (age>{older_than_s:.0f}s)"
+        )
         for run in rows:
             run.status = RunStatus.ERROR
             run.error_detail = detail
         await session.commit()
-        logger.warning("swept %s orphaned ingestion runs older than %.0fs", len(rows), older_than_s)
+        logger.warning("swept %s orphaned ingestion runs on startup", len(rows))
         return len(rows)
 
 
