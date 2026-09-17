@@ -370,16 +370,40 @@ class SocialFeedConnector:
                 elapsed += _HEARTBEAT_S
 
     async def _scout_linkedin(self, target: ProfileTarget, *, record: bool) -> None:
-        """Try linkedin_scraper (bounded), then browser collect on a fresh session.
+        """LinkedIn: OSS scraper on Chromium; Obscura uses browser + extension vault.
 
-        On Obscura, CompanyPostsScraper often ignores cancel — we still try it with
-        a short budget, then abandon and open a clean BrowserSession for scroll
-        collect so one hung CDP page cannot block Instagram/X.
+        ``linkedin_scraper`` can block the asyncio event loop on Obscura CDP so
+        platform budgets never fire. Extension-vault cookies + browser collect is
+        the supported Obscura path.
         """
         platform = "linkedin"
+        cookies = cookies_from_sessions(self._platform_sessions, platforms={platform})
+        if browser_engine() == "obscura":
+            await self._emit(
+                "action",
+                {
+                    "detail": (
+                        "oss_fallback platform=linkedin "
+                        "reason=obscura_browser_with_extension_vault "
+                        f"cookies={len(cookies)}"
+                    )
+                },
+            )
+            if not cookies:
+                await self._emit(
+                    "error",
+                    {
+                        "detail": (
+                            "linkedin needs Connect extension cookies on Obscura "
+                            "(pair via RivalRadar Connect)"
+                        )
+                    },
+                )
+            await self._browser_fallback(target, record=record)
+            return
+
         url = _profile_entry_url(target, platform)
         handle = _handle_for(target, url)
-        cookies = cookies_from_sessions(self._platform_sessions, platforms={platform})
         storage_state = storage_state_from_sessions(self._platform_sessions, platforms={platform})
         await self._emit(
             "action",
@@ -417,16 +441,6 @@ class SocialFeedConnector:
                     )
                 except Exception as exc:  # noqa: BLE001
                     await self._emit("error", {"detail": f"linkedin oss nav: {exc}"})
-
-                # Watchdog: if linkedin_scraper wedges the CDP page, close it so
-                # await_or_abandon / platform budget can recover (Obscura-safe).
-                async def _oss_watchdog() -> None:
-                    await asyncio.sleep(_LINKEDIN_OSS_BUDGET_S)
-                    with contextlib.suppress(Exception):
-                        if session.page is not None:
-                            await session.page.close()
-
-                watchdog = asyncio.create_task(_oss_watchdog())
                 try:
                     account, posts = await await_or_abandon(
                         fetch_linkedin_company_posts(
@@ -470,10 +484,6 @@ class SocialFeedConnector:
                         "action",
                         {"detail": f"oss_fallback platform=linkedin reason={exc}"},
                     )
-                finally:
-                    watchdog.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await watchdog
                 stop.set()
                 hb.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -482,13 +492,9 @@ class SocialFeedConnector:
                     if record and session.recorded_video_path:
                         self._video_path = session.recorded_video_path
                     return
-                # Chromium: reuse the same page for browser collect.
-                # Obscura: leave this (possibly wedged) CDP page and open a fresh session.
-                if browser_engine() != "obscura":
-                    await self._scout_target_browser(session, target)
-                    if record and session.recorded_video_path:
-                        self._video_path = session.recorded_video_path
-                    return
+                await self._scout_target_browser(session, target)
+                if record and session.recorded_video_path:
+                    self._video_path = session.recorded_video_path
         except RuntimeError as exc:
             await self._emit("error", {"detail": f"linkedin browser session: {exc}"})
         finally:
@@ -497,7 +503,6 @@ class SocialFeedConnector:
                 hb.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await hb
-
         if not oss_ok:
             await self._browser_fallback(target, record=record)
             return

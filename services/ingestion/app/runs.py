@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from typing import Any
@@ -15,6 +16,7 @@ from app.connectors.composite import CompositeConnector
 from app.connectors.fixture import FixtureConnector
 from app.connectors.social_feed import SocialFeedConnector
 from app.connectors.social_profile import ProfileTarget, SocialProfileConnector
+from app.connectors.social_profile.browser import await_or_abandon
 from app.connectors.web_url import WebUrlConnector
 from app.connectors.youtube import YouTubeConnector
 from app.db import async_session_factory as default_session_factory
@@ -27,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 _MOCK_SITE_BASE_URL = "http://localhost:8000/mock-site/profile"
 _FEED_PLATFORMS = {"instagram", "linkedin", "x", "tiktok", "threads", "twitter", "facebook"}
+# Hard wall so a wedged Playwright/CDP call cannot leave the run "running" forever.
+_RUN_WALL_S = 180.0
 
 # In-process registry so cancel can interrupt the asyncio task for a run.
 _active_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -284,7 +288,41 @@ async def execute_run(
                 setter(_checkpoint)
 
         try:
-            result = await run_ingestion(session, connector)
+            try:
+                result = await await_or_abandon(
+                    run_ingestion(session, connector),
+                    _RUN_WALL_S,
+                )
+            except TimeoutError:
+                logger.error("run %s exceeded wall budget %.0fs", run_id, _RUN_WALL_S)
+                with contextlib.suppress(Exception):
+                    await persist_raw_buffers(session, connector)
+                run = await session.get(IngestionRun, run_id)
+                assert run is not None
+                if run.status == RunStatus.CANCELLED:
+                    await event_bus.close_run(
+                        run_id, status="cancelled", detail="cancelled by operator"
+                    )
+                    return
+                acc_n, post_n = buffer_counts(connector)
+                window = body.resolved_window()
+                run.status = RunStatus.ERROR
+                run.error_detail = (
+                    f"run budget exceeded after {_RUN_WALL_S:.0f}s "
+                    f"(partial accounts={acc_n} posts={post_n})"
+                )
+                run.result = IngestionRunResult(
+                    accounts_ingested=acc_n,
+                    posts_ingested=post_n,
+                    posts_skipped_duplicate=0,
+                    lookback_days=window.span_days,
+                    date_from=window.date_from.isoformat(),
+                    date_to=window.date_to.isoformat(),
+                    sources_used=list(getattr(connector, "sources_used", []) or []),
+                ).model_dump()
+                await session.commit()
+                await event_bus.close_run(run_id, status="error", detail=run.error_detail)
+                return
             recording_key = await _archive_recording(run_id, connector, store)
             sources = list(
                 getattr(connector, "sources_used", None)
