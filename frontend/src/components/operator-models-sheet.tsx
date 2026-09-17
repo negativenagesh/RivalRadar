@@ -58,10 +58,10 @@ const VENDORS: {
   },
   {
     id: "agnes",
-    title: "Agnes Image 2.5 Flash",
-    hint: "VLM for social product frames. 1K square (~10s, ~20 RPM). Test paints a tiny square before save. ModelScope stays off until Alibaba Cloud is bound.",
+    title: "Agnes Image 2.0 Flash",
+    hint: "Best RivalRadar meme text + negatives in our bake-off. Currently free. Test paints a tiny square before save.",
     placeholder: "sk-…",
-    docs: "https://wiki.agnes-ai.com/en/docs/agnes-image-25-flash.md",
+    docs: "https://agnes-ai.com/en/docs/agnes-image-20-flash",
   },
 ];
 
@@ -141,7 +141,7 @@ export function OperatorModelsSheet({
         <p className="text-sm text-muted-foreground">
           Keys stay in this browser. Test before save. Intel and captions use the text model;
           frames use your image pick. No keys here? The server drives GPT-OSS 20B + Agnes
-          2.5 Flash from its own env keys when configured.
+          2.0 Flash from its own env keys when configured.
         </p>
 
         <div className="space-y-4">
@@ -254,7 +254,7 @@ export function OperatorModelsSheet({
                   : "rounded-full border border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
               }
             >
-              Agnes 2.5 Flash
+              Agnes 2.0 Flash
             </button>
             <button
               type="button"

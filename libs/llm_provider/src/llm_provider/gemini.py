@@ -104,7 +104,7 @@ class GeminiOpenAICompatProvider:
         model: str = DEFAULT_TEXT_MODEL,
         image_model: str = DEFAULT_IMAGE_MODEL,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._api_key = api_key
         self._base_url = base_url
         self._model = model

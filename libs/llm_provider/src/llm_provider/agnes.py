@@ -10,11 +10,24 @@ from llm_provider.base import ImageResult, LLMProviderError, Message
 from llm_provider.chat_util import translate_vendor_error
 
 DEFAULT_BASE_URL = "https://apihub.agnes-ai.com/v1"
-# https://wiki.agnes-ai.com/en/docs/agnes-image-25-flash.md
-DEFAULT_IMAGE_MODEL = "agnes-image-2.5-flash"
-DEFAULT_SIZE = "1K"
+# Bake-off (RivalRadar memes): 2.0 beat 2.1/2.5 on letter-perfect text + negative prompts.
+# Docs: https://agnes-ai.com/en/docs/agnes-image-20-flash (all Flash tiers currently free).
+DEFAULT_IMAGE_MODEL = "agnes-image-2.0-flash"
+DEFAULT_SIZE_TIER = "1K"
 SUPPORTED_RATIOS = frozenset({"1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"})
+# Exact WxH for 2.0 (docs use pixel sizes; 2.1/2.5 prefer size tier + ratio).
+_RATIO_TO_EXACT_SIZE: dict[str, str] = {
+    "1:1": "1024x1024",
+    "3:4": "864x1152",
+    "4:3": "1152x864",
+    "16:9": "1312x736",
+    "9:16": "736x1312",
+    "2:3": "832x1248",
+    "3:2": "1248x832",
+    "21:9": "1568x672",
+}
 PING_PROMPT = "solid electric lime square, beige studio, no text, no logos"
+_VENDOR = "Agnes Image"
 
 
 def agnes_ratio(aspect_ratio: str | None) -> str:
@@ -24,6 +37,29 @@ def agnes_ratio(aspect_ratio: str | None) -> str:
     if raw == "4:5":
         return "3:4"
     return "1:1"
+
+
+def _uses_tier_size(model: str) -> bool:
+    """2.1 / 2.5 accept size=1K + ratio; 2.0 wants exact WxH."""
+    name = (model or "").lower()
+    return "2.1-flash" in name or "2.5-flash" in name
+
+
+def _payload_for(model: str, prompt: str, ratio: str) -> dict[str, Any]:
+    if _uses_tier_size(model):
+        return {
+            "model": model,
+            "prompt": prompt[:4000],
+            "size": DEFAULT_SIZE_TIER,
+            "ratio": ratio,
+            "return_base64": True,
+        }
+    return {
+        "model": model,
+        "prompt": prompt[:4000],
+        "size": _RATIO_TO_EXACT_SIZE.get(ratio, "1024x1024"),
+        "return_base64": True,
+    }
 
 
 def _mime_for(data: bytes) -> str:
@@ -49,7 +85,7 @@ def _raise_status(status: int, body: str) -> None:
             super().__init__(body)
             self.status_code = status
 
-    raise translate_vendor_error(_Err(), vendor="Agnes Image 2.5 Flash")
+    raise translate_vendor_error(_Err(), vendor=_VENDOR)
 
 
 class AgnesImageProvider:
@@ -76,7 +112,7 @@ class AgnesImageProvider:
     ) -> str:
         del messages, temperature, max_tokens, reasoning_effort
         raise LLMProviderError(
-            "Agnes Image 2.5 Flash paints pixels. Pick Gemini, DeepSeek, or GPT-OSS 20B for text.",
+            f"{_VENDOR} paints pixels. Pick Gemini, DeepSeek, or GPT-OSS 20B for text.",
             status_code=400,
         )
 
@@ -90,7 +126,7 @@ class AgnesImageProvider:
     ) -> AsyncIterator[str]:
         del messages, temperature, max_tokens, reasoning_effort
         raise LLMProviderError(
-            "Agnes Image 2.5 Flash paints pixels. Pick Gemini, DeepSeek, or GPT-OSS 20B for text.",
+            f"{_VENDOR} paints pixels. Pick Gemini, DeepSeek, or GPT-OSS 20B for text.",
             status_code=400,
         )
         yield ""  # pragma: no cover — make this an async generator
@@ -102,7 +138,7 @@ class AgnesImageProvider:
         style_hints: list[str] | None = None,
     ) -> str:
         del brief, style_hints
-        raise LLMProviderError("Agnes Image 2.5 Flash does not write captions.", status_code=400)
+        raise LLMProviderError(f"{_VENDOR} does not write captions.", status_code=400)
 
     async def generate_image(
         self,
@@ -115,15 +151,9 @@ class AgnesImageProvider:
         prompt = f"{brief}\nStyle: {hints}."
         ratio = agnes_ratio(aspect_ratio)
         url = f"{self._base_url}/images/generations"
-        payload: dict[str, Any] = {
-            "model": self._model,
-            "prompt": prompt[:4000],
-            "size": DEFAULT_SIZE,
-            "ratio": ratio,
-            "return_base64": True,
-        }
+        payload = _payload_for(self._model, prompt, ratio)
         try:
-            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
                 response = await client.post(
                     url,
                     headers={
@@ -138,13 +168,13 @@ class AgnesImageProvider:
                     body = response.json()
                 except Exception as exc:  # noqa: BLE001
                     raise LLMProviderError(
-                        "Agnes Image 2.5 Flash returned a non-JSON body",
+                        f"{_VENDOR} returned a non-JSON body",
                         status_code=502,
                     ) from exc
                 data = await _image_bytes(client, body)
         except httpx.RequestError as exc:
             raise LLMProviderError(
-                f"Agnes Image 2.5 Flash unreachable ({exc.__class__.__name__})",
+                f"{_VENDOR} unreachable ({exc.__class__.__name__})",
                 status_code=502,
             ) from exc
         return ImageResult(mime_type=_mime_for(data), data=data)
@@ -169,7 +199,7 @@ async def _image_bytes(client: httpx.AsyncClient, body: object) -> bytes:
     rows = body.get("data") if isinstance(body, dict) else None
     if not isinstance(rows, list) or not rows:
         raise LLMProviderError(
-            "Agnes Image 2.5 Flash returned no image. Try Generate again.",
+            f"{_VENDOR} returned no image. Try Generate again.",
             status_code=502,
         )
     first = rows[0] if isinstance(rows[0], dict) else {}
@@ -179,7 +209,7 @@ async def _image_bytes(client: httpx.AsyncClient, body: object) -> bytes:
             return _decode_b64(b64)
         except Exception as exc:  # noqa: BLE001
             raise LLMProviderError(
-                "Agnes Image 2.5 Flash returned unreadable image bytes.",
+                f"{_VENDOR} returned unreadable image bytes.",
                 status_code=502,
             ) from exc
     image_url = first.get("url")
@@ -189,11 +219,11 @@ async def _image_bytes(client: httpx.AsyncClient, body: object) -> bytes:
         fetched = await client.get(image_url)
         if fetched.status_code >= 400 or not fetched.content:
             raise LLMProviderError(
-                "Agnes Image 2.5 Flash image URL could not be downloaded.",
+                f"{_VENDOR} image URL could not be downloaded.",
                 status_code=502,
             )
         return fetched.content
     raise LLMProviderError(
-        "Agnes Image 2.5 Flash returned no image bytes. Try Generate again.",
+        f"{_VENDOR} returned no image bytes. Try Generate again.",
         status_code=502,
     )

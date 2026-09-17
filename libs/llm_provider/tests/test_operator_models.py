@@ -106,7 +106,7 @@ async def test_flux_decodes_b64_json(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _Client.last_json["size"] == "768x1024"
 
 
-async def test_agnes_uses_1k_ratio_and_decodes_b64(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_agnes_uses_exact_size_for_2_0_and_decodes_b64(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Resp:
         status_code = 200
 
@@ -141,11 +141,47 @@ async def test_agnes_uses_1k_ratio_and_decodes_b64(monkeypatch: pytest.MonkeyPat
     )
     assert image.data == b"hello"
     assert _Client.last_json is not None
-    assert _Client.last_json["model"] == "agnes-image-2.5-flash"
-    assert _Client.last_json["size"] == "1K"
-    assert _Client.last_json["ratio"] == "3:4"
+    assert _Client.last_json["model"] == "agnes-image-2.0-flash"
+    assert _Client.last_json["size"] == "864x1152"
+    assert "ratio" not in _Client.last_json
     assert _Client.last_json["return_base64"] is True
 
+
+async def test_agnes_2_5_still_uses_tier_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"data": [{"b64_json": "aGVsbG8="}]}
+
+    class _Client:
+        last_json: dict[str, object] | None = None
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str] | None = None,
+            json: dict[str, object] | None = None,
+        ) -> _Resp:
+            type(self).last_json = json
+            return _Resp()
+
+    monkeypatch.setattr("llm_provider.agnes.httpx.AsyncClient", _Client)
+    await AgnesImageProvider(
+        "sk-agnes-test", model="agnes-image-2.5-flash"
+    ).generate_image("hoodie", aspect_ratio="1:1")
+    assert _Client.last_json is not None
+    assert _Client.last_json["size"] == "1K"
+    assert _Client.last_json["ratio"] == "1:1"
 
 async def test_agnes_falls_back_to_image_url(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Gen:

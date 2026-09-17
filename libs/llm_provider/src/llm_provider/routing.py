@@ -60,7 +60,7 @@ class RoutingLLMProvider:
     ) -> ImageResult:
         if self._image is None:
             raise LLMProviderError(
-                "No image model. Paste Gemini for Nano Banana 2, or Agnes for Image 2.5 Flash. "
+                "No image model. Paste Gemini for Nano Banana 2, or Agnes for Image 2.0 Flash. "
                 "NVIDIA FLUX is a fallback. DeepSeek Flash cannot paint a PNG.",
                 status_code=400,
             )

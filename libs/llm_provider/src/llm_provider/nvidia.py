@@ -29,7 +29,7 @@ class NvidiaGptOssProvider:
         base_url: str = DEFAULT_BASE_URL,
         model: str = DEFAULT_TEXT_MODEL,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._model = model
 
     async def complete(
@@ -109,7 +109,7 @@ class NvidiaGptOssProvider:
         aspect_ratio: str | None = None,
     ) -> ImageResult:
         raise LLMProviderError(
-            "gpt-oss-20b is text-only. Pick Agnes Image 2.5 Flash or NVIDIA FLUX, or paste Gemini for Nano Banana 2.",
+            "gpt-oss-20b is text-only. Pick Agnes Image 2.0 Flash or NVIDIA FLUX, or paste Gemini for Nano Banana 2.",
             status_code=400,
         )
 

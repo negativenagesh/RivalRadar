@@ -13,7 +13,7 @@ x-env: &common-env
   NVIDIA_IMAGE_MODEL: ${NVIDIA_IMAGE_MODEL:-black-forest-labs/flux.1-schnell}
   AGNES_API_KEY: ${AGNES_API_KEY:-}
   AGNES_BASE_URL: ${AGNES_BASE_URL:-https://apihub.agnes-ai.com/v1}
-  AGNES_IMAGE_MODEL: ${AGNES_IMAGE_MODEL:-agnes-image-2.5-flash}
+  AGNES_IMAGE_MODEL: ${AGNES_IMAGE_MODEL:-agnes-image-2.0-flash}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
   DEEPSEEK_TEXT_MODEL: ${DEEPSEEK_TEXT_MODEL:-deepseek-flash}

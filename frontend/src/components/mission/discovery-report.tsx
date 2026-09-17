@@ -91,7 +91,7 @@ const PERM_OPTIONS: {
   {
     key: "imageConcepts",
     label: "Post visuals",
-    hint: "Nano Banana 2, Agnes 2.5 Flash, or NVIDIA FLUX frames",
+    hint: "Nano Banana 2, Agnes 2.0 Flash, or NVIDIA FLUX frames",
   },
   {
     key: "carouselOutlines",

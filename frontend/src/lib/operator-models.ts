@@ -130,7 +130,7 @@ export function textModelLabel(model: TextModel): string {
 }
 
 export function imageModelLabel(model: ImageModel | null): string {
-  if (model === "agnes") return "Agnes Image 2.5 Flash";
+  if (model === "agnes") return "Agnes Image 2.0 Flash";
   if (model === "nvidia_flux") return "NVIDIA FLUX";
   if (model === "nano_banana") return "Nano Banana 2";
   return "no image model";

@@ -27,7 +27,7 @@ class DeepSeekProvider:
         base_url: str = DEFAULT_BASE_URL,
         model: str = DEFAULT_MODEL,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._model = model
 
     async def complete(
@@ -117,6 +117,6 @@ class DeepSeekProvider:
     ) -> ImageResult:
         raise LLMProviderError(
             "DeepSeek-V4.1-Flash understands images; it does not paint them. "
-            "Paste Gemini for Nano Banana 2, Agnes for Image 2.5 Flash, or NVIDIA for FLUX.",
+            "Paste Gemini for Nano Banana 2, Agnes for Image 2.0 Flash, or NVIDIA for FLUX.",
             status_code=400,
         )

@@ -81,7 +81,9 @@ def _reraise_transport(exc: httpx.RequestError) -> NoReturn:
 async def generate_creative_content(
     body: dict[str, Any], *, operator_headers: dict[str, str]
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=180.0) as client:
+    # Meme studio: several text LLM rounds + Agnes paint — needs headroom beyond 180s.
+    timeout = httpx.Timeout(600.0, connect=30.0, read=600.0, write=120.0)
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=timeout) as client:
         try:
             response = await client.post(
                 "/creative/generate",

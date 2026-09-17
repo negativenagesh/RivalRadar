@@ -117,9 +117,25 @@ async def creative_generate(
     request: CreativeRequest,
     provider: LLMProvider = Depends(operator_provider),
 ) -> CreativeResponse:
+    import logging
+
+    log = logging.getLogger("generation.creative")
+    log.info(
+        "creative start kind=%s format=%s platform=%s",
+        request.kind,
+        request.format,
+        request.platform,
+    )
     try:
-        return await generate_creative(request, provider)
+        result = await generate_creative(request, provider)
+        log.info(
+            "creative done kind=%s has_image=%s",
+            request.kind,
+            bool(result.image_data_base64),
+        )
+        return result
     except LLMProviderError as exc:
+        log.warning("creative failed kind=%s detail=%s", request.kind, exc.detail)
         raise _llm_http(exc) from exc
 
 
