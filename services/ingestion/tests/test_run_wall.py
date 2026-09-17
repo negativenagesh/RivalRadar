@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import date
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from app.connectors.base import Connector
 from app.models import IngestionRun, RunStatus
 from app.runs import (
     _RUN_WALL_S,
@@ -17,9 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 class _Buf:
-    _accounts = [{"handle": "@x", "display_name": "x", "platform": "linkedin"}]
-    _posts: list = []
-    sources_used = ["browser"]
+    _accounts: list[dict[str, str]] = [
+        {"handle": "@x", "display_name": "x", "platform": "linkedin"}
+    ]
+    _posts: list[Any] = []
+    sources_used: list[str] = ["browser"]
 
 
 @pytest.mark.asyncio
@@ -45,7 +49,9 @@ async def test_mark_run_budget_exceeded_sets_error(
     )
     assert body.resolved_window().date_to >= date(2020, 1, 1)
 
-    ok = await _mark_run_budget_exceeded(session_factory, run.id, body, _Buf(), event_bus=None)
+    ok = await _mark_run_budget_exceeded(
+        session_factory, run.id, body, cast(Connector, _Buf()), event_bus=None
+    )
     assert ok is True
     updated = await session.get(IngestionRun, run.id)
     assert updated is not None
@@ -62,7 +68,9 @@ async def test_thread_watchdog_finalizes_run(
 ) -> None:
     monkeypatch.setattr("app.runs._RUN_WALL_S", 0.2)
     # Force shared-factory path (own engine would be a different empty DB).
-    monkeypatch.setattr("app.runs.settings.database_url", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setattr(
+        "app.runs.settings.database_url", "sqlite+aiosqlite:///:memory:"
+    )
 
     run = IngestionRun(connector_type="auto", status=RunStatus.RUNNING)
     session.add(run)
@@ -79,7 +87,7 @@ async def test_thread_watchdog_finalizes_run(
         factory=session_factory,
         run_id=run_id,
         body=body,
-        connector=_Buf(),
+        connector=cast(Connector, _Buf()),
         event_bus=bus,
         stop=stop,
     )
