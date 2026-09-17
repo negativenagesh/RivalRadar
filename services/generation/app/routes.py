@@ -33,8 +33,8 @@ from llm_provider import (
 router = APIRouter()
 
 KEYS_MISSING = (
-    "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / "
-    "GEMINI_API_KEY in the server .env (defaults: gpt-oss text, Agnes image)."
+    "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY "
+    "in the server .env (defaults: gpt-oss text, Agnes image)."
 )
 
 

@@ -25,10 +25,10 @@ from llm_provider.routing import RoutingLLMProvider
 TEXT_MODELS = frozenset({"gemini", "deepseek", "gptoss"})
 IMAGE_MODELS = frozenset({"nano_banana", "agnes", "nvidia_flux", "none"})
 
-# Mission defaults when the operator pasted no keys: gpt-oss text + Agnes image,
-# driven by server-side env keys (NVIDIA_API_KEY / AGNES_API_KEY).
-TEXT_FALLBACK_ORDER = ("gptoss", "gemini", "deepseek")
-IMAGE_FALLBACK_ORDER = ("agnes", "nano_banana", "nvidia_flux")
+# Server-env Mission defaults: gpt-oss + Agnes only. Gemini / Nano Banana are
+# operator-paste only — never pulled from GEMINI_API_KEY for failover/defaults.
+TEXT_FALLBACK_ORDER = ("gptoss", "deepseek")
+IMAGE_FALLBACK_ORDER = ("agnes", "nvidia_flux")
 
 _KEY_ENV = {
     "gemini": "GEMINI_API_KEY",
@@ -61,16 +61,17 @@ def _model_key(model: str, keys: dict[str, str]) -> str:
 def get_llm_provider() -> LLMProvider:
     """Build the configured LLMProvider from environment variables.
 
-    LLM_PROVIDER selects the backend (currently only "gemini"). Adding a new
-    provider means adding a branch here and an adapter module -- call sites
-    never change. Mission intel/studio use provider_from_operator instead.
+    Default Mission/service backend is gpt-oss (NVIDIA). Gemini is only used
+    when LLM_PROVIDER=gemini *and* GEMINI_API_KEY is set — not as an implicit
+    fallback. Mission intel/studio use provider_from_operator instead.
     """
-    provider_name = os.environ.get("LLM_PROVIDER", "gemini").lower()
-
+    provider_name = os.environ.get("LLM_PROVIDER", "gptoss").lower()
+    if provider_name in {"gptoss", "nvidia"}:
+        return _gptoss(_need(_env("NVIDIA_API_KEY"), "NVIDIA"))
+    if provider_name == "deepseek":
+        return _deepseek(_need(_env("DEEPSEEK_API_KEY"), "DeepSeek"))
     if provider_name == "gemini":
-        api_key = os.environ["GEMINI_API_KEY"]
-        return provider_from_key(api_key)
-
+        return provider_from_key(_need(_env("GEMINI_API_KEY"), "Gemini"))
     raise ValueError(f"Unknown LLM_PROVIDER: {provider_name}")
 
 
@@ -144,13 +145,15 @@ def provider_from_operator(
     text_model: str | None = None,
     image_model: str | None = None,
 ) -> LLMProvider:
-    """Uncached Mission stack: operator header keys win; server env keys are the fallback.
+    """Uncached Mission stack: operator header keys win; server env for gpt-oss/Agnes only.
 
-    Defaults with zero operator keys: gpt-oss text + Agnes image, from server
-    NVIDIA_API_KEY / AGNES_API_KEY (MISSION_TEXT_MODEL / MISSION_IMAGE_MODEL override).
+    Gemini / Nano Banana never read GEMINI_API_KEY from the server env — only an
+    operator-pasted X-Gemini-Key enables them. Defaults: gpt-oss + Agnes.
     """
+    operator_gemini = (gemini_key or "").strip()
     keys = {
-        "gemini": (gemini_key or "").strip() or _env("GEMINI_API_KEY"),
+        # Operator-only: never fall back to GEMINI_API_KEY from .env
+        "gemini": operator_gemini,
         "deepseek": (deepseek_key or "").strip() or _env("DEEPSEEK_API_KEY"),
         "nvidia": (nvidia_key or "").strip() or _env("NVIDIA_API_KEY"),
         "agnes": (agnes_key or "").strip() or _env("AGNES_API_KEY"),
@@ -159,11 +162,14 @@ def provider_from_operator(
     requested_text = (text_model or "").strip().lower() or _env("MISSION_TEXT_MODEL") or "gptoss"
     if requested_text not in TEXT_MODELS:
         raise ValueError("Text model must be gemini, deepseek, or gptoss.")
+    # Gemini only enters the order when the operator pasted a key.
     text_order = [requested_text, *[m for m in TEXT_FALLBACK_ORDER if m != requested_text]]
+    if operator_gemini and "gemini" not in text_order:
+        text_order.append("gemini")
     text_id = next((m for m in text_order if _model_key(m, keys)), None)
     if text_id is None:
         raise ValueError(
-            "Paste a key in the Models chip, or set NVIDIA_API_KEY / GEMINI_API_KEY on the server."
+            "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY on the server."
         )
     if text_id == "gemini":
         text: LLMProvider = _gemini(keys["gemini"])
@@ -189,6 +195,9 @@ def provider_from_operator(
     image: LLMProvider | None = None
     if requested_image != "none":
         image_order = [requested_image, *[m for m in IMAGE_FALLBACK_ORDER if m != requested_image]]
+        # Nano Banana only when operator pasted Gemini — never from server env.
+        if operator_gemini and "nano_banana" not in image_order:
+            image_order.append("nano_banana")
         for image_id in image_order:
             if image_id == "nano_banana" and keys["gemini"]:
                 image = text if text_id == "gemini" else _gemini(keys["gemini"])
@@ -212,7 +221,7 @@ def server_model_defaults() -> dict[str, object]:
                 _env("MISSION_TEXT_MODEL") or "gptoss",
                 *TEXT_FALLBACK_ORDER,
             )
-            if _env(_KEY_ENV[m])
+            if m != "gemini" and _env(_KEY_ENV[m])
         ),
         None,
     )
@@ -223,7 +232,7 @@ def server_model_defaults() -> dict[str, object]:
                 _env("MISSION_IMAGE_MODEL") or "agnes",
                 *IMAGE_FALLBACK_ORDER,
             )
-            if m != "none" and _env(_KEY_ENV[m])
+            if m not in {"none", "nano_banana"} and _env(_KEY_ENV[m])
         ),
         None,
     )

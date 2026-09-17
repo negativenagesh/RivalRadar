@@ -52,7 +52,7 @@ async def test_mission_defaults_to_gptoss_and_agnes_from_server_env(
     assert isinstance(provider._image, AgnesImageProvider)
 
 
-async def test_server_defaults_fall_back_to_gemini_without_nvidia_key(
+async def test_server_defaults_ignore_gemini_env_without_nvidia(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from llm_provider.factory import server_model_defaults
@@ -63,8 +63,9 @@ async def test_server_defaults_fall_back_to_gemini_without_nvidia_key(
     monkeypatch.setenv("GEMINI_API_KEY", "gm-server")
 
     defaults = server_model_defaults()
-    assert defaults["text_model"] == "gemini"
-    assert defaults["image_model"] == "nano_banana"
+    assert defaults["text_model"] is None
+    assert defaults["image_model"] is None
+    assert defaults["available"] is False
 
 
 async def test_creative_accepts_deepseek_operator_key() -> None:

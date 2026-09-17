@@ -43,6 +43,12 @@ import {
   writeIntelCache,
 } from "@/lib/intel-cache";
 import {
+  appendStudioAssets,
+  readStudioAssets,
+  removeStudioAsset,
+  type SavedStudioAsset,
+} from "@/lib/studio-assets";
+import {
   SNIPER_PLATFORMS,
   SNIPER_TONES,
   STUDIO_FORMATS,
@@ -60,7 +66,7 @@ import type {
 } from "@/lib/types";
 
 const KEY_WARNING =
-  "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / GEMINI_API_KEY in the server .env.";
+  "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY in the server .env.";
 
 const AGENT_LABELS: Record<string, string> = {
   intel_chief: "Intel Chief",
@@ -91,7 +97,7 @@ const PERM_OPTIONS: {
   {
     key: "imageConcepts",
     label: "Post visuals",
-    hint: "Nano Banana 2, Agnes 2.0 Flash, or NVIDIA FLUX frames",
+    hint: "Agnes 2.0 Flash frames (or Nano Banana / FLUX if you paste those keys)",
   },
   {
     key: "carouselOutlines",
@@ -198,7 +204,12 @@ export function DiscoveryReport({
   const [studioLoadingSlot, setStudioLoadingSlot] = useState<number | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
   const [studioOuts, setStudioOuts] = useState<CreativeResult[]>([]);
+  const [studioLibrary, setStudioLibrary] = useState<SavedStudioAsset[]>([]);
   const [lightbox, setLightbox] = useState<string | null>(null);
+
+  useEffect(() => {
+    setStudioLibrary(readStudioAssets(brand.displayName || "brand"));
+  }, [brand.displayName]);
 
   const [sniperPlatform, setSniperPlatform] = useState("linkedin");
   const [sniperTone, setSniperTone] = useState<(typeof SNIPER_TONES)[number]>("witty");
@@ -410,9 +421,23 @@ export function DiscoveryReport({
         collected.push(result);
         setStudioOuts([...collected]);
       }
+      if (collected.length) {
+        const next = appendStudioAssets(brand.displayName || "brand", collected, {
+          format: studioFormat,
+          platform: studioPlatform,
+        });
+        setStudioLibrary(next);
+      }
     } catch (err) {
       setStudioError(err instanceof Error ? err.message : "Studio generation failed");
-      if (collected.length) setStudioOuts([...collected]);
+      if (collected.length) {
+        setStudioOuts([...collected]);
+        const next = appendStudioAssets(brand.displayName || "brand", collected, {
+          format: studioFormat,
+          platform: studioPlatform,
+        });
+        setStudioLibrary(next);
+      }
     } finally {
       setStudioLoadingSlot(null);
       setStudioBusy(false);
@@ -886,19 +911,19 @@ export function DiscoveryReport({
             </div>
           )}
         </div>
-        {studioOuts.length > 0 && (
+        {studioLibrary.length > 0 && (
           <div className="space-y-3 rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
             <div className="space-y-1">
               <h4 className="font-display text-base font-bold text-primary">Post to platform</h4>
               <p className="text-sm text-muted-foreground">
-                Publish Strategist writes viral, platform-native captions + hashtags (LinkedIn /
-                Instagram / X / YouTube). Pick an asset, then <strong>Post</strong> — Connect opens
-                noVNC with image + caption staged in that platform&apos;s composer. You hit publish
-                yourself. Optional: generate up to 3 caption variations first.
+                Saved studio assets stay here across refresh and new generates (
+                {studioLibrary.length} saved). Publish Strategist can write platform-native
+                captions; <strong>Post</strong> opens Connect/noVNC with image + caption staged —
+                you hit publish yourself.
               </p>
             </div>
             <PublishPanel
-              outs={studioOuts}
+              outs={studioLibrary}
               brandName={brand.displayName}
               intelMarkdown={geminiIntel?.markdown ?? null}
               factsJson={studioFormat === "meme" ? studioFactsJson : factsJson}
@@ -906,6 +931,9 @@ export function DiscoveryReport({
               spice={studioSpice}
               defaultPlatform={studioPlatform}
               ready={models.readyText}
+              onRemoveAsset={(id) => {
+                setStudioLibrary(removeStudioAsset(brand.displayName || "brand", id));
+              }}
             />
           </div>
         )}
@@ -1103,8 +1131,9 @@ function PublishPanel({
   spice,
   defaultPlatform,
   ready,
+  onRemoveAsset,
 }: {
-  outs: CreativeResult[];
+  outs: SavedStudioAsset[];
   brandName: string;
   intelMarkdown: string | null;
   factsJson: string;
@@ -1112,6 +1141,7 @@ function PublishPanel({
   spice: number;
   defaultPlatform: string;
   ready: boolean;
+  onRemoveAsset?: (id: string) => void;
 }) {
   const [assetIdx, setAssetIdx] = useState(0);
   const safeAssetIdx = Math.min(assetIdx, Math.max(outs.length - 1, 0));
@@ -1308,10 +1338,10 @@ function PublishPanel({
 
   return (
     <div className="space-y-4">
-      {outs.length > 1 && (
+      {outs.length > 0 && (
         <div className="space-y-2">
           <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-            Asset to post
+            Saved assets ({outs.length})
           </p>
           <div className="flex flex-wrap gap-2">
             {outs.map((item, idx) => {
@@ -1320,28 +1350,47 @@ function PublishPanel({
                   ? `data:${item.image_mime_type};base64,${item.image_data_base64}`
                   : null;
               return (
-                <button
-                  key={`asset-${idx}`}
-                  type="button"
-                  onClick={() => selectAsset(idx)}
-                  className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
-                    safeAssetIdx === idx
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border/50 bg-background/50 text-muted-foreground hover:border-primary/40"
-                  }`}
-                >
-                  {src ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={src} alt="" className="size-8 rounded-md object-cover" />
-                  ) : (
-                    <span className="flex size-8 items-center justify-center rounded-md bg-muted font-mono text-[10px]">
-                      #{idx + 1}
+                <div key={item.id} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => selectAsset(idx)}
+                    className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
+                      safeAssetIdx === idx
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border/50 bg-background/50 text-muted-foreground hover:border-primary/40"
+                    }`}
+                  >
+                    {src ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={src} alt="" className="size-8 rounded-md object-cover" />
+                    ) : (
+                      <span className="flex size-8 items-center justify-center rounded-md bg-muted font-mono text-[10px]">
+                        #{idx + 1}
+                      </span>
+                    )}
+                    <span className="max-w-28 truncate">
+                      {item.overlay_text || item.text || `Asset ${idx + 1}`}
                     </span>
+                    <span className="font-mono text-[9px] uppercase text-muted-foreground">
+                      {item.format}
+                    </span>
+                  </button>
+                  {onRemoveAsset && (
+                    <button
+                      type="button"
+                      aria-label={`Remove asset ${idx + 1}`}
+                      className="absolute -right-1 -top-1 rounded-full bg-background/90 p-0.5 text-muted-foreground shadow hover:text-destructive"
+                      onClick={() => {
+                        onRemoveAsset(item.id);
+                        if (idx <= safeAssetIdx) {
+                          setAssetIdx(Math.max(0, safeAssetIdx - 1));
+                        }
+                      }}
+                    >
+                      <X className="size-3" />
+                    </button>
                   )}
-                  <span className="max-w-28 truncate">
-                    {item.overlay_text || item.text || `Asset ${idx + 1}`}
-                  </span>
-                </button>
+                </div>
               );
             })}
           </div>
