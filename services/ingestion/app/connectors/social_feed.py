@@ -32,6 +32,7 @@ from app.connectors.social_feed_parse import (
     collect_post_urls,
     normalize_platform,
     parse_post_page,
+    posted_at_from_linkedin_activity,
     posted_at_from_url,
     settle_page,
 )
@@ -598,44 +599,51 @@ class SocialFeedConnector:
             {"detail": f"found_posts count={len(post_urls)} platform={platform} source=browser"},
         )
 
-        kept = 0
-        skipped_outside = 0
-        consecutive_older = 0
-        for post_url in post_urls:
-            if kept >= _MAX_POSTS:
-                break
-            try:
-                outcome = await self._ingest_post_bounded(
-                    session,
-                    handle=handle,
-                    platform=platform,
-                    post_url=post_url,
-                )
-            except Exception as exc:  # noqa: BLE001
-                await self._emit("error", {"detail": f"ingest_post failed {post_url}: {exc}"})
-                outcome = "failed"
-            if outcome == "kept":
-                kept += 1
-                consecutive_older = 0
-            elif outcome == "older":
-                skipped_outside += 1
-                consecutive_older += 1
-                if consecutive_older >= _PAST_WINDOW_STOP:
-                    await self._emit(
-                        "action",
-                        {
-                            "detail": (
-                                f"past_window_stop platform={platform} "
-                                f"after={consecutive_older} older than {self._window.date_from}"
-                            )
-                        },
-                    )
+        # Obscura + LinkedIn: listing URNs already encode timestamps. Skip per-post
+        # navigations that OOM the 512MB Render dyno and leave runs wedged.
+        if platform == "linkedin" and browser_engine() == "obscura":
+            kept, skipped_outside = await self._ingest_linkedin_listing_only(
+                handle=handle, post_urls=post_urls
+            )
+        else:
+            kept = 0
+            skipped_outside = 0
+            consecutive_older = 0
+            for post_url in post_urls:
+                if kept >= _MAX_POSTS:
                     break
-            elif outcome == "outside":
-                skipped_outside += 1
-                consecutive_older = 0
-            else:
-                consecutive_older = 0
+                try:
+                    outcome = await self._ingest_post_bounded(
+                        session,
+                        handle=handle,
+                        platform=platform,
+                        post_url=post_url,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    await self._emit("error", {"detail": f"ingest_post failed {post_url}: {exc}"})
+                    outcome = "failed"
+                if outcome == "kept":
+                    kept += 1
+                    consecutive_older = 0
+                elif outcome == "older":
+                    skipped_outside += 1
+                    consecutive_older += 1
+                    if consecutive_older >= _PAST_WINDOW_STOP:
+                        await self._emit(
+                            "action",
+                            {
+                                "detail": (
+                                    f"past_window_stop platform={platform} "
+                                    f"after={consecutive_older} older than {self._window.date_from}"
+                                )
+                            },
+                        )
+                        break
+                elif outcome == "outside":
+                    skipped_outside += 1
+                    consecutive_older = 0
+                else:
+                    consecutive_older = 0
 
         summary = self._media_summary(platform)
         await self._emit(
@@ -653,6 +661,83 @@ class SocialFeedConnector:
             "action",
             {"detail": f"media_summary platform={platform} source=browser {summary}"},
         )
+
+    async def _ingest_linkedin_listing_only(
+        self, *, handle: str, post_urls: list[str]
+    ) -> tuple[int, int]:
+        """Persist LinkedIn posts from listing URLs only (no per-post page loads)."""
+        await self._emit(
+            "action",
+            {
+                "detail": (
+                    f"linkedin_listing_only reason=obscura_memory candidates={len(post_urls)}"
+                )
+            },
+        )
+        kept = 0
+        skipped_outside = 0
+        consecutive_older = 0
+        for post_url in post_urls:
+            if kept >= _MAX_POSTS:
+                break
+            posted = posted_at_from_linkedin_activity(post_url) or posted_at_from_url(
+                "linkedin", post_url
+            )
+            if posted is None:
+                continue
+            if posted.tzinfo is None:
+                posted = posted.replace(tzinfo=UTC)
+            if not self._window.contains(posted):
+                outcome = self._skip_outside_outcome(posted)
+                skipped_outside += 1
+                if outcome == "older":
+                    consecutive_older += 1
+                    if consecutive_older >= _PAST_WINDOW_STOP:
+                        break
+                else:
+                    consecutive_older = 0
+                continue
+            consecutive_older = 0
+            external = re.sub(r"[^\w.:-]+", "-", f"linkedin:{post_url}")[:100]
+            post = RawPost(
+                account_handle=handle if handle.startswith("@") else f"@{handle.lstrip('@')}",
+                external_post_id=external,
+                format="founder_post",
+                theme_tags=[
+                    "linkedin",
+                    "source:browser",
+                    "source:linkedin_listing",
+                    f"link:{post_url[:180]}",
+                    f"date_from:{self._window.date_from.isoformat()}",
+                    f"date_to:{self._window.date_to.isoformat()}",
+                ],
+                caption=f"LinkedIn {handle.lstrip('@')}",
+                image_url=None,
+                likes=0,
+                comments=0,
+                shares=0,
+                views=0,
+                posted_at=posted.isoformat().replace("+00:00", "Z"),
+                media_urls=[],
+                media_keys=[],
+            )
+            async with self._lock:
+                self._posts.append(post)
+            kept += 1
+            await self._emit(
+                "action",
+                {
+                    "detail": "parsed_post",
+                    "platform": "linkedin",
+                    "id": external,
+                    "likes": 0,
+                    "comments": 0,
+                    "views": 0,
+                    "has_media": False,
+                },
+            )
+        await self._flush_checkpoint()
+        return kept, skipped_outside
 
     async def _collect_post_urls_bounded(
         self,

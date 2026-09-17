@@ -126,3 +126,26 @@ async def test_linkedin_obscura_skips_browser_without_vault_cookies(
         if call.args and call.args[0] == "error"
     ]
     assert any("Connect extension cookies" in d for d in errors)
+
+
+@pytest.mark.asyncio
+async def test_linkedin_listing_only_keeps_in_window_urns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.connectors.social_feed.browser_engine",
+        lambda: "obscura",
+    )
+    # activity id >> 22 encodes Unix ms — 2026-09-15 00:00 UTC
+    activity = (1_789_430_400_000 << 22) + 1
+    url = f"https://www.linkedin.com/feed/update/urn:li:activity:{activity}"
+    window = DateWindow(date_from=date(2026, 9, 14), date_to=date(2026, 9, 16))
+    c = SocialFeedConnector(run_id="t", targets=[], window=window)
+    c._emit = AsyncMock()  # type: ignore[method-assign]
+    c._flush_checkpoint = AsyncMock()  # type: ignore[method-assign]
+
+    kept, skipped = await c._ingest_linkedin_listing_only(handle="pixisai", post_urls=[url])
+    assert kept == 1
+    assert skipped == 0
+    assert len(c._posts) == 1
+    assert "linkedin_listing" in " ".join(c._posts[0]["theme_tags"])

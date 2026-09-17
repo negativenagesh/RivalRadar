@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -11,6 +11,10 @@ from app.routes import router
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     await init_models()
+    from app.runs import sweep_orphaned_runs
+
+    with suppress(Exception):
+        await sweep_orphaned_runs()
     yield
 
 

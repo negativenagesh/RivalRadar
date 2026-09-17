@@ -68,9 +68,7 @@ async def test_thread_watchdog_finalizes_run(
 ) -> None:
     monkeypatch.setattr("app.runs._RUN_WALL_S", 0.2)
     # Force shared-factory path (own engine would be a different empty DB).
-    monkeypatch.setattr(
-        "app.runs.settings.database_url", "sqlite+aiosqlite:///:memory:"
-    )
+    monkeypatch.setattr("app.runs.settings.database_url", "sqlite+aiosqlite:///:memory:")
 
     run = IngestionRun(connector_type="auto", status=RunStatus.RUNNING)
     session.add(run)
@@ -99,3 +97,29 @@ async def test_thread_watchdog_finalizes_run(
     assert updated.status == RunStatus.ERROR
     assert updated.error_detail is not None
     assert "run budget exceeded" in updated.error_detail
+
+
+@pytest.mark.asyncio
+async def test_sweep_orphaned_runs_marks_stale(
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.runs import sweep_orphaned_runs
+
+    stale = IngestionRun(connector_type="auto", status=RunStatus.RUNNING)
+    session.add(stale)
+    await session.commit()
+    await session.refresh(stale)
+    stale.created_at = datetime.now(UTC) - timedelta(seconds=500)
+    await session.commit()
+    run_id = stale.id
+
+    n = await sweep_orphaned_runs(session_factory, older_than_s=180)
+    assert n == 1
+    updated = await session.get(IngestionRun, run_id)
+    assert updated is not None
+    assert updated.status == RunStatus.ERROR
+    assert updated.error_detail is not None
+    assert "orphaned" in updated.error_detail
