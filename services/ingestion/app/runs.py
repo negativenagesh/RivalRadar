@@ -5,6 +5,7 @@ import contextlib
 import logging
 import threading
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from agent_events import AgentEvent, AgentEventBus
@@ -36,6 +37,36 @@ _TERMINAL = {RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED}
 
 # In-process registry so cancel can interrupt the asyncio task for a run.
 _active_tasks: dict[str, asyncio.Task[Any]] = {}
+
+
+async def sweep_orphaned_runs(
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    *,
+    older_than_s: float = _RUN_WALL_S,
+) -> int:
+    """Mark stuck pending/running rows after a dyno restart (in-memory tasks are gone)."""
+    factory = session_factory or default_session_factory
+    cutoff = datetime.now(UTC) - timedelta(seconds=older_than_s)
+    async with factory() as session:
+        rows = list(
+            (
+                await session.scalars(
+                    select(IngestionRun).where(
+                        IngestionRun.status.in_([RunStatus.PENDING, RunStatus.RUNNING]),
+                        IngestionRun.created_at < cutoff,
+                    )
+                )
+            ).all()
+        )
+        if not rows:
+            return 0
+        detail = f"orphaned after service restart (age>{older_than_s:.0f}s)"
+        for run in rows:
+            run.status = RunStatus.ERROR
+            run.error_detail = detail
+        await session.commit()
+        logger.warning("swept %s orphaned ingestion runs older than %.0fs", len(rows), older_than_s)
+        return len(rows)
 
 
 def _wall_detail(*, accounts: int, posts: int) -> str:
