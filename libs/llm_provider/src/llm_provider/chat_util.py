@@ -58,3 +58,17 @@ def translate_vendor_error(exc: BaseException, *, vendor: str) -> LLMProviderErr
     if status == 400:
         return LLMProviderError(f"{vendor} request failed: {raw[:240]}", status_code=400)
     return LLMProviderError(f"{vendor} request failed. Try Generate again.", status_code=502)
+
+
+def translate_transport_error(exc: BaseException, *, vendor: str) -> LLMProviderError:
+    """Map OpenAI/httpx timeouts and connection failures to a stable LLMProviderError."""
+    name = exc.__class__.__name__
+    if "Timeout" in name:
+        return LLMProviderError(
+            f"{vendor} timed out. Try Generate again, or pick another text model in Models.",
+            status_code=504,
+        )
+    return LLMProviderError(
+        f"{vendor} unreachable ({name}). Try Generate again.",
+        status_code=502,
+    )

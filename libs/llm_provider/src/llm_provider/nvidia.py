@@ -5,18 +5,21 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from llm_provider.base import ImageResult, LLMProviderError, Message
-from llm_provider.chat_util import message_text, translate_vendor_error
+from llm_provider.chat_util import message_text, translate_transport_error, translate_vendor_error
 
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 # https://build.nvidia.com/openai/gpt-oss-20b/modelcard
 DEFAULT_TEXT_MODEL = "openai/gpt-oss-20b"
 # Hosted OpenAI-compat image gen on the same NIM base URL.
 DEFAULT_IMAGE_MODEL = "black-forest-labs/flux.1-schnell"
+# gpt-oss spends tokens on hidden reasoning; keep a floor so short Mission caps still finish.
 DEFAULT_MAX_TOKENS = 4096
+# Fail fast enough that RoutingLLMProvider can fail over to Gemini before the UI dies.
+_TEXT_TIMEOUT = 45.0
 
 
 class NvidiaGptOssProvider:
@@ -29,7 +32,7 @@ class NvidiaGptOssProvider:
         base_url: str = DEFAULT_BASE_URL,
         model: str = DEFAULT_TEXT_MODEL,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=_TEXT_TIMEOUT)
         self._model = model
 
     async def complete(
@@ -56,6 +59,8 @@ class NvidiaGptOssProvider:
             )
         except APIStatusError as exc:
             raise translate_vendor_error(exc, vendor="NVIDIA gpt-oss-20b") from exc
+        except (APITimeoutError, APIConnectionError) as exc:
+            raise translate_transport_error(exc, vendor="NVIDIA gpt-oss-20b") from exc
         return message_text(response.choices[0].message)
 
     async def complete_stream(

@@ -114,12 +114,19 @@ export function resolveTextModel(state: OperatorState): TextModel | null {
 }
 
 export function resolveImageModel(state: OperatorState): ImageModel | null {
-  if (state.imageModel === "agnes" && hasOperatorKey(state.agnes)) return "agnes";
-  if (state.imageModel === "nvidia_flux" && hasOperatorKey(state.nvidia)) return "nvidia_flux";
-  if (state.imageModel === "nano_banana" && hasOperatorKey(state.gemini)) return "nano_banana";
-  if (hasOperatorKey(state.agnes)) return "agnes";
-  if (hasOperatorKey(state.gemini)) return "nano_banana";
-  if (hasOperatorKey(state.nvidia)) return "nvidia_flux";
+  // Honor the operator's image pick only when its browser key exists.
+  // Otherwise return null so api.ts sends `state.imageModel` (default Agnes)
+  // and the server paints with AGNES_API_KEY. Never steal Agnes → Nano Banana
+  // just because a Gemini key is pasted.
+  if (state.imageModel === "agnes") {
+    return hasOperatorKey(state.agnes) ? "agnes" : null;
+  }
+  if (state.imageModel === "nvidia_flux") {
+    return hasOperatorKey(state.nvidia) ? "nvidia_flux" : null;
+  }
+  if (state.imageModel === "nano_banana") {
+    return hasOperatorKey(state.gemini) ? "nano_banana" : null;
+  }
   return null;
 }
 

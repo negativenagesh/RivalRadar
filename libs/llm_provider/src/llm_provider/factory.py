@@ -172,6 +172,17 @@ def provider_from_operator(
     else:
         text = _gptoss(keys["nvidia"])
 
+    text_fallbacks: list[LLMProvider] = []
+    for mid in text_order:
+        if mid == text_id or not _model_key(mid, keys):
+            continue
+        if mid == "gemini":
+            text_fallbacks.append(_gemini(keys["gemini"]))
+        elif mid == "deepseek":
+            text_fallbacks.append(_deepseek(keys["deepseek"]))
+        else:
+            text_fallbacks.append(_gptoss(keys["nvidia"]))
+
     requested_image = (image_model or "").strip().lower() or _env("MISSION_IMAGE_MODEL") or "agnes"
     if requested_image not in IMAGE_MODELS:
         raise ValueError("Image model must be nano_banana, agnes, nvidia_flux, or none.")
@@ -189,7 +200,7 @@ def provider_from_operator(
                 image = _flux(keys["nvidia"])
                 break
 
-    return RoutingLLMProvider(text, image)
+    return RoutingLLMProvider(text, image, text_fallbacks=text_fallbacks)
 
 
 def server_model_defaults() -> dict[str, object]:

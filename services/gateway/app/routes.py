@@ -49,6 +49,7 @@ from app.connect_agent import (
     agent_close_session,
     agent_dump_session,
     agent_health,
+    agent_stage_post,
     agent_start_session,
     public_viewer_url,
 )
@@ -440,24 +441,111 @@ async def social_stage_post(
     session: AsyncSession = Depends(get_session),
     workspace_id: str = "default",
 ) -> dict[str, object]:
+    """Open Connect/noVNC, stage image+caption in the platform composer (never auto-publish)."""
     if not body.get("approved"):
         raise HTTPException(status_code=400, detail="human approval required")
-    platform = str(body.get("platform") or "").strip()
+    platform = str(body.get("platform") or "").strip().lower()
+    if platform == "twitter":
+        platform = "x"
     caption = str(body.get("caption") or "").strip()
+    if not caption:
+        raise HTTPException(status_code=400, detail="caption is empty")
+    media = body.get("media_png_b64")
+    media_b64 = media if isinstance(media, str) and media.strip() else None
+
     aliases = _platform_aliases(platform)
+    # YouTube Studio often rides Google cookies vaulted under google/youtube.
+    if platform == "youtube":
+        aliases |= {"youtube", "google"}
     vault = await _vaulted_sessions(session, workspace_id=workspace_id, platforms=aliases)
     if not vault:
         raise HTTPException(
-            status_code=400, detail=f"not connected to {platform or 'this platform'}"
+            status_code=400,
+            detail=f"not connected to {platform or 'this platform'} — Connect first, then Post",
         )
+
+    # Prefer live Connect/noVNC so the operator can hit Publish themselves.
+    if await agent_health():
+        seed_cookies: list[dict[str, object]] = []
+        seed_state: dict[str, object] | None = None
+        for blob in vault.values():
+            if not isinstance(blob, dict):
+                continue
+            raw_cookies = blob.get("cookies")
+            if isinstance(raw_cookies, list) and not seed_cookies:
+                seed_cookies = [c for c in raw_cookies if isinstance(c, dict)]
+            raw_state = blob.get("storage_state")
+            if isinstance(raw_state, dict) and seed_state is None:
+                seed_state = raw_state
+        open_url = connect_open_url(platform, has_saved_session=bool(seed_cookies or seed_state))
+        # YouTube is not in PLATFORM_HOME_URLS — open Studio when connected.
+        if platform == "youtube":
+            open_url = "https://studio.youtube.com/"
+        session_id = str(uuid.uuid4())
+        try:
+            agent = await agent_start_session(
+                session_id=session_id,
+                platform=platform,
+                login_url=open_url,
+                cookies=seed_cookies or None,
+                storage_state=seed_state,
+            )
+            staged = await agent_stage_post(
+                session_id=session_id,
+                platform=platform,
+                caption=caption,
+                media_png_b64=media_b64,
+            )
+        except ConnectAgentError as exc:
+            with contextlib.suppress(Exception):
+                await agent_close_session(session_id)
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        viewer = None
+        raw_viewer = agent.get("viewer_url") or staged.get("viewer_url")
+        if isinstance(raw_viewer, str) and raw_viewer.strip():
+            viewer = raw_viewer.strip()
+        configured = public_viewer_url()
+        if configured and (
+            not viewer or "localhost" in viewer.lower() or "127.0.0.1" in viewer.lower()
+        ):
+            viewer = configured
+        put_session(
+            ConnectSession(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                platform=platform,
+                login_url=open_url,
+                status="staged",
+                detail=str(staged.get("detail") or "staged"),
+            )
+        )
+        return {
+            "ok": bool(staged.get("ok", True)),
+            "detail": str(
+                staged.get("detail")
+                or f"staged in {platform} composer — review in noVNC and hit publish yourself"
+            ),
+            "screenshot_jpeg_b64": staged.get("screenshot_jpeg_b64"),
+            "viewer_url": viewer,
+            "session_id": session_id,
+        }
+
+    # Fallback: headless Playwright in ingestion (screenshot only, no live viewer).
     payload = {
         "platform": platform,
         "caption": caption,
-        "media_png_b64": body.get("media_png_b64"),
+        "media_png_b64": media_b64,
         "approved": True,
         "platform_sessions": vault,
     }
-    return await stage_ingestion_post(payload)
+    result = await stage_ingestion_post(payload)
+    result["viewer_url"] = None
+    result["detail"] = (
+        str(result.get("detail") or "staged")
+        + " (Connect agent offline — staged headless; start connect-agent for live noVNC)"
+    )
+    return result
 
 
 @router.get("/pipeline-runs/{run_id}", response_model=PipelineRunRead)

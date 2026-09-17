@@ -892,9 +892,9 @@ export function DiscoveryReport({
               <h4 className="font-display text-base font-bold text-primary">Post to platform</h4>
               <p className="text-sm text-muted-foreground">
                 Publish Strategist writes viral, platform-native captions + hashtags (LinkedIn /
-                Instagram / X / YouTube). Pick an asset, generate up to 3 variations, then Post —
-                the headless browser opens the composer with image + caption staged. You hit publish
-                yourself.
+                Instagram / X / YouTube). Pick an asset, then <strong>Post</strong> — Connect opens
+                noVNC with image + caption staged in that platform&apos;s composer. You hit publish
+                yourself. Optional: generate up to 3 caption variations first.
               </p>
             </div>
             <PublishPanel
@@ -1190,12 +1190,19 @@ function PublishPanel({
     }
   }
 
+  async function openViewer(result: StagePostResult): Promise<void> {
+    const url = result.viewer_url?.trim();
+    if (url && typeof window !== "undefined") {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }
+
   async function stageVariation(idx: number, variation: PublishVariation): Promise<void> {
     if (!out) return;
     if (
       typeof window !== "undefined" &&
       !window.confirm(
-        `Open ${platform} in the headless browser and stage this post with the image attached? Nothing gets published — you review and hit post yourself.`,
+        `Open ${platform} in the Connect browser (noVNC) and stage this post with the image attached? Nothing gets published — you review and hit post yourself.`,
       )
     ) {
       return;
@@ -1210,6 +1217,44 @@ function PublishPanel({
         approved: true,
       });
       setStaged((prev) => ({ ...prev, [idx]: result }));
+      await openViewer(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "staging failed");
+    } finally {
+      setStagingIdx(null);
+    }
+  }
+
+  async function stageStudioCaption(): Promise<void> {
+    if (!out) return;
+    const caption = (out.text || "").trim();
+    if (!caption) {
+      setError("Studio caption is empty — generate an asset first.");
+      return;
+    }
+    if (!out.image_data_base64) {
+      setError("No image on this asset — Generate a frame before Post.");
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `Open ${platform} in the Connect browser (noVNC) with this studio image + caption staged? You hit publish yourself.`,
+      )
+    ) {
+      return;
+    }
+    setStagingIdx(-1);
+    setError(null);
+    try {
+      const result = await stagePlatformPost({
+        platform,
+        caption,
+        media_png_b64: out.image_data_base64,
+        approved: true,
+      });
+      setStaged((prev) => ({ ...prev, [-1]: result }));
+      await openViewer(result);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "staging failed");
     } finally {
@@ -1227,7 +1272,7 @@ function PublishPanel({
     if (
       typeof window !== "undefined" &&
       !window.confirm(
-        `Post ${idxs.length} variation(s) to ${platform} via the headless browser? Composer opens staged — nothing auto-publishes.`,
+        `Post ${idxs.length} variation(s) to ${platform} via Connect/noVNC? Composer opens staged — nothing auto-publishes.`,
       )
     ) {
       return;
@@ -1244,6 +1289,7 @@ function PublishPanel({
           approved: true,
         });
         setStaged((prev) => ({ ...prev, [idx]: result }));
+        await openViewer(result);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "staging failed");
         break;
@@ -1352,7 +1398,23 @@ function PublishPanel({
                 )}
                 {plan ? "Regenerate viral captions" : "Generate viral captions"}
               </Button>
+              <Button
+                size="sm"
+                disabled={stagingAll || stagingIdx !== null || !out.image_data_base64}
+                onClick={() => void stageStudioCaption()}
+              >
+                {stagingIdx === -1 ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Send className="size-3.5" />
+                )}
+                Post on {platform}
+              </Button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Post uses the selected studio image + its caption (or a variation below) and opens
+              the Connect noVNC tab so you can publish.
+            </p>
             {!ready && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 Add a text-model key in Models (defaults to gpt-oss when the server key is set).
@@ -1361,6 +1423,35 @@ function PublishPanel({
           </div>
         </div>
       </div>
+
+      {staged[-1] && (
+        <div className="space-y-1 rounded-xl border border-primary/30 bg-primary/5 p-3">
+          <p className={`text-xs ${staged[-1].ok ? "text-primary" : "text-destructive"}`}>
+            {staged[-1].ok
+              ? `Staged in ${platform} composer — finish in noVNC and hit publish yourself.`
+              : staged[-1].detail}
+          </p>
+          {staged[-1].viewer_url && (
+            <a
+              href={staged[-1].viewer_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-ui inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+            >
+              Open Connect viewer
+              <ExternalLink className="size-3" />
+            </a>
+          )}
+          {staged[-1].screenshot_jpeg_b64 && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={`data:image/jpeg;base64,${staged[-1].screenshot_jpeg_b64}`}
+              alt={`${platform} staged post screenshot`}
+              className="max-h-56 w-auto rounded-lg border border-border/40"
+            />
+          )}
+        </div>
+      )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {busy && liveDraft && (
@@ -1475,9 +1566,20 @@ function PublishPanel({
                       className={`text-xs ${stagedResult.ok ? "text-primary" : "text-destructive"}`}
                     >
                       {stagedResult.ok
-                        ? `Staged in ${platform} composer — review & hit publish yourself.`
+                        ? `Staged in ${platform} composer — review in noVNC & hit publish yourself.`
                         : stagedResult.detail}
                     </p>
+                    {stagedResult.viewer_url && (
+                      <a
+                        href={stagedResult.viewer_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-ui inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                      >
+                        Open Connect viewer
+                        <ExternalLink className="size-3" />
+                      </a>
+                    )}
                     {stagedResult.detail && stagedResult.ok && (
                       <p className="text-[11px] text-muted-foreground">{stagedResult.detail}</p>
                     )}

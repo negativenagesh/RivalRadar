@@ -333,6 +333,8 @@ export type StagePostResult = {
   ok: boolean;
   detail: string;
   screenshot_jpeg_b64: string | null;
+  viewer_url?: string | null;
+  session_id?: string | null;
 };
 
 export function stagePlatformPost(body: {

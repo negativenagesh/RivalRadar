@@ -235,6 +235,7 @@ describe("DiscoveryReport war room", () => {
 
     expect(await screen.findByText("Post to platform")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate viral captions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Post on /i })).toBeInTheDocument();
     expect(screen.getByText("Caption variations (max 3)")).toBeInTheDocument();
     for (const platform of ["linkedin", "instagram", "x", "youtube"]) {
       expect(screen.getAllByRole("button", { name: platform }).length).toBeGreaterThan(0);

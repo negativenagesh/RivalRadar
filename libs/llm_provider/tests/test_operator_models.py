@@ -229,7 +229,9 @@ def test_operator_requested_image_wins_when_its_key_exists() -> None:
     assert isinstance(stack._image, NvidiaFluxProvider)
 
 
-def test_operator_deepseek_text_gemini_image() -> None:
+def test_operator_deepseek_text_gemini_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     stack = provider_from_operator(
         gemini_key="AIza-test",
         deepseek_key="sk-test",
@@ -278,10 +280,51 @@ def test_operator_agnes_pick_beats_gemini_default() -> None:
 def test_operator_no_keys_falls_back_to_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "nv-server")
     monkeypatch.setenv("AGNES_API_KEY", "agnes-server")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     stack = provider_from_operator()
     assert isinstance(stack, RoutingLLMProvider)
     assert isinstance(stack._text, NvidiaGptOssProvider)
     assert isinstance(stack._image, AgnesImageProvider)
+    assert stack._text_fallbacks == []
+
+
+def test_operator_gptoss_keeps_gemini_as_text_failover(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    stack = provider_from_operator(
+        nvidia_key="nv-op",
+        gemini_key="AIza-op",
+        agnes_key="sk-agnes",
+        text_model="gptoss",
+        image_model="agnes",
+    )
+    assert isinstance(stack._text, NvidiaGptOssProvider)
+    assert len(stack._text_fallbacks) == 1
+    assert isinstance(stack._text_fallbacks[0], GeminiOpenAICompatProvider)
+
+
+async def test_routing_fails_over_on_timeout() -> None:
+    primary = AsyncMock()
+    primary.complete = AsyncMock(side_effect=LLMProviderError("timed out", status_code=504))
+    backup = AsyncMock()
+    backup.complete = AsyncMock(return_value="meme json")
+    stack = RoutingLLMProvider(primary, None, text_fallbacks=[backup])
+    assert await stack.complete([]) == "meme json"
+    primary.complete.assert_awaited_once()
+    backup.complete.assert_awaited_once()
+    # Sticky: later completes skip the dead primary.
+    backup.complete = AsyncMock(return_value="again")
+    assert await stack.complete([]) == "again"
+    assert primary.complete.await_count == 1
+    backup.complete.assert_awaited_once()
+
+
+def test_translate_transport_timeout() -> None:
+    from llm_provider.chat_util import translate_transport_error
+
+    err = translate_transport_error(TimeoutError("x"), vendor="NVIDIA gpt-oss-20b")
+    assert err.status_code == 504
+    assert "timed out" in err.detail.lower()
 
 
 def test_operator_no_keys_no_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -120,11 +120,13 @@ async def creative_generate(
     import logging
 
     log = logging.getLogger("generation.creative")
+    image_backend = type(getattr(provider, "_image", None) or provider).__name__
     log.info(
-        "creative start kind=%s format=%s platform=%s",
+        "creative start kind=%s format=%s platform=%s image=%s",
         request.kind,
         request.format,
         request.platform,
+        image_backend,
     )
     try:
         result = await generate_creative(request, provider)

@@ -131,7 +131,7 @@ async def _maybe_image(
         return None, None, exc.detail
     except Exception:  # noqa: BLE001
         logger.warning("creative generate_image failed; caption-only", exc_info=True)
-        return None, None, "Nano Banana 2 did not return an image. Try Generate again."
+        return None, None, "Image model did not return pixels. Try Generate again."
 
 
 

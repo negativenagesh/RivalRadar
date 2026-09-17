@@ -195,6 +195,36 @@ class SessionManager:
             return live
         return live
 
+    async def stage(
+        self,
+        session_id: str,
+        *,
+        platform: str,
+        caption: str,
+        media_png_b64: str | None,
+    ) -> dict[str, Any]:
+        from app.stage import StageError, run_stage
+
+        live = await self.get(session_id)
+        if live is None or live.page is None:
+            raise KeyError(session_id)
+        if live.status == "expired":
+            raise RuntimeError("session expired")
+        try:
+            result = await run_stage(
+                live.page,
+                platform=platform or live.platform,
+                caption=caption,
+                media_png_b64=media_png_b64,
+            )
+        except StageError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise StageError(f"could not stage on {platform}: {exc}") from exc
+        live.status = "staged"
+        live.detail = str(result.get("detail") or "staged")
+        return result
+
     async def dump_session(self, session_id: str) -> dict[str, Any]:
         live = await self.get(session_id)
         if live is None or live.context is None:
