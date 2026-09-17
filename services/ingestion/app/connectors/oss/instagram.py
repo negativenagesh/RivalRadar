@@ -169,23 +169,33 @@ def _fetch_sync(
         media_path = pick_media_file(out_dir, stem_hints=[shortcode])
         post_url = f"https://www.instagram.com/p/{shortcode}/"
         remote = post.url
+        likes = int(post.likes or 0)
+        comments = int(post.comments or 0)
+        views = int(getattr(post, "video_view_count", None) or 0)
+        themes = [
+            "instagram",
+            "source:instaloader",
+            f"link:{post_url}",
+            f"date_from:{window.date_from.isoformat()}",
+            f"date_to:{window.date_to.isoformat()}",
+        ]
+        if likes:
+            themes.append(f"likes:{likes}")
+        if comments:
+            themes.append(f"comments:{comments}")
+        if views:
+            themes.append(f"views:{views}")
         raw = RawPost(
             account_handle=account["handle"],
             external_post_id=f"instagram:{shortcode}"[:100],
             format="reel" if post.is_video else "founder_post",
-            theme_tags=[
-                "instagram",
-                "source:instaloader",
-                f"link:{post_url}",
-                f"date_from:{window.date_from.isoformat()}",
-                f"date_to:{window.date_to.isoformat()}",
-            ],
+            theme_tags=themes,
             caption=(post.caption or "")[:2000] or f"Instagram @{username}",
             image_url=remote,
-            likes=int(post.likes or 0),
-            comments=int(post.comments or 0),
+            likes=likes,
+            comments=comments,
             shares=0,
-            views=int(getattr(post, "video_view_count", None) or 0),
+            views=views,
             posted_at=posted.isoformat().replace("+00:00", "Z"),
             media_urls=[remote] if remote else [],
             media_keys=[],

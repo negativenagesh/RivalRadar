@@ -910,6 +910,10 @@ class SocialFeedConnector:
                 media_keys = [key]
                 image_url = f"/ingestion/media/{key}"
 
+        likes = int(parsed.get("likes") or 0)
+        comments = int(parsed.get("comments") or 0)
+        shares = int(parsed.get("shares") or 0)
+        views = int(parsed.get("views") or 0)
         themes = [
             platform,
             "source:browser",
@@ -917,6 +921,15 @@ class SocialFeedConnector:
             f"date_from:{self._window.date_from.isoformat()}",
             f"date_to:{self._window.date_to.isoformat()}",
         ]
+        # Theme metric tags keep Findings correct even if column upsert was stale.
+        if likes:
+            themes.append(f"likes:{likes}")
+        if comments:
+            themes.append(f"comments:{comments}")
+        if shares:
+            themes.append(f"shares:{shares}")
+        if views:
+            themes.append(f"views:{views}")
 
         fmt = "reel" if "/reel/" in post_url or platform == "tiktok" else "founder_post"
         post: RawPost = {
@@ -926,34 +939,39 @@ class SocialFeedConnector:
             "theme_tags": themes,
             "caption": str(parsed.get("caption") or "")[:2000],
             "image_url": image_url,
-            "likes": int(parsed.get("likes") or 0),
-            "comments": int(parsed.get("comments") or 0),
-            "shares": int(parsed.get("shares") or 0),
-            "views": int(parsed.get("views") or 0),
+            "likes": likes,
+            "comments": comments,
+            "shares": shares,
+            "views": views,
             "posted_at": posted_at.isoformat().replace("+00:00", "Z"),
             "media_urls": media_urls,
             "media_keys": media_keys,
             "media_kind": str(parsed.get("media_kind") or "image"),
         }
-        self._count_media(platform, post)
         async with self._lock:
             self._posts.append(post)
         await self._emit(
             "action",
             {
-                "detail": "parsed_post",
+                "detail": (
+                    f"parsed_post id={post['external_post_id']} "
+                    f"likes={likes} comments={comments} views={views} "
+                    f"media={parsed.get('media_kind') or 'image'}"
+                ),
                 "platform": platform,
                 "id": post["external_post_id"],
-                "likes": post["likes"],
-                "comments": post["comments"],
-                "views": post.get("views", 0),
+                "likes": likes,
+                "comments": comments,
+                "views": views,
                 "has_media": bool(media_keys or media_urls),
             },
         )
         await self._emit_post_screenshot(
             session, platform=platform, url=post_url, handle=handle, post=post
         )
-        if media_keys:
+        # Count after screenshot so media_fallback JPEG is not media_none.
+        self._count_media(platform, post)
+        if post.get("media_keys"):
             await self._emit_stored_media_frame(post, platform=platform)
         return "kept"
 
@@ -1007,7 +1025,11 @@ class SocialFeedConnector:
         post: RawPost | None = None,
     ) -> None:
         try:
-            await self._emit("action", {"detail": f"screenshot platform={platform} kind=post"})
+            # Live Operator theater — not the Findings media file (unless fallback).
+            await self._emit(
+                "action",
+                {"detail": f"live_frame platform={platform} kind=post"},
+            )
             if session.page is not None:
                 await settle_page(session.page, quiet_ms=80)
             jpeg = await asyncio.wait_for(session.screenshot_jpeg_b64(), timeout=12)
@@ -1019,7 +1041,8 @@ class SocialFeedConnector:
                     "platform": platform,
                     "url": url,
                     "handle": handle,
-                    "label": f"{handle} post",
+                    "label": f"{handle} live frame",
+                    "theater": True,
                 },
             )
             if post is not None and self._object_store is not None and not post.get("media_keys"):

@@ -100,7 +100,9 @@ async def generate_creative_content(
 async def generate_intel_report(
     body: dict[str, Any], *, operator_headers: dict[str, str]
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=240.0) as client:
+    # Multi-agent intel can take several minutes on cold gpt-oss; keep generous budget.
+    timeout = httpx.Timeout(600.0, connect=30.0, read=600.0, write=60.0)
+    async with httpx.AsyncClient(base_url=settings.generation_service_url, timeout=timeout) as client:
         try:
             response = await client.post(
                 "/intel/report",
@@ -141,9 +143,11 @@ async def stream_comment_draft(
 async def _stream_generation(
     path: str, body: dict[str, Any], operator_headers: dict[str, str]
 ) -> AsyncIterator[str]:
+    # Heartbeats from generation keep this read window from idling out mid-agent.
+    timeout = httpx.Timeout(600.0, connect=30.0, read=600.0, write=60.0)
     try:
         async with httpx.AsyncClient(
-            base_url=settings.generation_service_url, timeout=httpx.Timeout(300.0, read=300.0)
+            base_url=settings.generation_service_url, timeout=timeout
         ) as client, client.stream(
             "POST", path, json=body, headers=operator_headers
         ) as response:

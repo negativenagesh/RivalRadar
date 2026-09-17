@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable
@@ -509,17 +510,47 @@ async def _complete_json_streaming(
     max_tokens: int,
     agent: str,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Stream an agent; yield markdown delta events when parseable, then {"_data": ...}."""
+    """Stream an agent; yield markdown delta events when parseable, then {"_data": ...}.
+
+    Emits heartbeat events during quiet stretches so gateway httpx read does not
+    idle-timeout mid-generation (fixes ReadTimeout on long gpt-oss runs).
+    """
     messages = [Message(role="system", content=system), Message(role="user", content=user)]
     buf = ""
     last_md = ""
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _produce() -> None:
+        try:
+            async for piece in provider.complete_stream(
+                messages,
+                temperature=0.35,
+                max_tokens=max_tokens,
+                reasoning_effort="low",
+            ):
+                if not piece:
+                    continue
+                await queue.put({"_piece": piece})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("intel agent stream failed: %s", exc)
+            await queue.put({"_error": str(exc)})
+        finally:
+            await queue.put(None)
+
+    producer = asyncio.create_task(_produce())
     try:
-        async for piece in provider.complete_stream(
-            messages,
-            temperature=0.35,
-            max_tokens=max_tokens,
-            reasoning_effort="low",
-        ):
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=12.0)
+            except TimeoutError:
+                yield {"event": "heartbeat", "agent": agent}
+                continue
+            if item is None:
+                break
+            if "_error" in item:
+                yield {"_data": {}}
+                return
+            piece = str(item.get("_piece") or "")
             if not piece:
                 continue
             buf += piece
@@ -549,9 +580,11 @@ async def _complete_json_streaming(
         except Exception as exc:  # noqa: BLE001
             logger.warning("intel agent stream JSON parse failed: %s", exc)
             yield {"_data": {}}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("intel agent stream failed: %s", exc)
-        yield {"_data": {}}
+    finally:
+        if not producer.done():
+            producer.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await producer
 
 
 async def _chief_with_quality_retry_streaming(
@@ -739,10 +772,16 @@ async def generate_intel_events(
     yield {"event": "agent", "agent": "intel_chief", "status": "done", "ok": bool(chief_data)}
 
     results: dict[str, dict[str, Any]] = {"intel_chief": chief_data}
-    for fut in asyncio.as_completed([play_task, scout_task]):
-        agent, data = await fut
-        results[agent] = data
-        yield {"event": "agent", "agent": agent, "status": "done", "ok": bool(data)}
+    pending = {play_task, scout_task}
+    while pending:
+        done, pending = await asyncio.wait(pending, timeout=12.0, return_when=asyncio.FIRST_COMPLETED)
+        if not done:
+            yield {"event": "heartbeat", "agent": "war_room"}
+            continue
+        for fut in done:
+            agent, data = fut.result()
+            results[agent] = data
+            yield {"event": "agent", "agent": agent, "status": "done", "ok": bool(data)}
 
     report = _assemble_intel(
         request,

@@ -61,6 +61,9 @@ services:
       OBJECT_STORE_ROOT: /data/objects
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       CONNECT_IN_DOCKER: "1"
+      # Local default: Playwright Chromium. Obscura's release is x86_64-only and
+      # crashes on Apple Silicon (ECONNREFUSED :9222). Override with obscura on amd64.
+      BROWSER_ENGINE: ${BROWSER_ENGINE:-chromium}
     ports:
       - "8001:8000"
     shm_size: "1gb"

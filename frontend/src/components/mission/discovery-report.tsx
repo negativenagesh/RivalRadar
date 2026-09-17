@@ -20,8 +20,11 @@ import { useOperatorModels } from "@/components/operator-models-provider";
 import {
   dropSocialComment,
   generateCreative,
+  getIntelJob,
   listConnections,
+  putIntelJob,
   stagePlatformPost,
+  startIntelJob,
   streamCommentDraft,
   streamIntelReport,
   streamPublishPlan,
@@ -32,6 +35,13 @@ import {
 import { MarkdownReport } from "@/components/mission/markdown-report";
 import { IntelVisuals } from "@/components/mission/intel-visuals";
 import { mergeIntel, buildStudioRoastPack, type IntelFacts } from "@/lib/intel-facts";
+import {
+  clearIntelCache,
+  intelCacheKey,
+  intelFactsSig,
+  readIntelCache,
+  writeIntelCache,
+} from "@/lib/intel-cache";
 import {
   SNIPER_PLATFORMS,
   SNIPER_TONES,
@@ -51,45 +61,6 @@ import type {
 
 const KEY_WARNING =
   "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / GEMINI_API_KEY in the server .env.";
-
-const INTEL_CACHE_PREFIX = "rivalradar.intel.";
-
-function intelCacheKey(sig: string, brandName: string): string {
-  let hash = 0;
-  const text = `${sig}|${brandName}`;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = (Math.imul(hash, 31) + text.charCodeAt(i)) | 0;
-  }
-  return `${INTEL_CACHE_PREFIX}${(hash >>> 0).toString(36)}`;
-}
-
-function readIntelCache(key: string): IntelReport | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as IntelReport;
-    return parsed && typeof parsed.markdown === "string" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeIntelCache(key: string, report: IntelReport): void {
-  if (typeof window === "undefined") return;
-  try {
-    // Keep only the newest few cached briefs.
-    const stale = Object.keys(window.localStorage).filter(
-      (k) => k.startsWith(INTEL_CACHE_PREFIX) && k !== key,
-    );
-    for (const k of stale.slice(0, Math.max(0, stale.length - 4))) {
-      window.localStorage.removeItem(k);
-    }
-    window.localStorage.setItem(key, JSON.stringify(report));
-  } catch {
-    // storage full / private mode
-  }
-}
 
 const AGENT_LABELS: Record<string, string> = {
   intel_chief: "Intel Chief",
@@ -194,9 +165,7 @@ export function DiscoveryReport({
     () => JSON.stringify(buildStudioRoastPack(facts, brand, competitors)),
     [facts, brand, competitors],
   );
-  const factsSig = `${facts.window.label}|${facts.brandName}|${facts.companies
-    .map((c) => `${c.name}:${c.posts}`)
-    .join(",")}|${facts.sniperQueue.length}`;
+  const factsSig = intelFactsSig(facts);
 
   const [geminiIntel, setGeminiIntel] = useState<IntelReport | null>(null);
   const [intelFetchError, setIntelFetchError] = useState<string | null>(null);
@@ -295,26 +264,74 @@ export function DiscoveryReport({
   useEffect(() => {
     if (!models.readyText) return;
     let cancelled = false;
-    const cacheKey = intelCacheKey(factsSig, brand.displayName || "the brand");
-    // Defer setState out of the effect body (react-hooks/set-state-in-effect).
-    void Promise.resolve().then(() => {
-      if (cancelled) return;
-      const cached = readIntelCache(cacheKey);
-      if (cached) {
-        setGeminiIntel(cached);
-        setIntelFetchError(null);
+    const brandName = brand.displayName || "the brand";
+    const cacheKey = intelCacheKey(factsSig, brandName);
+    const body = {
+      facts,
+      brand_name: brandName,
+      voice_notes: brand.voiceNotes,
+      forbidden_claims: brand.forbiddenClaims,
+    };
+
+    async function loadIntel() {
+      // 1) Instant local cache — refresh must not re-hit generation.
+      const local = readIntelCache(cacheKey);
+      if (local) {
+        if (!cancelled) {
+          setGeminiIntel(local);
+          setIntelFetchError(null);
+        }
         return;
       }
+
+      // 2) Server job started when Scout finished — poll until ready.
+      try {
+        let job = await getIntelJob(cacheKey);
+        if (cancelled) return;
+        if (job.status === "done" && job.report) {
+          writeIntelCache(cacheKey, job.report);
+          setGeminiIntel(job.report);
+          setIntelFetchError(null);
+          return;
+        }
+        if (job.status === "miss" || job.status === "error") {
+          job = await startIntelJob({ cache_key: cacheKey, ...body, force: job.status === "error" });
+          if (cancelled) return;
+          if (job.status === "done" && job.report) {
+            writeIntelCache(cacheKey, job.report);
+            setGeminiIntel(job.report);
+            setIntelFetchError(null);
+            return;
+          }
+        }
+        if (job.status === "running") {
+          setIntelStages({ intel_chief: "writing", play_caller: "writing", platform_scout: "writing" });
+          for (let i = 0; i < 120 && !cancelled; i += 1) {
+            await new Promise((r) => window.setTimeout(r, 2500));
+            const next = await getIntelJob(cacheKey);
+            if (cancelled) return;
+            if (next.status === "done" && next.report) {
+              writeIntelCache(cacheKey, next.report);
+              setGeminiIntel(next.report);
+              setIntelLiveMarkdown("");
+              setIntelFetchError(null);
+              return;
+            }
+            if (next.status === "error") {
+              throw new Error(next.error || "Intel job failed");
+            }
+          }
+        }
+      } catch {
+        // Fall through to live SSE stream.
+      }
+      if (cancelled) return;
+
+      // 3) Live stream fallback (also fills caches).
       setIntelStages({});
       setIntelLiveMarkdown("");
-      void streamIntelReport(
-        {
-          facts,
-          brand_name: brand.displayName || "the brand",
-          voice_notes: brand.voiceNotes,
-          forbidden_claims: brand.forbiddenClaims,
-        },
-        (event) => {
+      try {
+        const report = await streamIntelReport(body, (event) => {
           if (cancelled) return;
           if (event.event === "stage") {
             setIntelStages((s) => ({ ...s, [event.agent]: "writing" }));
@@ -325,24 +342,24 @@ export function DiscoveryReport({
               event.replace ? event.markdown : `${prev}${event.markdown}`,
             );
           }
-        },
-      )
-        .then((report) => {
-          if (cancelled) return;
-          writeIntelCache(cacheKey, report);
-          setGeminiIntel(report);
-          setIntelLiveMarkdown("");
-          setIntelFetchError(null);
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          setGeminiIntel(null);
-          setIntelLiveMarkdown("");
-          setIntelFetchError(
-            err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
-          );
         });
-    });
+        if (cancelled) return;
+        writeIntelCache(cacheKey, report);
+        void putIntelJob(cacheKey, { report, brand_name: brandName }).catch(() => undefined);
+        setGeminiIntel(report);
+        setIntelLiveMarkdown("");
+        setIntelFetchError(null);
+      } catch (err: unknown) {
+        if (cancelled) return;
+        setGeminiIntel(null);
+        setIntelLiveMarkdown("");
+        setIntelFetchError(
+          err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
+        );
+      }
+    }
+
+    void loadIntel();
     return () => {
       cancelled = true;
     };
@@ -529,11 +546,16 @@ export function DiscoveryReport({
               variant="outline"
               disabled={!models.readyText || intelBusy}
               onClick={() => {
-                if (typeof window !== "undefined") {
-                  window.localStorage.removeItem(
-                    intelCacheKey(factsSig, brand.displayName || "the brand"),
-                  );
-                }
+                const cacheKey = intelCacheKey(factsSig, brand.displayName || "the brand");
+                clearIntelCache(cacheKey);
+                void startIntelJob({
+                  cache_key: cacheKey,
+                  facts,
+                  brand_name: brand.displayName || "the brand",
+                  voice_notes: brand.voiceNotes,
+                  forbidden_claims: brand.forbiddenClaims,
+                  force: true,
+                }).catch(() => undefined);
                 setGeminiIntel(null);
                 setIntelFetchError(null);
                 setIntelStages({});

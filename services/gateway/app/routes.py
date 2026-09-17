@@ -63,6 +63,7 @@ from app.connect_sessions import (
     get_session as get_connect_session,
 )
 from app.db import get_session
+from app.intel_jobs import get_intel_job, put_intel_report, start_intel_job
 from app.models import Draft, PipelineRun, PlatformConnection, ReviewState
 from app.quick_connect import (
     PLATFORM_COOKIE_SPEC,
@@ -240,6 +241,68 @@ async def intel_report_stream(
         stream_intel_report(body, operator_headers=headers),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/intel/jobs")
+async def intel_job_start(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> dict[str, object]:
+    """Start (or reuse) a background Intel Brief job. Scout completion should call this."""
+    cache_key = str(body.get("cache_key") or "").strip()
+    if not cache_key or len(cache_key) > 200:
+        raise HTTPException(status_code=400, detail="cache_key required")
+    force = bool(body.get("force"))
+    payload = {
+        "facts": body.get("facts") or {},
+        "brand_name": str(body.get("brand_name") or "the brand"),
+        "voice_notes": str(body.get("voice_notes") or ""),
+        "forbidden_claims": str(body.get("forbidden_claims") or ""),
+    }
+    headers = _operator_headers(
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
+    )
+    return await start_intel_job(
+        cache_key=cache_key,
+        body=payload,
+        operator_headers=headers,
+        force=force,
+    )
+
+
+@router.get("/intel/jobs/{cache_key}")
+async def intel_job_status(cache_key: str) -> dict[str, object]:
+    """Poll cached Intel Brief status/report (ready when Scout finished ahead of War Room)."""
+    key = cache_key.strip()
+    if not key or len(key) > 200:
+        raise HTTPException(status_code=400, detail="cache_key required")
+    return await get_intel_job(key)
+
+
+@router.put("/intel/jobs/{cache_key}")
+async def intel_job_put(cache_key: str, body: dict[str, object]) -> dict[str, object]:
+    """Persist a finished Intel Brief (SSE fallback path) into the gateway cache."""
+    key = cache_key.strip()
+    if not key or len(key) > 200:
+        raise HTTPException(status_code=400, detail="cache_key required")
+    report = body.get("report")
+    if not isinstance(report, dict) or not str(report.get("markdown") or "").strip():
+        raise HTTPException(status_code=400, detail="report.markdown required")
+    return await put_intel_report(
+        key,
+        report,
+        brand_name=str(body.get("brand_name") or "the brand"),
     )
 
 

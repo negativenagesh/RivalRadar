@@ -186,6 +186,38 @@ async def _upsert_post_rows(session: AsyncSession, raw_posts: list[RawPost]) -> 
                 flag_modified(existing, "media_urls")
                 if image_url:
                     existing.image_url = image_url
+            # Refresh metrics when a later scout parsed better engagement numbers.
+            for field in ("likes", "comments", "shares", "views"):
+                new_val = int(raw.get(field) or 0)  # type: ignore[arg-type]
+                old_val = int(getattr(existing, field) or 0)
+                if new_val > old_val:
+                    setattr(existing, field, new_val)
+            new_caption = str(raw.get("caption") or "").strip()
+            old_caption = str(existing.caption or "").strip()
+            if new_caption and (
+                not old_caption
+                or old_caption.lower() in {"instagram post", "linkedin post", "x post"}
+                or (
+                    "likes," in old_caption.lower()
+                    and " on " in old_caption.lower()
+                    and len(new_caption) < len(old_caption)
+                )
+            ):
+                existing.caption = new_caption[:2000]
+            raw_themes = raw.get("theme_tags") or []
+            if isinstance(raw_themes, list) and raw_themes:
+                merged = {
+                    t.strip()
+                    for t in (existing.theme_tags or "").split(",")
+                    if t.strip()
+                }
+                before = set(merged)
+                for t in raw_themes:
+                    token = str(t).strip()
+                    if token:
+                        merged.add(token)
+                if merged != before:
+                    existing.theme_tags = ",".join(sorted(merged))
             skipped += 1
             continue
         account_id = await _ensure_account_for_post(session, raw, accounts)

@@ -193,6 +193,12 @@ async def fetch_linkedin_company_posts(
             f"date_from:{window.date_from.isoformat()}",
             f"date_to:{window.date_to.isoformat()}",
         ]
+        if likes:
+            themes.append(f"likes:{likes}")
+        if comments:
+            themes.append(f"comments:{comments}")
+        if shares:
+            themes.append(f"shares:{shares}")
 
         posts.append(
             RawPost(

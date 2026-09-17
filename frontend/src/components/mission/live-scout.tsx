@@ -488,7 +488,10 @@ export function LiveScout({
     if (ev.step_type === "error") return String(ev.payload.detail ?? "");
     if (ev.step_type === "log") return String(ev.payload.message ?? "");
     if (ev.step_type === "screenshot") {
-      return String(ev.payload.platform ?? "frame");
+      const label = ev.payload.label ? String(ev.payload.label) : "";
+      const platform = String(ev.payload.platform ?? "frame");
+      if (ev.payload.theater) return `${platform} · live frame`;
+      return label || platform;
     }
     return "";
   }

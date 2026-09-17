@@ -20,9 +20,12 @@ import {
   listIngestionAccounts,
   listIngestionPosts,
   startIngestionRun,
+  startIntelJob,
 } from "@/lib/api";
 import { filterFindingsPosts } from "@/lib/findings-filter";
+import { intelCacheKey, intelFactsSig, writeIntelCache } from "@/lib/intel-cache";
 import { buildIntelFacts } from "@/lib/intel-facts";
+import { useOperatorModels } from "@/components/operator-models-provider";
 import {
   DEFAULT_MISSION,
   buildMissionTargets,
@@ -64,6 +67,7 @@ export default function MissionPage() {
 
   const runId = mission.lastRunId ?? null;
   const live = useIngestionLive(runId);
+  const models = useOperatorModels();
 
   useEffect(() => {
     let cancelled = false;
@@ -172,6 +176,41 @@ export default function MissionPage() {
       }),
     [visibleRows, mission.brand, mission.dateFrom, mission.dateTo, mission.lookbackDays],
   );
+
+  // Kick Intel Brief as soon as Scout finishes — don't wait for War Room mount.
+  useEffect(() => {
+    if (live.run?.status !== "done") return;
+    if (!models.readyText) return;
+    if (visiblePosts.length < 1) return;
+    const brandName = mission.brand.displayName || "the brand";
+    const cacheKey = intelCacheKey(intelFactsSig(facts), brandName);
+    let cancelled = false;
+    void startIntelJob({
+      cache_key: cacheKey,
+      facts,
+      brand_name: brandName,
+      voice_notes: mission.brand.voiceNotes,
+      forbidden_claims: mission.brand.forbiddenClaims,
+    })
+      .then((job) => {
+        if (cancelled) return;
+        if (job.status === "done" && job.report) {
+          writeIntelCache(cacheKey, job.report);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    live.run?.status,
+    models.readyText,
+    visiblePosts.length,
+    facts,
+    mission.brand.displayName,
+    mission.brand.voiceNotes,
+    mission.brand.forbiddenClaims,
+  ]);
 
   function applyGate(issues: FieldIssue[]): boolean {
     if (!issues.length) {

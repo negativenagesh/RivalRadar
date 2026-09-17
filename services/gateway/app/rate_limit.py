@@ -18,6 +18,7 @@ LIMITS: dict[str, tuple[int, int]] = {
     "/creative/generate": (20, 3600),
     "/creative/publish-plan": (30, 3600),
     "/intel/report": (15, 3600),
+    "/intel/jobs": (30, 3600),
     "/social/stage-post": (15, 3600),
     "/social/comment": (20, 3600),
     # Start Scout (POST) stays tight; status polls (GET) must be high — UI polls every few seconds.

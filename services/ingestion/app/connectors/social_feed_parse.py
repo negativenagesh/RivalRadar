@@ -33,6 +33,19 @@ _COUNT_RE = re.compile(
     re.I,
 )
 
+# Instagram og:description often: `2 likes, 0 comments - user on Date: "caption"`
+_IG_OG_METRICS_RE = re.compile(
+    r"(?P<likes>[\d,.]+)\s*(?P<lsuffix>[KkMmBb])?\s*likes?\s*,\s*"
+    r"(?P<comments>[\d,.]+)\s*(?P<csuffix>[KkMmBb])?\s*comments?",
+    re.I,
+)
+
+_VIDEO_URL_HINT = re.compile(
+    r"\.(?:mp4|webm|mov|m4v|mkv)(?:[?#]|$)|/(?:video|v/)|video_dash|videoplayback",
+    re.I,
+)
+_IMAGE_URL_HINT = re.compile(r"\.(?:jpe?g|png|gif|webp|avif)(?:[?#]|$)", re.I)
+
 _NAV_DESTROY = (
     "execution context was destroyed",
     "most likely because of a navigation",
@@ -114,6 +127,46 @@ def parse_count(raw: str | None) -> int:
     suffix = (m.group(2) or "").upper()
     mult = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}.get(suffix, 1)
     return int(value * mult)
+
+
+def extract_metrics_from_text(*blobs: str | None) -> dict[str, int]:
+    """Pull likes/comments/views/shares from body text, aria, and OG descriptions."""
+    likes = comments = views = shares = 0
+    for blob in blobs:
+        if not blob or not isinstance(blob, str):
+            continue
+        ig = _IG_OG_METRICS_RE.search(blob)
+        if ig:
+            likes = max(
+                likes,
+                parse_count(ig.group("likes") + (ig.group("lsuffix") or "")),
+            )
+            comments = max(
+                comments,
+                parse_count(ig.group("comments") + (ig.group("csuffix") or "")),
+            )
+        for match in _COUNT_RE.finditer(blob):
+            n = parse_count(match.group("num") + (match.group("suffix") or ""))
+            label = match.group("label").lower()
+            if label.startswith("like") or label.startswith("reaction"):
+                likes = max(likes, n)
+            elif label.startswith("comment") or label.startswith("repl"):
+                comments = max(comments, n)
+            elif label.startswith("view"):
+                views = max(views, n)
+            elif (
+                label.startswith("share")
+                or label.startswith("repost")
+                or label.startswith("retweet")
+            ):
+                shares = max(shares, n)
+    return {"likes": likes, "comments": comments, "views": views, "shares": shares}
+
+
+def _looks_like_video_url(url: str) -> bool:
+    if _IMAGE_URL_HINT.search(url) and not _VIDEO_URL_HINT.search(url):
+        return False
+    return bool(_VIDEO_URL_HINT.search(url)) or "video" in url.lower()
 
 
 def canonicalize_post_url(platform: str, url: str) -> str:
@@ -325,7 +378,12 @@ async def parse_post_page(
                 .map(img => img.currentSrc || img.src)
                 .filter(src => src && !src.includes('data:') && src.startsWith('http'));
               const video = document.querySelector('video');
-              const videoSrc = video ? (video.currentSrc || video.getAttribute('poster') || null) : null;
+              // Never treat poster as a playable src — poster is a still JPEG.
+              let videoSrc = null;
+              if (video) {
+                const raw = video.currentSrc || video.getAttribute('src') || null;
+                if (raw && raw.startsWith('http')) videoSrc = raw;
+              }
               const aria = Array.from(document.querySelectorAll('[aria-label]'))
                 .map(e => e.getAttribute('aria-label'))
                 .filter(Boolean)
@@ -335,27 +393,50 @@ async def parse_post_page(
               const rtBtn = document.querySelector('[data-testid="retweet"]');
               let takenAtUnix = null;
               let jsonLdDate = null;
+              let contentUrl = null;
+              let embedVideoUrl = null;
               try {
                 const html = document.documentElement.innerHTML;
                 const taken = html.match(/"taken_at(?:_timestamp)?"\\s*:\\s*([0-9]{10})/);
                 if (taken) takenAtUnix = Number(taken[1]);
+                // Instagram / X often embed CDN mp4s in JSON even when <video> is MSE/blob.
+                const vidMatch = html.match(/"contentUrl"\\s*:\\s*"(https:[^"]+\\.(?:mp4|webm)[^"]*)"/i)
+                  || html.match(/"video_url"\\s*:\\s*"(https:[^"]+)"/i)
+                  || html.match(/"playback_url"\\s*:\\s*"(https:[^"]+)"/i);
+                if (vidMatch) {
+                  embedVideoUrl = vidMatch[1].replace(/\\\\u0026/g, '&');
+                  embedVideoUrl = embedVideoUrl.split('\\\\/').join('/');
+                }
                 const ld = document.querySelector('script[type="application/ld+json"]');
                 if (ld && ld.textContent) {
                   const parsed = JSON.parse(ld.textContent);
                   const node = Array.isArray(parsed) ? parsed[0] : parsed;
                   jsonLdDate = (node && (node.datePublished || node.uploadDate || node.dateCreated)) || null;
+                  if (node) {
+                    contentUrl = node.contentUrl || (node.video && node.video.contentUrl) || null;
+                    if (!contentUrl && Array.isArray(node)) {
+                      for (const n of node) {
+                        if (n && (n.contentUrl || (n.video && n.video.contentUrl))) {
+                          contentUrl = n.contentUrl || n.video.contentUrl;
+                          break;
+                        }
+                      }
+                    }
+                  }
                 }
               } catch (e) {}
               return {
                 ogTitle: meta('og:title'),
                 ogDesc: meta('og:description'),
                 ogImage: meta('og:image'),
-                ogVideo: meta('og:video') || meta('og:video:secure_url'),
+                ogVideo: meta('og:video') || meta('og:video:secure_url') || meta('og:video:url'),
                 published: meta('article:published_time') || meta('og:updated_time')
                   || (timeDatetimes[0] || null),
                 timeDatetimes,
                 takenAtUnix,
                 jsonLdDate,
+                contentUrl,
+                embedVideoUrl,
                 bodyText,
                 imgCandidates,
                 videoSrc,
@@ -375,41 +456,21 @@ async def parse_post_page(
     if not isinstance(data, dict):
         data = {}
 
-    likes = comments = views = shares = 0
-    body = str(data.get("bodyText") or "")
-    for match in _COUNT_RE.finditer(body):
-        n = parse_count(match.group("num") + (match.group("suffix") or ""))
-        label = match.group("label").lower()
-        if label.startswith("like") or label.startswith("reaction"):
-            likes = max(likes, n)
-        elif label.startswith("comment"):
-            comments = max(comments, n)
-        elif label.startswith("view"):
-            views = max(views, n)
-        elif label.startswith("share") or label.startswith("repost") or label.startswith("retweet"):
-            shares = max(shares, n)
-
-    extra_labels = list(data.get("aria") or [])
+    aria_blobs = [str(a) for a in (data.get("aria") or []) if isinstance(a, str)]
     for key in ("likeAria", "replyAria", "rtAria"):
         val = data.get(key)
         if isinstance(val, str):
-            extra_labels.append(val)
-    for label in extra_labels:
-        if not isinstance(label, str):
-            continue
-        for match in _COUNT_RE.finditer(label):
-            n = parse_count(match.group("num") + (match.group("suffix") or ""))
-            kind = match.group("label").lower()
-            if kind.startswith("like") or kind.startswith("reaction"):
-                likes = max(likes, n)
-            elif kind.startswith("comment") or kind.startswith("repl"):
-                comments = max(comments, n)
-            elif kind.startswith("view"):
-                views = max(views, n)
-            elif (
-                kind.startswith("share") or kind.startswith("repost") or kind.startswith("retweet")
-            ):
-                shares = max(shares, n)
+            aria_blobs.append(val)
+    metrics = extract_metrics_from_text(
+        str(data.get("bodyText") or ""),
+        str(data.get("ogDesc") or ""),
+        str(data.get("ogTitle") or ""),
+        *aria_blobs,
+    )
+    likes = metrics["likes"]
+    comments = metrics["comments"]
+    views = metrics["views"]
+    shares = metrics["shares"]
 
     caption = (data.get("ogDesc") or data.get("ogTitle") or "").strip()
     title = str(data.get("title") or "").strip()
@@ -417,6 +478,17 @@ async def parse_post_page(
         caption = title
     if platform == "instagram" and " on Instagram:" in caption:
         caption = caption.split(" on Instagram:", 1)[-1].strip().strip("“\"'")
+    # Strip leading "N likes, M comments - user on Date: " from IG OG captions.
+    if platform == "instagram":
+        stripped = re.sub(
+            r"^[\d,.]+\s*[KkMmBb]?\s*likes?\s*,\s*[\d,.]+\s*[KkMmBb]?\s*comments?\s*-\s*"
+            r"[^:]+:\s*[\"“]?",
+            "",
+            caption,
+            flags=re.I,
+        ).rstrip("\"”'")
+        if stripped and stripped != caption:
+            caption = stripped.strip()
     low = caption.lower()
     if (
         "sign up" in low
@@ -463,13 +535,20 @@ async def parse_post_page(
 def _select_media(data: dict[str, Any]) -> tuple[str | None, str]:
     """Pick the downloadable media URL + kind. Playable video (og:video, or an
     http(s) <video> src) beats poster thumbnails; blob:/data: srcs are skipped."""
-    og_video = data.get("ogVideo")
-    video_src = data.get("videoSrc")
-    if isinstance(video_src, str) and not video_src.startswith("http"):
-        video_src = None
-    media_url = og_video or video_src
-    if media_url:
-        return str(media_url), "video"
+    candidates: list[str] = []
+    for key in ("ogVideo", "contentUrl", "embedVideoUrl", "videoSrc"):
+        val = data.get(key)
+        if isinstance(val, str) and val.startswith("http"):
+            candidates.append(val)
+    for url in candidates:
+        # Reject obvious stills that leaked into a video field (poster misuse).
+        if _IMAGE_URL_HINT.search(url) and not _VIDEO_URL_HINT.search(url):
+            continue
+        return url, "video"
+    # Last resort: accept an http videoSrc that looks like video even without ext.
+    for url in candidates:
+        if _looks_like_video_url(url):
+            return url, "video"
     media_url = data.get("ogImage")
     imgs = data.get("imgCandidates") or []
     if not media_url and isinstance(imgs, list) and imgs:

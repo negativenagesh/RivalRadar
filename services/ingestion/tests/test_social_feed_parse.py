@@ -163,6 +163,27 @@ def test_select_media_prefers_playable_video_over_poster() -> None:
     assert kind == "video"
 
 
+def test_select_media_rejects_poster_jpg_as_video() -> None:
+    from app.connectors.social_feed_parse import _select_media
+
+    url, kind = _select_media(
+        {
+            "ogImage": "https://cdn.example/poster.jpg",
+            "videoSrc": "https://cdn.example/poster.jpg",
+        }
+    )
+    assert (url, kind) == ("https://cdn.example/poster.jpg", "image")
+
+    url, kind = _select_media(
+        {
+            "ogVideo": "https://cdn.example/still.jpg",
+            "contentUrl": "https://cdn.example/clip.mp4",
+            "ogImage": "https://cdn.example/still.jpg",
+        }
+    )
+    assert (url, kind) == ("https://cdn.example/clip.mp4", "video")
+
+
 def test_select_media_uses_http_video_src_then_falls_back_to_image() -> None:
     from app.connectors.social_feed_parse import _select_media
 
@@ -176,3 +197,21 @@ def test_select_media_uses_http_video_src_then_falls_back_to_image() -> None:
 
     url, kind = _select_media({"imgCandidates": ["https://cdn.example/a.jpg"]})
     assert (url, kind) == ("https://cdn.example/a.jpg", "image")
+
+
+def test_extract_metrics_from_instagram_og_description() -> None:
+    from app.connectors.social_feed_parse import extract_metrics_from_text
+
+    metrics = extract_metrics_from_text(
+        '2 likes, 0 comments - pixis_ai on September 17, 2026: "Can smart ads…"'
+    )
+    assert metrics["likes"] == 2
+    assert metrics["comments"] == 0
+
+    metrics = extract_metrics_from_text(
+        "12.5K likes, 1.2K comments - brand on Date: hi",
+        "3,400 views",
+    )
+    assert metrics["likes"] == 12500
+    assert metrics["comments"] == 1200
+    assert metrics["views"] == 3400
