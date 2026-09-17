@@ -550,6 +550,34 @@ async def cancel_run(
     return run
 
 
+async def expire_run(
+    session: AsyncSession,
+    run_id: str,
+    event_bus: AgentEventBus,
+) -> IngestionRun:
+    """DB-only wall: mark wedged pending/running as ERROR without awaiting task cancel."""
+    run = await session.get(IngestionRun, run_id)
+    if run is None:
+        raise KeyError(run_id)
+    if run.status in _TERMINAL:
+        return run
+
+    detail = f"run budget exceeded after {_RUN_WALL_S:.0f}s (gateway expire wall)"
+    run.status = RunStatus.ERROR
+    run.error_detail = detail
+    await session.commit()
+    await session.refresh(run)
+
+    task = get_active_run_task(run_id)
+    if task is not None and not task.done():
+        with contextlib.suppress(RuntimeError):
+            task.cancel()
+
+    with contextlib.suppress(Exception):
+        await event_bus.close_run(run_id, status="error", detail=detail)
+    return run
+
+
 async def _archive_recording(
     run_id: str, connector: Connector, object_store: ObjectStore
 ) -> str | None:

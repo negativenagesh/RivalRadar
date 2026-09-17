@@ -60,6 +60,21 @@ async def cancel_ingestion_run(
         raise HTTPException(status_code=404, detail="Run not found") from exc
 
 
+@router.post("/ingest/runs/{run_id}/expire", response_model=IngestionRunRead)
+async def expire_ingestion_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    event_bus: AgentEventBus = Depends(get_event_bus),
+) -> IngestionRun:
+    """Mark a wedged pending/running scout as ERROR (DB-only — no task cancel)."""
+    from app.runs import expire_run
+
+    try:
+        return await expire_run(session, run_id, event_bus)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+
+
 @router.get("/ingest/runs", response_model=list[IngestionRunRead])
 async def get_runs(session: AsyncSession = Depends(get_session)) -> list[IngestionRun]:
     return await list_runs(session)

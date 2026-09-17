@@ -23,6 +23,7 @@ from app.agent_events_bus import get_event_bus
 from app.clients import (
     cancel_ingestion_run,
     drop_ingestion_comment,
+    expire_ingestion_run,
     fetch_ingestion_accounts,
     fetch_ingestion_media,
     fetch_ingestion_posts,
@@ -432,7 +433,46 @@ async def start_ingestion_run(
     platform_sessions = await _vaulted_sessions(session, workspace_id=workspace_id)
     if platform_sessions:
         payload["platform_sessions"] = platform_sessions
-    return await trigger_ingestion_run(payload)
+    result = await trigger_ingestion_run(payload)
+    run_id = str(result.get("run_id") or "")
+    if run_id:
+        # Gateway process is separate from Obscura/ingestion — this wall still fires
+        # when ingestion's asyncio loop is wedged or its thread watchdog fails.
+        asyncio.create_task(_enforce_ingestion_run_wall(run_id), name=f"scout-wall-{run_id[:8]}")
+    return result
+
+
+_INGESTION_RUN_WALL_S = 180.0
+
+
+async def _enforce_ingestion_run_wall(run_id: str) -> None:
+    await asyncio.sleep(_INGESTION_RUN_WALL_S)
+    for attempt in range(6):
+        try:
+            run = await fetch_ingestion_run(run_id)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "scout wall: fetch run %s attempt %s failed", run_id, attempt + 1, exc_info=True
+            )
+            await asyncio.sleep(10)
+            continue
+        status = str(run.get("status") or "")
+        if status not in {"pending", "running"}:
+            return
+        logger.error(
+            "scout wall: expiring wedged run %s after %.0fs (attempt %s)",
+            run_id,
+            _INGESTION_RUN_WALL_S,
+            attempt + 1,
+        )
+        try:
+            await expire_ingestion_run(run_id)
+            return
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "scout wall: expire run %s attempt %s failed", run_id, attempt + 1, exc_info=True
+            )
+            await asyncio.sleep(10)
 
 
 @router.get("/ingestion/runs/{run_id}")
