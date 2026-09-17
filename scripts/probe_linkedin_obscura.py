@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Local probe: LinkedIn on Obscura the way RivalRadar scouts.
 
-Usage (Obscura already on :9222):
-  BROWSER_ENGINE=obscura OBSCURA_CDP_URL=ws://127.0.0.1:9222 \\
-    uv run --directory services/ingestion python ../../scripts/probe_linkedin_obscura.py
+Cookies come from the Connect **extension vault** (same as POST /ingestion/runs),
+not from a user paste. Optional LINKEDIN_COOKIES_JSON remains a dev override.
 
-Optional cookies JSON file (Playwright cookie list):
-  LINKEDIN_COOKIES_JSON=/path/to/cookies.json
+Usage (Obscura already on :9222):
+  BROWSER_ENGINE=obscura \\
+    uv run --directory services/ingestion python ../../scripts/probe_linkedin_obscura.py
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ import time
 from datetime import date
 from pathlib import Path
 
-# Allow running from repo root via ingestion venv
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services" / "ingestion"))
+sys.path.insert(0, str(ROOT / "services" / "gateway"))
 
 from app.connectors.oss.linkedin import LinkedInScraperError, fetch_linkedin_company_posts  # noqa: E402
 from app.connectors.social_feed_parse import collect_post_urls, settle_page  # noqa: E402
@@ -41,7 +41,20 @@ SCROLLS = int(os.environ.get("SCROLLS", "4"))
 OSS_BUDGET_S = float(os.environ.get("OSS_BUDGET_S", "45"))
 
 
-def _load_cookies() -> list[dict]:
+def _load_dotenv() -> None:
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        if not line.strip() or line.strip().startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+def _load_cookies_from_json() -> list[dict]:
     path = os.environ.get("LINKEDIN_COOKIES_JSON", "").strip()
     if not path:
         return []
@@ -50,6 +63,41 @@ def _load_cookies() -> list[dict]:
         data = data["cookies"]
     assert isinstance(data, list)
     return data
+
+
+async def _load_cookies_from_extension_vault() -> tuple[list[dict], str]:
+    """Same path as gateway start_ingestion_run — Connect extension vault."""
+    _load_dotenv()
+    try:
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from app.config import settings
+        from app.vault_sessions import cookies_for_platform, load_vaulted_platform_sessions
+    except Exception as exc:  # noqa: BLE001
+        return [], f"vault_import_failed:{type(exc).__name__}"
+
+    engine = create_async_engine(settings.database_url)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with Session() as session:
+            vault = await load_vaulted_platform_sessions(
+                session, workspace_id="default", platforms={"linkedin"}
+            )
+        cookies = cookies_for_platform(vault, "linkedin")
+        if not cookies:
+            return [], "vault_empty_no_linkedin_extension_session"
+        return cookies, f"extension_vault cookies={len(cookies)}"
+    except Exception as exc:  # noqa: BLE001
+        return [], f"vault_error:{type(exc).__name__}:{str(exc)[:120]}"
+    finally:
+        await engine.dispose()
+
+
+async def _load_cookies() -> tuple[list[dict], str]:
+    file_cookies = _load_cookies_from_json()
+    if file_cookies:
+        return file_cookies, f"json_override cookies={len(file_cookies)}"
+    return await _load_cookies_from_extension_vault()
 
 
 async def _pace(label: str) -> None:
@@ -84,7 +132,6 @@ async def probe_browser_path(cookies: list[dict]) -> dict:
             out["url"] = page.url
             print(f"  landed title={out['title']!r} url={out['url']}", flush=True)
 
-            # Random scrolls like a human before RivalRadar collect
             await _human_scroll(page, SCROLLS)
 
             urls = await collect_post_urls(
@@ -111,7 +158,7 @@ async def probe_linkedin_scraper(cookies: list[dict]) -> dict:
     t0 = time.monotonic()
     out: dict = {"ok": False, "posts": 0, "error": None, "seconds": 0.0, "timed_out": False}
     if not cookies:
-        out["error"] = "no cookies — scraper requires Connect li_at (skipping live scrape)"
+        out["error"] = "no extension-vault cookies (Connect LinkedIn via extension first)"
         print(f"  SKIP {out['error']}", flush=True)
         out["seconds"] = round(time.monotonic() - t0, 1)
         return out
@@ -146,7 +193,7 @@ async def probe_linkedin_scraper(cookies: list[dict]) -> dict:
             except TimeoutError as exc:
                 out["timed_out"] = True
                 out["error"] = str(exc)
-                print(f"  TIMED OUT after {OSS_BUDGET_S}s (hang confirmed)", flush=True)
+                print(f"  TIMED OUT after {OSS_BUDGET_S}s", flush=True)
             except LinkedInScraperError as exc:
                 out["error"] = str(exc)
                 print(f"  scraper error: {exc}", flush=True)
@@ -160,16 +207,22 @@ async def probe_linkedin_scraper(cookies: list[dict]) -> dict:
 async def main() -> int:
     os.environ.setdefault("BROWSER_ENGINE", "obscura")
     os.environ.setdefault("OBSCURA_CDP_URL", "ws://127.0.0.1:9222")
-    cookies = _load_cookies()
+    cookies, source = await _load_cookies()
     print("engine=", browser_engine(), "cdp=", obscura_cdp_url(), flush=True)
-    print("cookies=", len(cookies), "company=", COMPANY, "move_delay_s=", MOVE_DELAY_S, flush=True)
+    print("cookie_source=", source, "company=", COMPANY, "move_delay_s=", MOVE_DELAY_S, flush=True)
 
     browser = await probe_browser_path(cookies)
     oss = await probe_linkedin_scraper(cookies)
 
     print("\n=== REPORT ===", flush=True)
-    print(json.dumps({"browser_path": browser, "oss_linkedin_scraper": oss}, indent=2))
-    # Non-zero if browser path hard-failed
+    print(
+        json.dumps(
+            {"cookie_source": source, "browser_path": browser, "oss_linkedin_scraper": oss},
+            indent=2,
+        )
+    )
+    if not cookies:
+        return 3
     if browser.get("error") and not browser.get("urls"):
         return 2
     return 0

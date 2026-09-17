@@ -168,7 +168,8 @@ class SocialFeedConnector:
                 "action",
                 {
                     "detail": (
-                        f"connect_session cookies={len(all_cookies)} "
+                        f"connect_session source=extension_vault "
+                        f"cookies={len(all_cookies)} "
                         f"storage_state={'yes' if all_state else 'no'} "
                         f"platforms={platforms}"
                     )
@@ -404,10 +405,28 @@ class SocialFeedConnector:
                 assert session.page is not None
                 await self._emit("nav", {"url": url, "platform": platform, "phase": "profile"})
                 try:
-                    await session.page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_MS)
+                    await await_or_abandon(
+                        session.page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_MS),
+                        min(_LINKEDIN_OSS_BUDGET_S, _GOTO_MS / 1000 + 5),
+                    )
                     await settle_page(session.page, quiet_ms=80)
+                except TimeoutError:
+                    await self._emit(
+                        "error",
+                        {"detail": f"linkedin oss nav timed out after {_GOTO_MS}ms"},
+                    )
                 except Exception as exc:  # noqa: BLE001
                     await self._emit("error", {"detail": f"linkedin oss nav: {exc}"})
+
+                # Watchdog: if linkedin_scraper wedges the CDP page, close it so
+                # await_or_abandon / platform budget can recover (Obscura-safe).
+                async def _oss_watchdog() -> None:
+                    await asyncio.sleep(_LINKEDIN_OSS_BUDGET_S)
+                    with contextlib.suppress(Exception):
+                        if session.page is not None:
+                            await session.page.close()
+
+                watchdog = asyncio.create_task(_oss_watchdog())
                 try:
                     account, posts = await await_or_abandon(
                         fetch_linkedin_company_posts(
@@ -451,6 +470,10 @@ class SocialFeedConnector:
                         "action",
                         {"detail": f"oss_fallback platform=linkedin reason={exc}"},
                     )
+                finally:
+                    watchdog.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await watchdog
                 stop.set()
                 hb.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

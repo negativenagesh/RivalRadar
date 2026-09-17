@@ -158,21 +158,12 @@ async def _vaulted_sessions(
     workspace_id: str = "default",
     platforms: set[str] | None = None,
 ) -> dict[str, object]:
-    rows = await session.scalars(
-        select(PlatformConnection).where(
-            PlatformConnection.workspace_id == workspace_id,
-            PlatformConnection.status == "connected",
-        )
+    from app.vault_sessions import load_vaulted_platform_sessions
+
+    loaded = await load_vaulted_platform_sessions(
+        session, workspace_id=workspace_id, platforms=platforms
     )
-    out: dict[str, object] = {}
-    for row in rows.all():
-        if platforms is not None and row.platform not in platforms:
-            continue
-        try:
-            out[row.platform] = decrypt_json(row.encrypted_blob)
-        except Exception:  # noqa: BLE001 - skip corrupt vault rows
-            continue
-    return out
+    return {k: v for k, v in loaded.items()}
 
 
 @router.get("/models/defaults")
@@ -297,7 +288,9 @@ async def social_comment(
     aliases = _platform_aliases(platform)
     vault = await _vaulted_sessions(session, workspace_id=workspace_id, platforms=aliases)
     if not vault:
-        raise HTTPException(status_code=400, detail=f"not connected to {platform or 'this platform'}")
+        raise HTTPException(
+            status_code=400, detail=f"not connected to {platform or 'this platform'}"
+        )
     payload = {
         "platform": platform,
         "url": url,
@@ -390,7 +383,9 @@ async def social_stage_post(
     aliases = _platform_aliases(platform)
     vault = await _vaulted_sessions(session, workspace_id=workspace_id, platforms=aliases)
     if not vault:
-        raise HTTPException(status_code=400, detail=f"not connected to {platform or 'this platform'}")
+        raise HTTPException(
+            status_code=400, detail=f"not connected to {platform or 'this platform'}"
+        )
     payload = {
         "platform": platform,
         "caption": caption,
@@ -402,7 +397,9 @@ async def social_stage_post(
 
 
 @router.get("/pipeline-runs/{run_id}", response_model=PipelineRunRead)
-async def get_pipeline_run(run_id: str, session: AsyncSession = Depends(get_session)) -> PipelineRun:
+async def get_pipeline_run(
+    run_id: str, session: AsyncSession = Depends(get_session)
+) -> PipelineRun:
     run = await session.get(PipelineRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -430,19 +427,9 @@ async def start_ingestion_run(
     workspace_id: str = "default",
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
+    """Start Scout with Connect-extension vault cookies attached automatically."""
     payload = dict(body or {})
-    rows = await session.scalars(
-        select(PlatformConnection).where(
-            PlatformConnection.workspace_id == workspace_id,
-            PlatformConnection.status == "connected",
-        )
-    )
-    platform_sessions: dict[str, object] = {}
-    for row in rows.all():
-        try:
-            platform_sessions[row.platform] = decrypt_json(row.encrypted_blob)
-        except Exception:  # noqa: BLE001 - skip corrupt vault rows
-            continue
+    platform_sessions = await _vaulted_sessions(session, workspace_id=workspace_id)
     if platform_sessions:
         payload["platform_sessions"] = platform_sessions
     return await trigger_ingestion_run(payload)
@@ -605,7 +592,6 @@ async def reject_draft(draft_id: str, session: AsyncSession = Depends(get_sessio
     return draft
 
 
-
 _KNOWN_PLATFORMS = [
     "youtube",
     "meta",
@@ -631,7 +617,9 @@ async def list_connections(
     youtube_detail = None
     try:
         yt = await fetch_youtube_status()
-        youtube_detail = "API key ready" if yt.get("api_key_configured") else "Using yt-dlp fallback"
+        youtube_detail = (
+            "API key ready" if yt.get("api_key_configured") else "Using yt-dlp fallback"
+        )
     except Exception:  # noqa: BLE001
         youtube_detail = "Ingestion unreachable"
 
@@ -779,9 +767,7 @@ async def start_connect_session(
     # Prefer gateway CONNECT_VIEWER_URL when the agent still returns localhost
     # (old image ENV default) so Render/Vercel operators open the public noVNC.
     if configured and (
-        not viewer
-        or "localhost" in viewer.lower()
-        or "127.0.0.1" in viewer.lower()
+        not viewer or "localhost" in viewer.lower() or "127.0.0.1" in viewer.lower()
     ):
         viewer = configured
     detail = str(
@@ -853,7 +839,9 @@ async def complete_connect_session(
     except ConnectAgentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     cookies_raw = dump.get("cookies")
-    cookies = [c for c in cookies_raw if isinstance(c, dict)] if isinstance(cookies_raw, list) else []
+    cookies = (
+        [c for c in cookies_raw if isinstance(c, dict)] if isinstance(cookies_raw, list) else []
+    )
     if not cookies:
         raise HTTPException(
             status_code=409,
