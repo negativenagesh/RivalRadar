@@ -123,3 +123,26 @@ async def test_sweep_orphaned_runs_marks_stale(
     assert updated.status == RunStatus.ERROR
     assert updated.error_detail is not None
     assert "orphaned" in updated.error_detail
+
+
+@pytest.mark.asyncio
+async def test_expire_run_marks_error_without_cancel_semantics(
+    session: AsyncSession,
+    event_bus: object,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from app.runs import expire_run
+
+    run = IngestionRun(connector_type="auto", status=RunStatus.RUNNING)
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    bus = AsyncMock()
+    bus.close_run = AsyncMock()
+
+    out = await expire_run(session, run.id, bus)
+    assert out.status == RunStatus.ERROR
+    assert out.error_detail is not None
+    assert "gateway expire wall" in out.error_detail
+    bus.close_run.assert_awaited()

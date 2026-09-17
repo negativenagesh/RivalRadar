@@ -278,6 +278,20 @@ async def cancel_ingestion_run(run_id: str) -> dict[str, Any]:
         _reraise_ingestion_transport(exc)
 
 
+async def expire_ingestion_run(run_id: str) -> dict[str, Any]:
+    """Ask ingestion to mark a wedged run ERROR without waiting on task cancel."""
+    try:
+        async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=15.0) as client:
+            response = await client.post(f"/ingest/runs/{run_id}/expire")
+            response.raise_for_status()
+            result: dict[str, Any] = response.json()
+            return result
+    except httpx.HTTPStatusError as exc:
+        _reraise_upstream(exc)
+    except httpx.RequestError as exc:
+        _reraise_ingestion_transport(exc)
+
+
 async def fetch_ingestion_posts() -> list[dict[str, Any]]:
     try:
         async with httpx.AsyncClient(base_url=settings.ingestion_service_url, timeout=10.0) as client:
