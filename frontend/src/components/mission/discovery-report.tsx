@@ -1473,16 +1473,19 @@ function PublishPanel({
         </div>
       </div>
 
-      {staged[-1] && (
+      {staged[-1] && (() => {
+        const stagedStudio = staged[-1];
+        const viewer = stagedStudio.viewer_url ?? undefined;
+        return (
         <div className="space-y-1 rounded-xl border border-primary/30 bg-primary/5 p-3">
-          <p className={`text-xs ${staged[-1].ok ? "text-primary" : "text-destructive"}`}>
-            {staged[-1].ok
+          <p className={`text-xs ${stagedStudio.ok ? "text-primary" : "text-destructive"}`}>
+            {stagedStudio.ok
               ? `Staged in ${platform} composer — finish in noVNC and hit publish yourself.`
-              : staged[-1].detail}
+              : stagedStudio.detail}
           </p>
-          {staged[-1].viewer_url && (
+          {viewer ? (
             <a
-              href={staged[-1].viewer_url}
+              href={viewer}
               target="_blank"
               rel="noopener noreferrer"
               className="font-ui inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
@@ -1490,17 +1493,18 @@ function PublishPanel({
               Open Connect viewer
               <ExternalLink className="size-3" />
             </a>
-          )}
-          {staged[-1].screenshot_jpeg_b64 && (
+          ) : null}
+          {stagedStudio.screenshot_jpeg_b64 && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={`data:image/jpeg;base64,${staged[-1].screenshot_jpeg_b64}`}
+              src={`data:image/jpeg;base64,${stagedStudio.screenshot_jpeg_b64}`}
               alt={`${platform} staged post screenshot`}
               className="max-h-56 w-auto rounded-lg border border-border/40"
             />
           )}
         </div>
-      )}
+        );
+      })()}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {busy && liveDraft && (
@@ -1618,9 +1622,11 @@ function PublishPanel({
                         ? `Staged in ${platform} composer — review in noVNC & hit publish yourself.`
                         : stagedResult.detail}
                     </p>
-                    {stagedResult.viewer_url && (
+                    {(() => {
+                      const viewer = stagedResult.viewer_url ?? undefined;
+                      return viewer ? (
                       <a
-                        href={stagedResult.viewer_url}
+                        href={viewer}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="font-ui inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
@@ -1628,7 +1634,8 @@ function PublishPanel({
                         Open Connect viewer
                         <ExternalLink className="size-3" />
                       </a>
-                    )}
+                      ) : null;
+                    })()}
                     {stagedResult.detail && stagedResult.ok && (
                       <p className="text-[11px] text-muted-foreground">{stagedResult.detail}</p>
                     )}
