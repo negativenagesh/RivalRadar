@@ -75,7 +75,8 @@ class NvidiaGptOssProvider:
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
-            timeout=httpx.Timeout(_CLIENT_TIMEOUT, connect=15.0),
+            # float avoids openai's httpx vs httpx2 Timeout stub mismatch under mypy.
+            timeout=_CLIENT_TIMEOUT,
         )
         self._model = model
         fb = (fallback_model if fallback_model is not None else _fallback_model()).strip()

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { Bell } from "lucide-react";
 
@@ -25,11 +25,7 @@ export function NotificationBell() {
   const rows = JSON.parse(raw) as AppNotification[];
   const unread = unreadCount(rows);
   const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState("");
-
-  useEffect(() => {
-    setEmail(getNotifyEmail());
-  }, [open]);
+  const [email, setEmail] = useState(() => getNotifyEmail());
 
   return (
     <div className="relative">
@@ -38,7 +34,10 @@ export function NotificationBell() {
         variant="outline"
         size="sm"
         className="relative gap-1.5"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!open) setEmail(getNotifyEmail());
+          setOpen((v) => !v);
+        }}
         aria-label="Notifications"
       >
         <Bell className="size-3.5" />

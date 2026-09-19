@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
+
 import pytest
 from app import intel_jobs
 
 
 @pytest.fixture(autouse=True)
-def _reset_jobs():
+def _reset_jobs() -> Iterator[None]:
     intel_jobs._jobs.clear()
     intel_jobs._tasks.clear()
     yield
@@ -19,8 +22,11 @@ def _reset_jobs():
 
 @pytest.mark.asyncio
 async def test_intel_job_stores_report(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_generate(body, *, operator_headers):  # noqa: ANN001
+    async def _fake_generate(
+        body: dict[str, Any], *, operator_headers: dict[str, str]
+    ) -> dict[str, Any]:
         assert body["brand_name"] == "Pixis"
+        assert operator_headers == {}
         return {"markdown": "# Intel brief\n\n- hello", "narration": "agent", "reports": []}
 
     monkeypatch.setattr(intel_jobs, "generate_intel_report", _fake_generate)

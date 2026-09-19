@@ -3,6 +3,7 @@ import pytest
 from llm_provider.factory import get_llm_provider, provider_from_key, provider_from_operator
 from llm_provider.gemini import GeminiOpenAICompatProvider
 from llm_provider.nvidia import NvidiaGptOssProvider
+from llm_provider.routing import RoutingLLMProvider
 
 
 def test_get_llm_provider_defaults_to_gptoss(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,5 +54,6 @@ def test_server_gemini_env_is_ignored_without_operator_key(monkeypatch: pytest.M
     monkeypatch.setenv("AGNES_API_KEY", "agnes-server")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     stack = provider_from_operator(text_model="gptoss", image_model="agnes")
+    assert isinstance(stack, RoutingLLMProvider)
     assert isinstance(stack._text, NvidiaGptOssProvider)
     assert stack._text_fallbacks == []

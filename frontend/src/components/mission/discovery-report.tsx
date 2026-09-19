@@ -211,14 +211,18 @@ export function DiscoveryReport({
   const [studioLoadingSlot, setStudioLoadingSlot] = useState<number | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
   const [studioOuts, setStudioOuts] = useState<CreativeResult[]>([]);
-  const [studioLibrary, setStudioLibrary] = useState<SavedStudioAsset[]>([]);
+  const [studioLibrary, setStudioLibrary] = useState<SavedStudioAsset[]>(() =>
+    readStudioAssets(brand.displayName || "brand"),
+  );
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [studioMode, setStudioMode] = useState<"full" | "fast">("full");
   const [studioPhase, setStudioPhase] = useState<"writing" | "painting" | null>(null);
-
-  useEffect(() => {
-    setStudioLibrary(readStudioAssets(brand.displayName || "brand"));
-  }, [brand.displayName]);
+  const studioBrandKey = brand.displayName || "brand";
+  const [libraryBrandKey, setLibraryBrandKey] = useState(studioBrandKey);
+  if (libraryBrandKey !== studioBrandKey) {
+    setLibraryBrandKey(studioBrandKey);
+    setStudioLibrary(readStudioAssets(studioBrandKey));
+  }
 
   const [sniperPlatform, setSniperPlatform] = useState("linkedin");
   const [sniperTone, setSniperTone] = useState<(typeof SNIPER_TONES)[number]>("witty");

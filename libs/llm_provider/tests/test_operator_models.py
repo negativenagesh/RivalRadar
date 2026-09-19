@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from llm_provider.agnes import AgnesImageProvider
-from llm_provider.base import LLMProviderError
+from llm_provider.base import LLMProviderError, Message
 from llm_provider.chat_util import message_text
 from llm_provider.deepseek import DeepSeekProvider
 from llm_provider.factory import provider_from_operator
@@ -71,7 +72,7 @@ async def test_gptoss_uses_nvidia_card_settings() -> None:
         assert kwargs["temperature"] == 1
         assert kwargs["extra_body"]["reasoning_effort"] == "low"
 
-        async def _gen():
+        async def _gen() -> AsyncIterator[_Chunk]:
             yield _Chunk(reasoning_content="scratch")
             yield _Chunk(content="9.11 is larger.")
 
@@ -99,7 +100,7 @@ async def test_mistral_nemotron_omits_gptoss_top_p() -> None:
         assert "extra_body" not in kwargs
         assert kwargs["max_tokens"] == 700
 
-        async def _gen():
+        async def _gen() -> AsyncIterator[_Chunk]:
             yield _Chunk('{"caption":"hi"}')
 
         return _gen()
@@ -119,7 +120,7 @@ async def test_gptoss_fails_over_to_mistral_on_timeout() -> None:
     async def _fake(
         *,
         model: str,
-        messages: list,
+        messages: list[Message],
         temperature: float,
         budget: int,
         reasoning_effort: str | None,
@@ -372,6 +373,7 @@ def test_operator_gptoss_keeps_gemini_as_text_failover(monkeypatch: pytest.Monke
         text_model="gptoss",
         image_model="agnes",
     )
+    assert isinstance(stack, RoutingLLMProvider)
     assert isinstance(stack._text, NvidiaGptOssProvider)
     assert len(stack._text_fallbacks) == 1
     assert isinstance(stack._text_fallbacks[0], GeminiOpenAICompatProvider)
