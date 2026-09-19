@@ -27,8 +27,22 @@ async def test_generate_comment_creative() -> None:
     assert "receipts" in result.text
 
 
-async def test_generate_image_creative() -> None:
-    provider = FakeLLMProvider(image_concept="neon split screen product")
+async def test_generate_image_creative_skips_text_llm() -> None:
+    class Capture(FakeLLMProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.complete_calls = 0
+            self.image_briefs: list[str] = []
+
+        async def complete(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.complete_calls += 1
+            return await super().complete(messages, **kwargs)
+
+        async def generate_image(self, brief, **kwargs):  # type: ignore[no-untyped-def]
+            self.image_briefs.append(brief)
+            return await super().generate_image(brief, **kwargs)
+
+    provider = Capture()
     result = await generate_creative(
         CreativeRequest(
             kind="image",
@@ -38,46 +52,64 @@ async def test_generate_image_creative() -> None:
         provider,
     )
     assert result.kind == "image"
-    assert result.image_concept
+    assert provider.complete_calls == 0
     assert result.image_data_base64
     assert result.image_mime_type == "image/png"
 
 
-async def test_meme_studio_sends_roast_pack() -> None:
-    captured: list[object] = []
+async def test_studio_fast_mode_skips_text_llm() -> None:
+    class Capture(FakeLLMProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.complete_calls = 0
 
-    class CaptureProvider(FakeLLMProvider):
         async def complete(self, messages, **kwargs):  # type: ignore[no-untyped-def]
-            captured.append(messages)
-            return (
-                '{"caption":"they post thrice a day and still mid",'
-                '"overlay_text":"Cadence is a personality",'
-                '"why_slaps":"rival cadence 2.1 vs brand 0.4",'
-                '"hashtags":[],'
-                '"image_brief":"sleep-deprived founder staring at empty calendar"}'
-            )
+            self.complete_calls += 1
+            raise AssertionError("fast mode must not call text complete()")
 
+    provider = Capture()
     result = await generate_creative(
         CreativeRequest(
             kind="studio",
-            format="meme",
+            format="linkedin_thought",
+            platform="linkedin",
             brand_name="Pixis",
-            voice_notes="dry",
-            brand_category="adtech",
-            ideal_customer="growth marketers",
-            content_pillars="receipts over vibes",
-            preferred_formats=["meme", "hot_take"],
-            facts_json='{"brand":{"name":"Pixis"},"rivals":[{"name":"Smartly","avgEngagement":140}]}',
+            studio_mode="fast",
         ),
-        CaptureProvider(),
+        provider,
     )
     assert result.kind == "studio"
-    assert captured
-    user = captured[0][1].content  # type: ignore[index]
-    assert "ROAST_PACK" in user
-    assert "adtech" in user
-    assert "growth marketers" in user
-    assert "Smartly" in user
+    assert provider.complete_calls == 0
+    assert result.generation_path == "fast_agnes"
+    assert result.image_data_base64
+
+
+async def test_studio_full_mode_calls_text_then_paints() -> None:
+    provider = FakeLLMProvider(
+        completion=(
+            '{"caption":"AI without an explanation is a vibe, not a product.",'
+            '"overlay_text":"Still true.",'
+            '"why_slaps":"category fog",'
+            '"hashtags":["build"],'
+            '"image_brief":"lime editorial still"}'
+        )
+    )
+    result = await generate_creative(
+        CreativeRequest(
+            kind="studio",
+            format="linkedin_thought",
+            platform="linkedin",
+            brand_name="Pixis",
+            studio_mode="full",
+        ),
+        provider,
+    )
+    assert result.kind == "studio"
+    assert provider.complete_calls >= 1
+    assert result.generation_path == "full_llm_agnes"
+    assert "vibe" in result.text.lower() or "product" in result.text.lower()
+    assert result.overlay_text == "Still true."
+    assert result.image_data_base64
 
 
 async def test_creative_endpoint(client: AsyncClient) -> None:

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from llm_provider.agnes import AgnesImageProvider
-from llm_provider.base import LLMProviderError
+from llm_provider.base import LLMProviderError, Message
 from llm_provider.chat_util import message_text
 from llm_provider.deepseek import DeepSeekProvider
 from llm_provider.factory import provider_from_operator
@@ -48,25 +49,99 @@ async def test_deepseek_generate_image_is_explicitly_unsupported() -> None:
 
 
 async def test_gptoss_uses_nvidia_card_settings() -> None:
-    provider = NvidiaGptOssProvider("nv-test")
-    provider._client.chat.completions.create = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="9.11 is larger.", reasoning_content="compare")
-                )
-            ]
-        )
+    provider = NvidiaGptOssProvider(
+        "nv-test",
+        model="openai/gpt-oss-20b",
+        fallback_model="",
     )
-    text = await provider.complete([], temperature=1, max_tokens=16)
+
+    class _Delta:
+        def __init__(self, content: str | None = None, reasoning_content: str | None = None) -> None:
+            self.content = content
+            self.reasoning_content = reasoning_content
+
+    class _Chunk:
+        def __init__(self, content: str | None = None, reasoning_content: str | None = None) -> None:
+            self.choices = [SimpleNamespace(delta=_Delta(content, reasoning_content))]
+
+    async def _stream(**kwargs):  # type: ignore[no-untyped-def]
+        assert kwargs["model"] == "openai/gpt-oss-20b"
+        assert kwargs["stream"] is True
+        assert kwargs["max_tokens"] == 2048
+        assert kwargs["top_p"] == 1
+        assert kwargs["temperature"] == 1
+        assert kwargs["extra_body"]["reasoning_effort"] == "low"
+
+        async def _gen() -> AsyncIterator[_Chunk]:
+            yield _Chunk(reasoning_content="scratch")
+            yield _Chunk(content="9.11 is larger.")
+
+        return _gen()
+
+    provider._client.chat.completions.create = AsyncMock(side_effect=_stream)  # type: ignore[method-assign]
+    text = await provider.complete([], temperature=1, max_tokens=700)
     assert "9.11" in text
-    called = provider._client.chat.completions.create.await_args
-    assert called is not None
-    kwargs = called.kwargs
-    assert kwargs["model"] == "openai/gpt-oss-20b"
-    assert kwargs["max_tokens"] == 4096
-    assert kwargs["top_p"] == 1
-    assert kwargs["temperature"] == 1
+
+
+async def test_mistral_nemotron_omits_gptoss_top_p() -> None:
+    provider = NvidiaGptOssProvider(
+        "nv-test",
+        model="mistralai/mistral-nemotron",
+        fallback_model="",
+    )
+
+    class _Chunk:
+        def __init__(self, content: str) -> None:
+            self.choices = [SimpleNamespace(delta=SimpleNamespace(content=content, reasoning_content=None))]
+
+    async def _stream(**kwargs):  # type: ignore[no-untyped-def]
+        assert kwargs["model"] == "mistralai/mistral-nemotron"
+        assert "top_p" not in kwargs
+        assert "extra_body" not in kwargs
+        assert kwargs["max_tokens"] == 700
+
+        async def _gen() -> AsyncIterator[_Chunk]:
+            yield _Chunk('{"caption":"hi"}')
+
+        return _gen()
+
+    provider._client.chat.completions.create = AsyncMock(side_effect=_stream)  # type: ignore[method-assign]
+    assert "caption" in await provider.complete([], max_tokens=700)
+
+
+async def test_gptoss_fails_over_to_mistral_on_timeout() -> None:
+    provider = NvidiaGptOssProvider(
+        "nv-test",
+        model="openai/gpt-oss-20b",
+        fallback_model="mistralai/mistral-nemotron",
+    )
+    calls: list[str] = []
+
+    async def _fake(
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float,
+        budget: int,
+        reasoning_effort: str | None,
+        wait_s: float,
+    ) -> str:
+        del messages, temperature, budget, reasoning_effort, wait_s
+        calls.append(model)
+        if "gpt-oss" in model:
+            raise LLMProviderError("NVIDIA gpt-oss-20b timed out.", status_code=504)
+        return '{"caption":"hi","image_brief":"still"}'
+
+    provider._stream_complete = _fake  # type: ignore[method-assign]
+    text = await provider.complete([])
+    assert "caption" in text
+    assert calls == ["openai/gpt-oss-20b", "mistralai/mistral-nemotron"]
+    assert provider._prefer_fallback is True
+    # Sticky: later calls skip the dead primary.
+    text2 = await provider.complete([])
+    assert text2.startswith("{")
+    assert calls[-1] == "mistralai/mistral-nemotron"
+    assert calls.count("openai/gpt-oss-20b") == 1
 
 
 async def test_flux_decodes_b64_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,7 +181,7 @@ async def test_flux_decodes_b64_json(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _Client.last_json["size"] == "768x1024"
 
 
-async def test_agnes_uses_1k_ratio_and_decodes_b64(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_agnes_uses_exact_size_for_2_0_and_decodes_b64(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Resp:
         status_code = 200
 
@@ -141,11 +216,47 @@ async def test_agnes_uses_1k_ratio_and_decodes_b64(monkeypatch: pytest.MonkeyPat
     )
     assert image.data == b"hello"
     assert _Client.last_json is not None
-    assert _Client.last_json["model"] == "agnes-image-2.5-flash"
-    assert _Client.last_json["size"] == "1K"
-    assert _Client.last_json["ratio"] == "3:4"
+    assert _Client.last_json["model"] == "agnes-image-2.0-flash"
+    assert _Client.last_json["size"] == "864x1152"
+    assert "ratio" not in _Client.last_json
     assert _Client.last_json["return_base64"] is True
 
+
+async def test_agnes_2_5_still_uses_tier_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"data": [{"b64_json": "aGVsbG8="}]}
+
+    class _Client:
+        last_json: dict[str, object] | None = None
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str] | None = None,
+            json: dict[str, object] | None = None,
+        ) -> _Resp:
+            type(self).last_json = json
+            return _Resp()
+
+    monkeypatch.setattr("llm_provider.agnes.httpx.AsyncClient", _Client)
+    await AgnesImageProvider(
+        "sk-agnes-test", model="agnes-image-2.5-flash"
+    ).generate_image("hoodie", aspect_ratio="1:1")
+    assert _Client.last_json is not None
+    assert _Client.last_json["size"] == "1K"
+    assert _Client.last_json["ratio"] == "1:1"
 
 async def test_agnes_falls_back_to_image_url(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Gen:
@@ -193,7 +304,9 @@ def test_operator_requested_image_wins_when_its_key_exists() -> None:
     assert isinstance(stack._image, NvidiaFluxProvider)
 
 
-def test_operator_deepseek_text_gemini_image() -> None:
+def test_operator_deepseek_text_gemini_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     stack = provider_from_operator(
         gemini_key="AIza-test",
         deepseek_key="sk-test",
@@ -242,10 +355,52 @@ def test_operator_agnes_pick_beats_gemini_default() -> None:
 def test_operator_no_keys_falls_back_to_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "nv-server")
     monkeypatch.setenv("AGNES_API_KEY", "agnes-server")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     stack = provider_from_operator()
     assert isinstance(stack, RoutingLLMProvider)
     assert isinstance(stack._text, NvidiaGptOssProvider)
     assert isinstance(stack._image, AgnesImageProvider)
+    assert stack._text_fallbacks == []
+
+
+def test_operator_gptoss_keeps_gemini_as_text_failover(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    stack = provider_from_operator(
+        nvidia_key="nv-op",
+        gemini_key="AIza-op",
+        agnes_key="sk-agnes",
+        text_model="gptoss",
+        image_model="agnes",
+    )
+    assert isinstance(stack, RoutingLLMProvider)
+    assert isinstance(stack._text, NvidiaGptOssProvider)
+    assert len(stack._text_fallbacks) == 1
+    assert isinstance(stack._text_fallbacks[0], GeminiOpenAICompatProvider)
+
+
+async def test_routing_fails_over_on_timeout() -> None:
+    primary = AsyncMock()
+    primary.complete = AsyncMock(side_effect=LLMProviderError("timed out", status_code=504))
+    backup = AsyncMock()
+    backup.complete = AsyncMock(return_value="meme json")
+    stack = RoutingLLMProvider(primary, None, text_fallbacks=[backup])
+    assert await stack.complete([]) == "meme json"
+    primary.complete.assert_awaited_once()
+    backup.complete.assert_awaited_once()
+    # Sticky: later completes skip the dead primary.
+    backup.complete = AsyncMock(return_value="again")
+    assert await stack.complete([]) == "again"
+    assert primary.complete.await_count == 1
+    backup.complete.assert_awaited_once()
+
+
+def test_translate_transport_timeout() -> None:
+    from llm_provider.chat_util import translate_transport_error
+
+    err = translate_transport_error(TimeoutError("x"), vendor="NVIDIA gpt-oss-20b")
+    assert err.status_code == 504
+    assert "timed out" in err.detail.lower()
 
 
 def test_operator_no_keys_no_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:

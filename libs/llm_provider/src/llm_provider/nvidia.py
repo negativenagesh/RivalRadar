@@ -1,26 +1,68 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import logging
+import os
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from llm_provider.base import ImageResult, LLMProviderError, Message
-from llm_provider.chat_util import message_text, translate_vendor_error
+from llm_provider.chat_util import translate_transport_error, translate_vendor_error
 
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
-# https://build.nvidia.com/openai/gpt-oss-20b/modelcard
-DEFAULT_TEXT_MODEL = "openai/gpt-oss-20b"
+# gpt-oss-20b on the free NIM often queues forever; mistral-nemotron answers on the same key.
+DEFAULT_TEXT_MODEL = "mistralai/mistral-nemotron"
+# Optional second try (override via NVIDIA_TEXT_FALLBACK_MODEL). Empty = no failover.
+DEFAULT_FALLBACK_TEXT_MODEL = ""
 # Hosted OpenAI-compat image gen on the same NIM base URL.
 DEFAULT_IMAGE_MODEL = "black-forest-labs/flux.1-schnell"
+# gpt-oss spends tokens on hidden reasoning — floor for short calls, full card default for intel-scale.
 DEFAULT_MAX_TOKENS = 4096
+STUDIO_MIN_TOKENS = 2048
+_PRIMARY_TIMEOUT = 90.0
+_FALLBACK_TIMEOUT = 60.0
+_CLIENT_TIMEOUT = 100.0
+_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
+
+logger = logging.getLogger("llm_provider.nvidia")
+
+
+def _token_budget(max_tokens: int) -> int:
+    """Reasoning eats the budget; don't force 4096 on every short Mission call."""
+    if max_tokens >= 2000:
+        return max(max_tokens, DEFAULT_MAX_TOKENS)
+    return max(max_tokens, STUDIO_MIN_TOKENS)
+
+
+def _effort(reasoning_effort: str | None) -> str:
+    # NVIDIA defaults to medium when omitted — that hangs Mission studio captions.
+    raw = (reasoning_effort or "low").strip().lower()
+    return raw if raw in _REASONING_EFFORTS else "low"
+
+
+def _fallback_model() -> str:
+    return (
+        os.environ.get("NVIDIA_TEXT_FALLBACK_MODEL", DEFAULT_FALLBACK_TEXT_MODEL).strip()
+        or DEFAULT_FALLBACK_TEXT_MODEL
+    )
+
+
+def _is_gpt_oss(model: str) -> bool:
+    return "gpt-oss" in model.lower()
+
+
+def _vendor(model: str) -> str:
+    short = model.split("/")[-1] if "/" in model else model
+    return f"NVIDIA {short}"
 
 
 class NvidiaGptOssProvider:
-    """NVIDIA NIM free endpoint for openai/gpt-oss-20b (text only)."""
+    """NVIDIA NIM text — prefers gpt-oss-20b, fails over to mistral-nemotron on hang."""
 
     def __init__(
         self,
@@ -28,9 +70,88 @@ class NvidiaGptOssProvider:
         *,
         base_url: str = DEFAULT_BASE_URL,
         model: str = DEFAULT_TEXT_MODEL,
+        fallback_model: str | None = None,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            # float avoids openai's httpx vs httpx2 Timeout stub mismatch under mypy.
+            timeout=_CLIENT_TIMEOUT,
+        )
         self._model = model
+        fb = (fallback_model if fallback_model is not None else _fallback_model()).strip()
+        self._fallback_model = fb if fb and fb != model else ""
+        # Sticky: once gpt-oss hangs, prefer the fallback for this provider instance.
+        self._prefer_fallback = False
+
+    def _model_chain(self) -> list[tuple[str, float]]:
+        if self._prefer_fallback and self._fallback_model:
+            return [(self._fallback_model, _FALLBACK_TIMEOUT)]
+        chain = [(self._model, _PRIMARY_TIMEOUT)]
+        if self._fallback_model:
+            chain.append((self._fallback_model, _FALLBACK_TIMEOUT))
+        return chain
+
+    async def _stream_complete(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float,
+        budget: int,
+        reasoning_effort: str | None,
+        wait_s: float,
+    ) -> str:
+        vendor = _vendor(model)
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": cast(
+                list[ChatCompletionMessageParam],
+                [{"role": m.role, "content": m.content} for m in messages],
+            ),
+            "temperature": temperature,
+            "max_tokens": budget,
+            "stream": True,
+        }
+        # gpt-oss card uses top_p=1; forcing it on mistral-nemotron stalls generation.
+        if _is_gpt_oss(model):
+            kwargs["top_p"] = 1
+            kwargs["extra_body"] = {"reasoning_effort": _effort(reasoning_effort)}
+
+        async def _consume() -> str:
+            stream = await self._client.chat.completions.create(**kwargs)
+            async for chunk in stream:
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                if delta is None:
+                    continue
+                piece = getattr(delta, "content", None)
+                if isinstance(piece, str) and piece:
+                    content_parts.append(piece)
+                    continue
+                reasoning = getattr(delta, "reasoning_content", None)
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_parts.append(reasoning)
+            text = "".join(content_parts).strip() or "".join(reasoning_parts).strip()
+            if not text:
+                raise LLMProviderError(
+                    f"{vendor} returned empty text. Try Generate again.",
+                    status_code=502,
+                )
+            return text
+
+        try:
+            return await asyncio.wait_for(_consume(), timeout=wait_s)
+        except TimeoutError as exc:
+            raise translate_transport_error(exc, vendor=vendor) from exc
+        except APIStatusError as exc:
+            raise translate_vendor_error(exc, vendor=vendor) from exc
+        except (APITimeoutError, APIConnectionError) as exc:
+            raise translate_transport_error(exc, vendor=vendor) from exc
 
     async def complete(
         self,
@@ -40,23 +161,35 @@ class NvidiaGptOssProvider:
         max_tokens: int = 1024,
         reasoning_effort: str | None = None,
     ) -> str:
-        del reasoning_effort
-        # Card default is 4096 — reasoning is billed against max_tokens.
-        budget = max(max_tokens, DEFAULT_MAX_TOKENS)
-        try:
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                messages=cast(
-                    list[ChatCompletionMessageParam],
-                    [{"role": m.role, "content": m.content} for m in messages],
-                ),
-                temperature=temperature,
-                top_p=1,
-                max_tokens=budget,
-            )
-        except APIStatusError as exc:
-            raise translate_vendor_error(exc, vendor="NVIDIA gpt-oss-20b") from exc
-        return message_text(response.choices[0].message)
+        last: LLMProviderError | None = None
+        chain = self._model_chain()
+        for idx, (model, wait_s) in enumerate(chain):
+            try:
+                text = await self._stream_complete(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    budget=_token_budget(max_tokens) if _is_gpt_oss(model) else max(max_tokens, 512),
+                    reasoning_effort=reasoning_effort,
+                    wait_s=wait_s,
+                )
+                if model != self._model:
+                    self._prefer_fallback = True
+                return text
+            except LLMProviderError as exc:
+                last = exc
+                if idx < len(chain) - 1 and exc.status_code in {502, 503, 504}:
+                    logger.warning(
+                        "NVIDIA primary text timed out/failed (%s); failing over to %s",
+                        exc.detail,
+                        chain[idx + 1][0],
+                    )
+                    if model == self._model:
+                        self._prefer_fallback = True
+                    continue
+                raise
+        assert last is not None
+        raise last
 
     async def complete_stream(
         self,
@@ -66,17 +199,20 @@ class NvidiaGptOssProvider:
         max_tokens: int = 1024,
         reasoning_effort: str | None = None,
     ) -> AsyncIterator[str]:
-        del reasoning_effort
         from llm_provider.stream_util import stream_chat_deltas
 
-        budget = max(max_tokens, DEFAULT_MAX_TOKENS)
+        model = self._fallback_model if self._prefer_fallback and self._fallback_model else self._model
+        budget = _token_budget(max_tokens) if _is_gpt_oss(model) else max(max_tokens, 1024)
+        extra = {"reasoning_effort": _effort(reasoning_effort)} if _is_gpt_oss(model) else None
         async for piece in stream_chat_deltas(
             self._client,
-            model=self._model,
+            model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=budget,
-            vendor="NVIDIA gpt-oss-20b",
+            vendor=_vendor(model),
+            extra_body=extra,
+            include_reasoning=False,
         ):
             yield piece
 
@@ -109,7 +245,7 @@ class NvidiaGptOssProvider:
         aspect_ratio: str | None = None,
     ) -> ImageResult:
         raise LLMProviderError(
-            "gpt-oss-20b is text-only. Pick Agnes Image 2.5 Flash or NVIDIA FLUX, or paste Gemini for Nano Banana 2.",
+            "gpt-oss-20b is text-only. Pick Agnes Image 2.0 Flash or NVIDIA FLUX, or paste Gemini for Nano Banana 2.",
             status_code=400,
         )
 

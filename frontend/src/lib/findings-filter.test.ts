@@ -326,6 +326,27 @@ describe("helpers", () => {
     ).toEqual({ likes: 40, comments: 2, shares: 0, views: 15000 });
   });
 
+  it("recovers Instagram likes/comments from OG-style captions", () => {
+    expect(
+      postMetrics({
+        id: "ig",
+        account_id: "a",
+        external_post_id: "instagram:DdYy_F9NG9W",
+        format: "reel",
+        theme_tags: "instagram",
+        caption: '2 likes, 0 comments - pixis_ai on September 17, 2026: "Can search…"',
+        image_url: null,
+        likes: 0,
+        comments: 0,
+        shares: 0,
+        views: 0,
+        posted_at: "2026-09-17T00:00:00Z",
+        engagement_score: 0,
+        themes: ["instagram"],
+      }),
+    ).toEqual({ likes: 2, comments: 0, shares: 0, views: 0 });
+  });
+
   it("opens original URLs", () => {
     expect(
       watchUrl(

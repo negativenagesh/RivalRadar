@@ -91,7 +91,7 @@ describe("api client", () => {
     vi.useRealTimers();
   });
 
-  it("sends X-Gemini-Key only on Mission LLM routes", async () => {
+  it("sends Agnes image preference even when a Gemini key is present", async () => {
     window.localStorage.setItem(GEMINI_KEY_STORAGE, "AIzaSyDummyKey1234");
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -102,7 +102,8 @@ describe("api client", () => {
     await generateCreative({ kind: "studio", brand_name: "Pixis" });
     expect(fetchMock.mock.calls[0][1].headers["X-Gemini-Key"]).toBe("AIzaSyDummyKey1234");
     expect(fetchMock.mock.calls[0][1].headers["X-Text-Model"]).toBe("gemini");
-    expect(fetchMock.mock.calls[0][1].headers["X-Image-Model"]).toBe("nano_banana");
+    // Default image pick is Agnes — Gemini key must not force Nano Banana.
+    expect(fetchMock.mock.calls[0][1].headers["X-Image-Model"]).toBe("agnes");
 
     fetchMock.mockClear();
     fetchMock.mockResolvedValue({ ok: true, json: async () => [] });
@@ -110,7 +111,7 @@ describe("api client", () => {
     expect(fetchMock.mock.calls[0][1].headers["X-Gemini-Key"]).toBeUndefined();
   });
 
-  it("sends Agnes as the image model when Gemini is absent", async () => {
+  it("sends Agnes as the image model when an Agnes key is saved", async () => {
     window.localStorage.setItem("rivalradar.operator.deepseekKey", "sk-dummy-key-1234");
     window.localStorage.setItem("rivalradar.operator.agnesKey", "sk-agnes-dummy-1234");
     const fetchMock = vi.fn().mockResolvedValue({

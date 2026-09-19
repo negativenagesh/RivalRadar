@@ -6,10 +6,11 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from llm_provider.base import ImageResult, LLMProviderError, Message
+from llm_provider.chat_util import translate_transport_error
 
 DEFAULT_TEXT_MODEL = "gemini-3.6-flash"
 # Nano Banana 2 — https://ai.google.dev/gemini-api/docs/image-generation
@@ -104,7 +105,7 @@ class GeminiOpenAICompatProvider:
         model: str = DEFAULT_TEXT_MODEL,
         image_model: str = DEFAULT_IMAGE_MODEL,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._api_key = api_key
         self._base_url = base_url
         self._model = model
@@ -132,6 +133,8 @@ class GeminiOpenAICompatProvider:
             )
         except APIStatusError as exc:
             raise translate_openai_error(exc) from exc
+        except (APITimeoutError, APIConnectionError) as exc:
+            raise translate_transport_error(exc, vendor="Gemini") from exc
         return response.choices[0].message.content or ""
 
     async def complete_stream(

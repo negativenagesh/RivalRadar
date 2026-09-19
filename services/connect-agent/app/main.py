@@ -106,6 +106,49 @@ async def get_session(session_id: str) -> SessionStatus:
     )
 
 
+class StageBody(BaseModel):
+    platform: str = Field(min_length=1, max_length=32)
+    caption: str = Field(min_length=1, max_length=5000)
+    media_png_b64: str | None = None
+
+
+class StageResult(BaseModel):
+    ok: bool
+    detail: str
+    screenshot_jpeg_b64: str | None = None
+    viewer_url: str | None = None
+
+
+@app.post("/sessions/{session_id}/stage", response_model=StageResult)
+async def stage_session(session_id: str, body: StageBody) -> StageResult:
+    """Fill the live noVNC browser composer; never clicks Publish."""
+    from app.stage import StageError
+
+    try:
+        payload = await manager.stage(
+            session_id,
+            platform=body.platform,
+            caption=body.caption,
+            media_png_b64=body.media_png_b64,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except StageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"stage failed: {exc}") from exc
+    return StageResult(
+        ok=bool(payload.get("ok")),
+        detail=str(payload.get("detail") or "staged"),
+        screenshot_jpeg_b64=payload.get("screenshot_jpeg_b64")
+        if isinstance(payload.get("screenshot_jpeg_b64"), str)
+        else None,
+        viewer_url=_viewer_url(),
+    )
+
+
 @app.post("/sessions/{session_id}/cookies", response_model=CookiesBody)
 async def dump_cookies(session_id: str) -> CookiesBody:
     try:

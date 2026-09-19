@@ -174,6 +174,25 @@ function metricFromThemes(themes: string[], key: string): number {
   return best;
 }
 
+/** Instagram OG captions: `2 likes, 0 comments - user on Date: "…"` */
+function metricsFromInstagramCaption(caption: string): {
+  likes: number;
+  comments: number;
+} {
+  const m = caption.match(
+    /^([\d,.]+)\s*([KkMmBb])?\s*likes?\s*,\s*([\d,.]+)\s*([KkMmBb])?\s*comments?/i,
+  );
+  if (!m) return { likes: 0, comments: 0 };
+  const parse = (num: string, suffix?: string) => {
+    const n = Number(String(num).replace(/,/g, ""));
+    if (!Number.isFinite(n)) return 0;
+    const mult =
+      { k: 1_000, m: 1_000_000, b: 1_000_000_000 }[(suffix || "").toLowerCase()] || 1;
+    return Math.round(n * mult);
+  };
+  return { likes: parse(m[1], m[2]), comments: parse(m[3], m[4]) };
+}
+
 export function postMetrics(post: CompetitorPost): {
   likes: number;
   comments: number;
@@ -181,9 +200,14 @@ export function postMetrics(post: CompetitorPost): {
   views: number;
 } {
   const themes = themeList(post);
+  const fromCaption = metricsFromInstagramCaption(post.caption || "");
   return {
-    likes: Math.max(post.likes || 0, metricFromThemes(themes, "likes")),
-    comments: Math.max(post.comments || 0, metricFromThemes(themes, "comments")),
+    likes: Math.max(post.likes || 0, metricFromThemes(themes, "likes"), fromCaption.likes),
+    comments: Math.max(
+      post.comments || 0,
+      metricFromThemes(themes, "comments"),
+      fromCaption.comments,
+    ),
     shares: Math.max(post.shares || 0, metricFromThemes(themes, "shares"), metricFromThemes(themes, "reposts")),
     views: Math.max(post.views || 0, metricFromThemes(themes, "views")),
   };

@@ -9,6 +9,9 @@ vi.mock("next/link", () => ({
 
 vi.mock("@/lib/api", () => ({
   streamIntelReport: vi.fn(),
+  getIntelJob: vi.fn(async () => ({ cache_key: "x", status: "miss" })),
+  startIntelJob: vi.fn(async () => ({ cache_key: "x", status: "miss", started: false })),
+  putIntelJob: vi.fn(),
   generateCreative: vi.fn(),
   generatePublishPlan: vi.fn(),
   streamPublishPlan: vi.fn(),
@@ -17,9 +20,10 @@ vi.mock("@/lib/api", () => ({
   dropSocialComment: vi.fn(),
   listConnections: vi.fn(async () => [{ platform: "linkedin", status: "connected" }]),
   getServerModelDefaults: vi.fn(async () => ({
-    text_model: null,
-    image_model: null,
-    available: false,
+    text_model: "gptoss",
+    image_model: "agnes",
+    available: true,
+    available_image: true,
     source: "server-env",
   })),
 }));
@@ -112,10 +116,11 @@ describe("DiscoveryReport war room", () => {
     expect(screen.getByText(/human delays/i)).toBeInTheDocument();
   });
 
-  it("serves a cached brief on remount instead of re-streaming", async () => {
-    const { streamIntelReport } = await import("@/lib/api");
-    const streamMock = vi.mocked(streamIntelReport);
-    streamMock.mockResolvedValue({
+  it("serves a cached brief on remount without starting a text model", async () => {
+    const { getIntelJob, startIntelJob } = await import("@/lib/api");
+    const getMock = vi.mocked(getIntelJob);
+    const startMock = vi.mocked(startIntelJob);
+    const report = {
       scoreboard_blurb: "cached blurb from the chief",
       markdown: "# Cached brief\n\n- persisted",
       good_at: [],
@@ -127,8 +132,11 @@ describe("DiscoveryReport war room", () => {
       reports: [],
       narration: "agent",
       agents_used: ["intel_chief"],
-    } as never);
-    window.localStorage.setItem("rivalradar.operator.geminiKey", "AIza-dummy-key-1234");
+    };
+    // Seed local intel cache — refresh must not hit generation.
+    const { intelCacheKey, intelFactsSig, writeIntelCache } = await import("@/lib/intel-cache");
+    writeIntelCache(intelCacheKey(intelFactsSig(facts), "Pixis"), report as never);
+    getMock.mockResolvedValue({ cache_key: "x", status: "miss" });
 
     const first = render(
       <GeminiKeyProvider>
@@ -141,7 +149,7 @@ describe("DiscoveryReport war room", () => {
       </GeminiKeyProvider>,
     );
     await screen.findByText("cached blurb from the chief");
-    expect(streamMock).toHaveBeenCalledTimes(1);
+    expect(startMock).not.toHaveBeenCalled();
     first.unmount();
 
     render(
@@ -154,9 +162,8 @@ describe("DiscoveryReport war room", () => {
         />
       </GeminiKeyProvider>,
     );
-    // Cached brief renders immediately — no new stream, no "agents writing".
     await screen.findByText("cached blurb from the chief");
-    expect(streamMock).toHaveBeenCalledTimes(1);
+    expect(startMock).not.toHaveBeenCalled();
     expect(screen.queryByText(/agents writing/i)).not.toBeInTheDocument();
   });
 
@@ -235,6 +242,7 @@ describe("DiscoveryReport war room", () => {
 
     expect(await screen.findByText("Post to platform")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate viral captions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Post on /i })).toBeInTheDocument();
     expect(screen.getByText("Caption variations (max 3)")).toBeInTheDocument();
     for (const platform of ["linkedin", "instagram", "x", "youtube"]) {
       expect(screen.getAllByRole("button", { name: platform }).length).toBeGreaterThan(0);

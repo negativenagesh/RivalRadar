@@ -18,7 +18,8 @@ FROM python:3.12-slim AS runtime
 ENV CONNECT_IN_DOCKER=1 \
     BROWSER_ENGINE=obscura \
     OBSCURA_CDP_URL=ws://127.0.0.1:9222 \
-    OBSCURA_VERSION=v0.2.2
+    OBSCURA_VERSION=v0.2.2 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -37,6 +38,12 @@ RUN mkdir -p /opt/obscura \
 WORKDIR /build/services/ingestion
 COPY --from=builder --chown=appuser:appuser /build /build
 ENV PATH="/build/services/ingestion/.venv/bin:/usr/local/bin:$PATH"
+
+# Local Docker (esp. Apple Silicon) falls back to Chromium when Obscura's
+# x86_64 binary cannot run — browsers must be present for that path.
+RUN playwright install --with-deps chromium \
+    && mkdir -p /opt/ms-playwright \
+    && chown -R appuser:appuser /opt/ms-playwright
 
 COPY --chown=appuser:appuser services/ingestion/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -229,6 +229,8 @@ export type CreativeRequest = {
   /** 1-based when generating a batch of studio frames / memes */
   variant?: number;
   variant_count?: number;
+  /** full = LLM caption then Agnes; fast = template + Agnes only */
+  studio_mode?: "full" | "fast";
 };
 
 export type CreativeResult = {
@@ -241,6 +243,7 @@ export type CreativeResult = {
   why_slaps?: string | null;
   overlay_text?: string | null;
   hashtags?: string[];
+  generation_path?: string | null;
 };
 
 export type IntelPlay = {

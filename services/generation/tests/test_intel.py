@@ -202,15 +202,8 @@ def test_markdown_quality_rejects_template_clone() -> None:
     assert markdown_passes_quality(_RICH_BRIEF, fallback=fallback, platforms=["linkedin", "instagram"])
 
 
-async def test_generate_studio_creative_parses_json() -> None:
-    provider = FakeLLMProvider(
-        completion=(
-            '{"caption":"we shipped the boring thing first",'
-            '"overlay_text":"ship the boring",'
-            '"why_slaps":"their carousel ate 40% of the mix",'
-            '"hashtags":["build"],"image_brief":"lime on black founder at 2am"}'
-        )
-    )
+async def test_generate_studio_creative_skips_text_llm() -> None:
+    provider = FakeLLMProvider()
     result = await generate_creative(
         CreativeRequest(
             kind="studio",
@@ -218,28 +211,32 @@ async def test_generate_studio_creative_parses_json() -> None:
             format="hot_take",
             platform="instagram",
             spice=4,
+            studio_mode="fast",
             facts_json='{"formatMix":[{"format":"carousel","pct":40}]}',
         ),
         provider,
     )
     assert result.kind == "studio"
-    assert "boring" in result.text
-    assert result.overlay_text == "ship the boring"
-    assert result.why_slaps
+    assert result.text
+    assert result.overlay_text
     assert result.image_data_base64
-    assert provider.complete_calls == 1
+    assert provider.complete_calls == 0
+    assert result.generation_path == "fast_agnes"
     assert provider.last_aspect_ratio == "4:5"
 
 
-async def test_studio_surfaces_image_error_when_nano_banana_fails() -> None:
-    provider = FakeLLMProvider(
-        completion='{"caption":"ok","overlay_text":"go","why_slaps":"receipt","hashtags":[],"image_brief":"lime"}',
-        raise_on_generate_image=True,
-    )
+async def test_studio_surfaces_image_error_when_paint_fails() -> None:
+    provider = FakeLLMProvider(raise_on_generate_image=True)
     result = await generate_creative(
-        CreativeRequest(kind="studio", brand_name="Pixis", format="meme", platform="instagram"),
+        CreativeRequest(
+            kind="studio",
+            brand_name="Pixis",
+            format="meme",
+            platform="instagram",
+            studio_mode="fast",
+        ),
         provider,
     )
     assert result.image_data_base64 is None
     assert result.image_error
-    assert "Nano Banana" in (result.image_error or "")
+    assert provider.complete_calls == 0

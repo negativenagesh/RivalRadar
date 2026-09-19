@@ -184,6 +184,17 @@ export function ConnectCenter({
     }
   }
 
+  /** Soft reconnect: reopen headed Chromium + noVNC with vaulted cookies (local-friendly). */
+  async function softReconnect(platform: PlatformId) {
+    setDialog(platform);
+    setError(null);
+    setActiveSession(null);
+    setPairingCode(null);
+    setPairingExpiresIn(0);
+    setMode("browser");
+    await startBrowserSession(platform);
+  }
+
   async function startBrowserSession(platform: PlatformId) {
     setBusy(platform);
     setError(null);
@@ -372,7 +383,7 @@ export function ConnectCenter({
                     size="sm"
                     variant="outline"
                     disabled={busy === platform}
-                    onClick={() => void openConnect(platform)}
+                    onClick={() => void softReconnect(platform)}
                   >
                     Reconnect
                   </Button>

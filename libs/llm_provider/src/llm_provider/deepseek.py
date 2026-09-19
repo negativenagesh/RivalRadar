@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import cast
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from llm_provider.base import ImageResult, LLMProviderError, Message
-from llm_provider.chat_util import message_text, translate_vendor_error
+from llm_provider.chat_util import message_text, translate_transport_error, translate_vendor_error
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 # DeepSeek-V4.1-Flash — https://api-docs.deepseek.com/
@@ -27,7 +27,7 @@ class DeepSeekProvider:
         base_url: str = DEFAULT_BASE_URL,
         model: str = DEFAULT_MODEL,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
         self._model = model
 
     async def complete(
@@ -57,6 +57,8 @@ class DeepSeekProvider:
             )
         except APIStatusError as exc:
             raise translate_vendor_error(exc, vendor="DeepSeek") from exc
+        except (APITimeoutError, APIConnectionError) as exc:
+            raise translate_transport_error(exc, vendor="DeepSeek") from exc
         return message_text(response.choices[0].message)
 
     async def complete_stream(
@@ -117,6 +119,6 @@ class DeepSeekProvider:
     ) -> ImageResult:
         raise LLMProviderError(
             "DeepSeek-V4.1-Flash understands images; it does not paint them. "
-            "Paste Gemini for Nano Banana 2, Agnes for Image 2.5 Flash, or NVIDIA for FLUX.",
+            "Paste Gemini for Nano Banana 2, Agnes for Image 2.0 Flash, or NVIDIA for FLUX.",
             status_code=400,
         )

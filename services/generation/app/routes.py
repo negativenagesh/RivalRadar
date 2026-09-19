@@ -33,8 +33,8 @@ from llm_provider import (
 router = APIRouter()
 
 KEYS_MISSING = (
-    "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / "
-    "GEMINI_API_KEY in the server .env (defaults: gpt-oss text, Agnes image)."
+    "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY "
+    "in the server .env (defaults: gpt-oss text, Agnes image)."
 )
 
 
@@ -58,6 +58,30 @@ def operator_provider(
             agnes_key=x_agnes_key,
             text_model=x_text_model,
             image_model=x_image_model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or KEYS_MISSING) from exc
+
+
+def creative_operator_provider(
+    request: CreativeRequest,
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> LLMProvider:
+    """Format Studio / image creatives always paint with Agnes."""
+    image_model = "agnes" if request.kind in {"studio", "image"} else x_image_model
+    try:
+        return provider_from_operator(
+            gemini_key=x_gemini_key,
+            deepseek_key=x_deepseek_key,
+            nvidia_key=x_nvidia_key,
+            agnes_key=x_agnes_key,
+            text_model=x_text_model,
+            image_model=image_model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc) or KEYS_MISSING) from exc
@@ -115,11 +139,30 @@ async def llm_ping(
 @router.post("/creative/generate", response_model=CreativeResponse)
 async def creative_generate(
     request: CreativeRequest,
-    provider: LLMProvider = Depends(operator_provider),
+    provider: LLMProvider = Depends(creative_operator_provider),
 ) -> CreativeResponse:
+    import logging
+
+    log = logging.getLogger("generation.creative")
+    image_backend = type(getattr(provider, "_image", None) or provider).__name__
+    log.info(
+        "creative start kind=%s format=%s platform=%s image=%s",
+        request.kind,
+        request.format,
+        request.platform,
+        image_backend,
+    )
     try:
-        return await generate_creative(request, provider)
+        result = await generate_creative(request, provider)
+        log.info(
+            "creative done kind=%s has_image=%s image=%s",
+            request.kind,
+            bool(result.image_data_base64),
+            image_backend,
+        )
+        return result
     except LLMProviderError as exc:
+        log.warning("creative failed kind=%s detail=%s", request.kind, exc.detail)
         raise _llm_http(exc) from exc
 
 

@@ -316,7 +316,8 @@ function shotsFromPosts(
   return out;
 }
 
-function mergeShots(live: Shot[], persisted: Shot[]): Shot[] {
+/** Live frames first so newly extracted posts appear as the scout runs; persisted fills gaps. */
+export function mergeShots(live: Shot[], persisted: Shot[]): Shot[] {
   const seen = new Set<string>();
   const out: Shot[] = [];
   const keyOf = (s: Shot) => (s.url ? s.url.split("?")[0] : s.id);
@@ -331,7 +332,7 @@ function mergeShots(live: Shot[], persisted: Shot[]): Shot[] {
       u.includes("activity:")
     );
   });
-  for (const s of [...persisted, ...livePosts]) {
+  for (const s of [...livePosts, ...persisted]) {
     const key = keyOf(s);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -488,7 +489,10 @@ export function LiveScout({
     if (ev.step_type === "error") return String(ev.payload.detail ?? "");
     if (ev.step_type === "log") return String(ev.payload.message ?? "");
     if (ev.step_type === "screenshot") {
-      return String(ev.payload.platform ?? "frame");
+      const label = ev.payload.label ? String(ev.payload.label) : "";
+      const platform = String(ev.payload.platform ?? "frame");
+      if (ev.payload.theater) return `${platform} · live frame`;
+      return label || platform;
     }
     return "";
   }

@@ -5,10 +5,12 @@ import { usePathname } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { GeminiKeyChip } from "@/components/gemini-key-chip";
+import { NotificationBell } from "@/components/notification-bell";
 import { ServerStatusChip } from "@/components/server-status-chip";
 
 const LINKS = [
   { href: "/mission", label: "Mission" },
+  { href: "/calendar", label: "Calendar" },
   { href: "/digest", label: "Digest" },
   { href: "/review", label: "Review" },
 ];
@@ -50,6 +52,7 @@ export function NavBar() {
             );
           })}
           <ServerStatusChip />
+          <NotificationBell />
           <GeminiKeyChip />
           <Button variant="outline" size="sm" className="gap-1.5" asChild>
             <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">

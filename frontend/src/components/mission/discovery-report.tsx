@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  CalendarPlus,
   Copy,
   Download,
   ExternalLink,
@@ -17,13 +18,15 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { useOperatorModels } from "@/components/operator-models-provider";
+import { pushNotification } from "@/lib/notifications";
 import {
   dropSocialComment,
   generateCreative,
+  getIntelJob,
   listConnections,
   stagePlatformPost,
+  startIntelJob,
   streamCommentDraft,
-  streamIntelReport,
   streamPublishPlan,
   type PublishPlan,
   type PublishVariation,
@@ -32,6 +35,24 @@ import {
 import { MarkdownReport } from "@/components/mission/markdown-report";
 import { IntelVisuals } from "@/components/mission/intel-visuals";
 import { mergeIntel, buildStudioRoastPack, type IntelFacts } from "@/lib/intel-facts";
+import {
+  clearIntelCache,
+  intelCacheKey,
+  intelFactsSig,
+  readIntelCache,
+  writeIntelCache,
+} from "@/lib/intel-cache";
+import {
+  defaultScheduleLocalValue,
+  localValueToIso,
+  scheduleFromStudioAsset,
+} from "@/lib/calendar";
+import {
+  appendStudioAssets,
+  readStudioAssets,
+  removeStudioAsset,
+  type SavedStudioAsset,
+} from "@/lib/studio-assets";
 import {
   SNIPER_PLATFORMS,
   SNIPER_TONES,
@@ -50,46 +71,7 @@ import type {
 } from "@/lib/types";
 
 const KEY_WARNING =
-  "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY / GEMINI_API_KEY in the server .env.";
-
-const INTEL_CACHE_PREFIX = "rivalradar.intel.";
-
-function intelCacheKey(sig: string, brandName: string): string {
-  let hash = 0;
-  const text = `${sig}|${brandName}`;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = (Math.imul(hash, 31) + text.charCodeAt(i)) | 0;
-  }
-  return `${INTEL_CACHE_PREFIX}${(hash >>> 0).toString(36)}`;
-}
-
-function readIntelCache(key: string): IntelReport | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as IntelReport;
-    return parsed && typeof parsed.markdown === "string" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeIntelCache(key: string, report: IntelReport): void {
-  if (typeof window === "undefined") return;
-  try {
-    // Keep only the newest few cached briefs.
-    const stale = Object.keys(window.localStorage).filter(
-      (k) => k.startsWith(INTEL_CACHE_PREFIX) && k !== key,
-    );
-    for (const k of stale.slice(0, Math.max(0, stale.length - 4))) {
-      window.localStorage.removeItem(k);
-    }
-    window.localStorage.setItem(key, JSON.stringify(report));
-  } catch {
-    // storage full / private mode
-  }
-}
+  "Paste a key in the Models chip, or set NVIDIA_API_KEY / AGNES_API_KEY in the server .env.";
 
 const AGENT_LABELS: Record<string, string> = {
   intel_chief: "Intel Chief",
@@ -120,7 +102,7 @@ const PERM_OPTIONS: {
   {
     key: "imageConcepts",
     label: "Post visuals",
-    hint: "Nano Banana 2, Agnes 2.5 Flash, or NVIDIA FLUX frames",
+    hint: "Agnes 2.0 Flash frames (or Nano Banana / FLUX if you paste those keys)",
   },
   {
     key: "carouselOutlines",
@@ -194,9 +176,7 @@ export function DiscoveryReport({
     () => JSON.stringify(buildStudioRoastPack(facts, brand, competitors)),
     [facts, brand, competitors],
   );
-  const factsSig = `${facts.window.label}|${facts.brandName}|${facts.companies
-    .map((c) => `${c.name}:${c.posts}`)
-    .join(",")}|${facts.sniperQueue.length}`;
+  const factsSig = intelFactsSig(facts);
 
   const [geminiIntel, setGeminiIntel] = useState<IntelReport | null>(null);
   const [intelFetchError, setIntelFetchError] = useState<string | null>(null);
@@ -215,8 +195,10 @@ export function DiscoveryReport({
   }
   const intel = mergeIntel(facts, geminiIntel);
   const usedFallback = !geminiIntel || geminiIntel.narration === "fallback";
-  const intelBusy = models.readyText && geminiIntel === null && intelFetchError === null;
-  const intelError = !models.readyText ? KEY_WARNING : intelFetchError;
+  const intelBusy =
+    geminiIntel === null &&
+    Object.values(intelStages).some((stage) => stage === "writing");
+  const intelError = intelFetchError;
   const writingAgents = Object.entries(intelStages)
     .filter(([, status]) => status === "writing")
     .map(([agent]) => AGENT_LABELS[agent as keyof typeof AGENT_LABELS] ?? agent);
@@ -229,7 +211,18 @@ export function DiscoveryReport({
   const [studioLoadingSlot, setStudioLoadingSlot] = useState<number | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
   const [studioOuts, setStudioOuts] = useState<CreativeResult[]>([]);
+  const [studioLibrary, setStudioLibrary] = useState<SavedStudioAsset[]>(() =>
+    readStudioAssets(brand.displayName || "brand"),
+  );
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [studioMode, setStudioMode] = useState<"full" | "fast">("full");
+  const [studioPhase, setStudioPhase] = useState<"writing" | "painting" | null>(null);
+  const studioBrandKey = brand.displayName || "brand";
+  const [libraryBrandKey, setLibraryBrandKey] = useState(studioBrandKey);
+  if (libraryBrandKey !== studioBrandKey) {
+    setLibraryBrandKey(studioBrandKey);
+    setStudioLibrary(readStudioAssets(studioBrandKey));
+  }
 
   const [sniperPlatform, setSniperPlatform] = useState("linkedin");
   const [sniperTone, setSniperTone] = useState<(typeof SNIPER_TONES)[number]>("witty");
@@ -293,72 +286,83 @@ export function DiscoveryReport({
   }, []);
 
   useEffect(() => {
-    if (!models.readyText) return;
+    // Refresh / mount: load cached intel only. Never start or stream a text model
+    // unless the operator clicks Regenerate intel.
     let cancelled = false;
-    const cacheKey = intelCacheKey(factsSig, brand.displayName || "the brand");
-    // Defer setState out of the effect body (react-hooks/set-state-in-effect).
-    void Promise.resolve().then(() => {
-      if (cancelled) return;
-      const cached = readIntelCache(cacheKey);
-      if (cached) {
-        setGeminiIntel(cached);
-        setIntelFetchError(null);
+    const brandName = brand.displayName || "the brand";
+    const cacheKey = intelCacheKey(factsSig, brandName);
+
+    async function loadCachedIntel() {
+      const local = readIntelCache(cacheKey);
+      if (local) {
+        if (!cancelled) {
+          setGeminiIntel(local);
+          setIntelFetchError(null);
+        }
         return;
       }
-      setIntelStages({});
-      setIntelLiveMarkdown("");
-      void streamIntelReport(
-        {
-          facts,
-          brand_name: brand.displayName || "the brand",
-          voice_notes: brand.voiceNotes,
-          forbidden_claims: brand.forbiddenClaims,
-        },
-        (event) => {
-          if (cancelled) return;
-          if (event.event === "stage") {
-            setIntelStages((s) => ({ ...s, [event.agent]: "writing" }));
-          } else if (event.event === "agent") {
-            setIntelStages((s) => ({ ...s, [event.agent]: "done" }));
-          } else if (event.event === "delta" && event.markdown) {
-            setIntelLiveMarkdown((prev) =>
-              event.replace ? event.markdown : `${prev}${event.markdown}`,
-            );
-          }
-        },
-      )
-        .then((report) => {
-          if (cancelled) return;
-          writeIntelCache(cacheKey, report);
-          setGeminiIntel(report);
-          setIntelLiveMarkdown("");
+      try {
+        const job = await getIntelJob(cacheKey);
+        if (cancelled) return;
+        if (job.status === "done" && job.report) {
+          writeIntelCache(cacheKey, job.report);
+          setGeminiIntel(job.report);
           setIntelFetchError(null);
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
+          return;
+        }
+        if (job.status === "running") {
+          // Poll an already-running job; do not start a new one.
+          setIntelStages({ intel_chief: "writing", play_caller: "writing", platform_scout: "writing" });
+          for (let i = 0; i < 120 && !cancelled; i += 1) {
+            await new Promise((r) => window.setTimeout(r, 2500));
+            const next = await getIntelJob(cacheKey);
+            if (cancelled) return;
+            if (next.status === "done" && next.report) {
+              writeIntelCache(cacheKey, next.report);
+              setGeminiIntel(next.report);
+              setIntelLiveMarkdown("");
+              setIntelFetchError(null);
+              return;
+            }
+            if (next.status === "error") {
+              if (!cancelled) {
+                setIntelFetchError(next.error || "Intel job failed");
+                setGeminiIntel(null);
+              }
+              return;
+            }
+          }
+        }
+        // miss / idle — wait for Regenerate; show fact brief only.
+        if (!cancelled) {
           setGeminiIntel(null);
-          setIntelLiveMarkdown("");
-          setIntelFetchError(
-            err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
-          );
-        });
-    });
+          setIntelFetchError(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setGeminiIntel(null);
+          setIntelFetchError(null);
+        }
+      }
+    }
+
+    void loadCachedIntel();
     return () => {
       cancelled = true;
     };
   }, [
-    facts,
     factsSig,
-    models.readyText,
     brand.displayName,
-    brand.voiceNotes,
-    brand.forbiddenClaims,
     intelTick,
   ]);
 
   async function runStudio(spice = studioSpice) {
-    if (!models.readyText) {
-      setStudioError(KEY_WARNING);
+    if (!models.readyImage) {
+      setStudioError("Agnes (or another image model) must be available — paste a key or set AGNES_API_KEY.");
+      return;
+    }
+    if (studioMode === "full" && !models.readyText) {
+      setStudioError("Full generate needs a text model — paste a key in Models, or switch to Fast paint.");
       return;
     }
     if (!formatUnlocked(studioFormat, permissions)) {
@@ -374,6 +378,12 @@ export function DiscoveryReport({
     try {
       for (let i = 1; i <= batch; i += 1) {
         setStudioLoadingSlot(i);
+        setStudioPhase(studioMode === "full" ? "writing" : "painting");
+        // Soft progress: after a beat, show painting while the request is in flight.
+        const paintTimer =
+          studioMode === "full"
+            ? window.setTimeout(() => setStudioPhase("painting"), 2500)
+            : null;
         const result = await generateCreative({
           kind: "studio",
           brand_name: brand.displayName || "the brand",
@@ -389,15 +399,38 @@ export function DiscoveryReport({
           facts_json: studioFormat === "meme" ? studioFactsJson : factsJson,
           variant: i,
           variant_count: batch,
+          studio_mode: studioMode,
         });
+        if (paintTimer) window.clearTimeout(paintTimer);
         collected.push(result);
         setStudioOuts([...collected]);
       }
+      if (collected.length) {
+        const next = appendStudioAssets(brand.displayName || "brand", collected, {
+          format: studioFormat,
+          platform: studioPlatform,
+        });
+        setStudioLibrary(next);
+        pushNotification({
+          kind: "studio_done",
+          title: "Studio frames ready",
+          body: `${collected.length} × ${formatLabel(studioFormat)} for ${brand.displayName || "brand"} — open Post to stage.`,
+          href: "/mission",
+        });
+      }
     } catch (err) {
       setStudioError(err instanceof Error ? err.message : "Studio generation failed");
-      if (collected.length) setStudioOuts([...collected]);
+      if (collected.length) {
+        setStudioOuts([...collected]);
+        const next = appendStudioAssets(brand.displayName || "brand", collected, {
+          format: studioFormat,
+          platform: studioPlatform,
+        });
+        setStudioLibrary(next);
+      }
     } finally {
       setStudioLoadingSlot(null);
+      setStudioPhase(null);
       setStudioBusy(false);
     }
   }
@@ -529,11 +562,16 @@ export function DiscoveryReport({
               variant="outline"
               disabled={!models.readyText || intelBusy}
               onClick={() => {
-                if (typeof window !== "undefined") {
-                  window.localStorage.removeItem(
-                    intelCacheKey(factsSig, brand.displayName || "the brand"),
-                  );
-                }
+                const cacheKey = intelCacheKey(factsSig, brand.displayName || "the brand");
+                clearIntelCache(cacheKey);
+                void startIntelJob({
+                  cache_key: cacheKey,
+                  facts,
+                  brand_name: brand.displayName || "the brand",
+                  voice_notes: brand.voiceNotes,
+                  forbidden_claims: brand.forbiddenClaims,
+                  force: true,
+                }).catch(() => undefined);
                 setGeminiIntel(null);
                 setIntelFetchError(null);
                 setIntelStages({});
@@ -759,8 +797,35 @@ export function DiscoveryReport({
             Up to 3, generated one after another (loading between each).
           </span>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-ui text-xs text-muted-foreground">mode</span>
+          <button
+            type="button"
+            onClick={() => setStudioMode("full")}
+            className={chipClass(studioMode === "full")}
+          >
+            Full generate
+          </button>
+          <button
+            type="button"
+            onClick={() => setStudioMode("fast")}
+            className={chipClass(studioMode === "fast")}
+          >
+            Fast paint
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {studioMode === "full"
+              ? "LLM writes caption + brief, then Agnes paints."
+              : "Template caption + Agnes only (no text model)."}
+          </span>
+        </div>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={studioBusy || !models.readyText} onClick={() => void runStudio()}>
+          <Button
+            disabled={
+              studioBusy || !models.readyImage || (studioMode === "full" && !models.readyText)
+            }
+            onClick={() => void runStudio()}
+          >
             {studioBusy ? <Loader2 className="size-4 animate-spin" /> : <Flame className="size-4" />}
             Generate
             {studioCount > 1 ? ` ×${studioCount}` : ""}
@@ -768,13 +833,21 @@ export function DiscoveryReport({
           {studioOuts.length > 0 && (
             <Button
               variant="outline"
-              disabled={studioBusy || !models.readyText}
+              disabled={
+                studioBusy || !models.readyImage || (studioMode === "full" && !models.readyText)
+              }
               onClick={() => void runStudio(Math.min(5, studioSpice + 1))}
             >
               Regenerate with more spice
             </Button>
           )}
         </div>
+        {studioBusy && studioPhase && (
+          <p className="font-ui text-xs text-primary">
+            {studioPhase === "writing" ? "Writing copy…" : "Painting with Agnes…"}
+            {studioLoadingSlot && studioCount > 1 ? ` · frame ${studioLoadingSlot}/${studioCount}` : ""}
+          </p>
+        )}
         {studioError && (
           <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {studioError}
@@ -857,26 +930,30 @@ export function DiscoveryReport({
                 …
               </p>
               <p className="text-xs text-muted-foreground">
-                {studioFormat === "meme"
-                  ? "Caption first, then the frame — hang tight."
-                  : `Building your ${formatLabel(studioFormat).toLowerCase()} — hang tight.`}
+                {studioPhase === "writing"
+                  ? "Writing copy with the text model…"
+                  : studioPhase === "painting"
+                    ? "Painting with Agnes…"
+                    : studioFormat === "meme"
+                      ? "Caption first, then the frame — hang tight."
+                      : `Building your ${formatLabel(studioFormat).toLowerCase()} — hang tight.`}
               </p>
             </div>
           )}
         </div>
-        {studioOuts.length > 0 && (
+        {studioLibrary.length > 0 && (
           <div className="space-y-3 rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:p-5">
             <div className="space-y-1">
               <h4 className="font-display text-base font-bold text-primary">Post to platform</h4>
               <p className="text-sm text-muted-foreground">
-                Publish Strategist writes viral, platform-native captions + hashtags (LinkedIn /
-                Instagram / X / YouTube). Pick an asset, generate up to 3 variations, then Post —
-                the headless browser opens the composer with image + caption staged. You hit publish
-                yourself.
+                Saved studio assets stay here across refresh and new generates (
+                {studioLibrary.length} saved). Publish Strategist can write platform-native
+                captions; <strong>Post</strong> opens Connect/noVNC with image + caption staged —
+                you hit publish yourself.
               </p>
             </div>
             <PublishPanel
-              outs={studioOuts}
+              outs={studioLibrary}
               brandName={brand.displayName}
               intelMarkdown={geminiIntel?.markdown ?? null}
               factsJson={studioFormat === "meme" ? studioFactsJson : factsJson}
@@ -884,6 +961,9 @@ export function DiscoveryReport({
               spice={studioSpice}
               defaultPlatform={studioPlatform}
               ready={models.readyText}
+              onRemoveAsset={(id) => {
+                setStudioLibrary(removeStudioAsset(brand.displayName || "brand", id));
+              }}
             />
           </div>
         )}
@@ -1081,8 +1161,9 @@ function PublishPanel({
   spice,
   defaultPlatform,
   ready,
+  onRemoveAsset,
 }: {
-  outs: CreativeResult[];
+  outs: SavedStudioAsset[];
   brandName: string;
   intelMarkdown: string | null;
   factsJson: string;
@@ -1090,6 +1171,7 @@ function PublishPanel({
   spice: number;
   defaultPlatform: string;
   ready: boolean;
+  onRemoveAsset?: (id: string) => void;
 }) {
   const [assetIdx, setAssetIdx] = useState(0);
   const safeAssetIdx = Math.min(assetIdx, Math.max(outs.length - 1, 0));
@@ -1106,6 +1188,8 @@ function PublishPanel({
   const [stagingAll, setStagingAll] = useState(false);
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [staged, setStaged] = useState<Record<number, StagePostResult>>({});
+  const [scheduleLocal, setScheduleLocal] = useState(() => defaultScheduleLocalValue());
+  const [scheduleNote, setScheduleNote] = useState<string | null>(null);
 
   function selectAsset(idx: number): void {
     if (idx === safeAssetIdx) return;
@@ -1168,12 +1252,19 @@ function PublishPanel({
     }
   }
 
+  async function openViewer(result: StagePostResult): Promise<void> {
+    const url = result.viewer_url?.trim();
+    if (url && typeof window !== "undefined") {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }
+
   async function stageVariation(idx: number, variation: PublishVariation): Promise<void> {
     if (!out) return;
     if (
       typeof window !== "undefined" &&
       !window.confirm(
-        `Open ${platform} in the headless browser and stage this post with the image attached? Nothing gets published — you review and hit post yourself.`,
+        `Open ${platform} in the Connect browser (noVNC) and stage this post with the image attached? Nothing gets published — you review and hit post yourself.`,
       )
     ) {
       return;
@@ -1188,6 +1279,44 @@ function PublishPanel({
         approved: true,
       });
       setStaged((prev) => ({ ...prev, [idx]: result }));
+      await openViewer(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "staging failed");
+    } finally {
+      setStagingIdx(null);
+    }
+  }
+
+  async function stageStudioCaption(): Promise<void> {
+    if (!out) return;
+    const caption = (out.text || "").trim();
+    if (!caption) {
+      setError("Studio caption is empty — generate an asset first.");
+      return;
+    }
+    if (!out.image_data_base64) {
+      setError("No image on this asset — Generate a frame before Post.");
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `Open ${platform} in the Connect browser (noVNC) with this studio image + caption staged? You hit publish yourself.`,
+      )
+    ) {
+      return;
+    }
+    setStagingIdx(-1);
+    setError(null);
+    try {
+      const result = await stagePlatformPost({
+        platform,
+        caption,
+        media_png_b64: out.image_data_base64,
+        approved: true,
+      });
+      setStaged((prev) => ({ ...prev, [-1]: result }));
+      await openViewer(result);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "staging failed");
     } finally {
@@ -1205,7 +1334,7 @@ function PublishPanel({
     if (
       typeof window !== "undefined" &&
       !window.confirm(
-        `Post ${idxs.length} variation(s) to ${platform} via the headless browser? Composer opens staged — nothing auto-publishes.`,
+        `Post ${idxs.length} variation(s) to ${platform} via Connect/noVNC? Composer opens staged — nothing auto-publishes.`,
       )
     ) {
       return;
@@ -1222,6 +1351,7 @@ function PublishPanel({
           approved: true,
         });
         setStaged((prev) => ({ ...prev, [idx]: result }));
+        await openViewer(result);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "staging failed");
         break;
@@ -1240,10 +1370,10 @@ function PublishPanel({
 
   return (
     <div className="space-y-4">
-      {outs.length > 1 && (
+      {outs.length > 0 && (
         <div className="space-y-2">
           <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-            Asset to post
+            Saved assets ({outs.length})
           </p>
           <div className="flex flex-wrap gap-2">
             {outs.map((item, idx) => {
@@ -1252,28 +1382,47 @@ function PublishPanel({
                   ? `data:${item.image_mime_type};base64,${item.image_data_base64}`
                   : null;
               return (
-                <button
-                  key={`asset-${idx}`}
-                  type="button"
-                  onClick={() => selectAsset(idx)}
-                  className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
-                    safeAssetIdx === idx
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border/50 bg-background/50 text-muted-foreground hover:border-primary/40"
-                  }`}
-                >
-                  {src ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={src} alt="" className="size-8 rounded-md object-cover" />
-                  ) : (
-                    <span className="flex size-8 items-center justify-center rounded-md bg-muted font-mono text-[10px]">
-                      #{idx + 1}
+                <div key={item.id} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => selectAsset(idx)}
+                    className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
+                      safeAssetIdx === idx
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border/50 bg-background/50 text-muted-foreground hover:border-primary/40"
+                    }`}
+                  >
+                    {src ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={src} alt="" className="size-8 rounded-md object-cover" />
+                    ) : (
+                      <span className="flex size-8 items-center justify-center rounded-md bg-muted font-mono text-[10px]">
+                        #{idx + 1}
+                      </span>
+                    )}
+                    <span className="max-w-28 truncate">
+                      {item.overlay_text || item.text || `Asset ${idx + 1}`}
                     </span>
+                    <span className="font-mono text-[9px] uppercase text-muted-foreground">
+                      {item.format}
+                    </span>
+                  </button>
+                  {onRemoveAsset && (
+                    <button
+                      type="button"
+                      aria-label={`Remove asset ${idx + 1}`}
+                      className="absolute -right-1 -top-1 rounded-full bg-background/90 p-0.5 text-muted-foreground shadow hover:text-destructive"
+                      onClick={() => {
+                        onRemoveAsset(item.id);
+                        if (idx <= safeAssetIdx) {
+                          setAssetIdx(Math.max(0, safeAssetIdx - 1));
+                        }
+                      }}
+                    >
+                      <X className="size-3" />
+                    </button>
                   )}
-                  <span className="max-w-28 truncate">
-                    {item.overlay_text || item.text || `Asset ${idx + 1}`}
-                  </span>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -1330,7 +1479,64 @@ function PublishPanel({
                 )}
                 {plan ? "Regenerate viral captions" : "Generate viral captions"}
               </Button>
+              <Button
+                size="sm"
+                disabled={stagingAll || stagingIdx !== null || !out.image_data_base64}
+                onClick={() => void stageStudioCaption()}
+              >
+                {stagingIdx === -1 ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Send className="size-3.5" />
+                )}
+                Post on {platform}
+              </Button>
             </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="space-y-1">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Schedule (remind to stage)
+                </span>
+                <input
+                  type="datetime-local"
+                  value={scheduleLocal}
+                  onChange={(e) => setScheduleLocal(e.target.value)}
+                  className="block rounded-md border border-border/60 bg-background px-2 py-1.5 text-sm"
+                />
+              </label>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!out.text?.trim()}
+                onClick={() => {
+                  try {
+                    const iso = localValueToIso(scheduleLocal);
+                    scheduleFromStudioAsset(out, brandName, iso, platform);
+                    setScheduleNote(
+                      `Saved to Calendar for ${new Date(iso).toLocaleString()} — we remind ~30m before.`,
+                    );
+                    pushNotification({
+                      kind: "generic",
+                      title: "Added to calendar",
+                      body: `${out.format || format} · ${platform} · open Calendar to review.`,
+                      href: "/calendar",
+                      email: false,
+                    });
+                  } catch (cause) {
+                    setError(cause instanceof Error ? cause.message : "Could not schedule");
+                  }
+                }}
+              >
+                <CalendarPlus className="size-3.5" />
+                Schedule
+              </Button>
+              {scheduleNote && <p className="text-xs text-primary">{scheduleNote}</p>}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Post uses the selected studio image + its caption (or a variation below) and opens
+              the Connect noVNC tab so you can publish. Schedule never autoposts — Calendar reminds
+              you to Stage.
+            </p>
             {!ready && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 Add a text-model key in Models (defaults to gpt-oss when the server key is set).
@@ -1339,6 +1545,39 @@ function PublishPanel({
           </div>
         </div>
       </div>
+
+      {staged[-1] && (() => {
+        const stagedStudio = staged[-1];
+        const viewer = stagedStudio.viewer_url ?? undefined;
+        return (
+        <div className="space-y-1 rounded-xl border border-primary/30 bg-primary/5 p-3">
+          <p className={`text-xs ${stagedStudio.ok ? "text-primary" : "text-destructive"}`}>
+            {stagedStudio.ok
+              ? `Staged in ${platform} composer — finish in noVNC and hit publish yourself.`
+              : stagedStudio.detail}
+          </p>
+          {viewer ? (
+            <a
+              href={viewer}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-ui inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+            >
+              Open Connect viewer
+              <ExternalLink className="size-3" />
+            </a>
+          ) : null}
+          {stagedStudio.screenshot_jpeg_b64 && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={`data:image/jpeg;base64,${stagedStudio.screenshot_jpeg_b64}`}
+              alt={`${platform} staged post screenshot`}
+              className="max-h-56 w-auto rounded-lg border border-border/40"
+            />
+          )}
+        </div>
+        );
+      })()}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {busy && liveDraft && (
@@ -1453,9 +1692,23 @@ function PublishPanel({
                       className={`text-xs ${stagedResult.ok ? "text-primary" : "text-destructive"}`}
                     >
                       {stagedResult.ok
-                        ? `Staged in ${platform} composer — review & hit publish yourself.`
+                        ? `Staged in ${platform} composer — review in noVNC & hit publish yourself.`
                         : stagedResult.detail}
                     </p>
+                    {(() => {
+                      const viewer = stagedResult.viewer_url ?? undefined;
+                      return viewer ? (
+                      <a
+                        href={viewer}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-ui inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                      >
+                        Open Connect viewer
+                        <ExternalLink className="size-3" />
+                      </a>
+                      ) : null;
+                    })()}
                     {stagedResult.detail && stagedResult.ok && (
                       <p className="text-[11px] text-muted-foreground">{stagedResult.detail}</p>
                     )}

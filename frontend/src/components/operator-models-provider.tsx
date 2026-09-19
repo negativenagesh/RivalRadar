@@ -97,10 +97,14 @@ export function OperatorModelsProvider({ children }: { children: ReactNode }) {
 
   const localText = resolveTextModel(state);
   const localImage = resolveImageModel(state);
-  const serverTextModel =
-    localText === null && serverDefaults?.available ? serverDefaults.text_model : null;
   const serverImageModel =
-    localImage === null && serverDefaults?.available ? serverDefaults.image_model : null;
+    localImage === null && serverDefaults?.image_model
+      ? (serverDefaults.image_model as ImageModel)
+      : null;
+  const serverTextModel =
+    localText === null && serverDefaults?.text_model
+      ? (serverDefaults.text_model as TextModel)
+      : null;
   const textModel = localText ?? serverTextModel;
   const imageModel = localImage ?? serverImageModel;
 

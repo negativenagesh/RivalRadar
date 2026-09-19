@@ -49,6 +49,7 @@ from app.connect_agent import (
     agent_close_session,
     agent_dump_session,
     agent_health,
+    agent_stage_post,
     agent_start_session,
     public_viewer_url,
 )
@@ -63,6 +64,7 @@ from app.connect_sessions import (
     get_session as get_connect_session,
 )
 from app.db import get_session
+from app.intel_jobs import get_intel_job, put_intel_report, start_intel_job
 from app.models import Draft, PipelineRun, PlatformConnection, ReviewState
 from app.quick_connect import (
     PLATFORM_COOKIE_SPEC,
@@ -243,6 +245,68 @@ async def intel_report_stream(
     )
 
 
+@router.post("/intel/jobs")
+async def intel_job_start(
+    body: dict[str, object],
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> dict[str, object]:
+    """Start (or reuse) a background Intel Brief job. Scout completion should call this."""
+    cache_key = str(body.get("cache_key") or "").strip()
+    if not cache_key or len(cache_key) > 200:
+        raise HTTPException(status_code=400, detail="cache_key required")
+    force = bool(body.get("force"))
+    payload = {
+        "facts": body.get("facts") or {},
+        "brand_name": str(body.get("brand_name") or "the brand"),
+        "voice_notes": str(body.get("voice_notes") or ""),
+        "forbidden_claims": str(body.get("forbidden_claims") or ""),
+    }
+    headers = _operator_headers(
+        x_gemini_key,
+        x_deepseek_key=x_deepseek_key,
+        x_nvidia_key=x_nvidia_key,
+        x_agnes_key=x_agnes_key,
+        x_text_model=x_text_model,
+        x_image_model=x_image_model,
+    )
+    return await start_intel_job(
+        cache_key=cache_key,
+        body=payload,
+        operator_headers=headers,
+        force=force,
+    )
+
+
+@router.get("/intel/jobs/{cache_key}")
+async def intel_job_status(cache_key: str) -> dict[str, object]:
+    """Poll cached Intel Brief status/report (ready when Scout finished ahead of War Room)."""
+    key = cache_key.strip()
+    if not key or len(key) > 200:
+        raise HTTPException(status_code=400, detail="cache_key required")
+    return await get_intel_job(key)
+
+
+@router.put("/intel/jobs/{cache_key}")
+async def intel_job_put(cache_key: str, body: dict[str, object]) -> dict[str, object]:
+    """Persist a finished Intel Brief (SSE fallback path) into the gateway cache."""
+    key = cache_key.strip()
+    if not key or len(key) > 200:
+        raise HTTPException(status_code=400, detail="cache_key required")
+    report = body.get("report")
+    if not isinstance(report, dict) or not str(report.get("markdown") or "").strip():
+        raise HTTPException(status_code=400, detail="report.markdown required")
+    return await put_intel_report(
+        key,
+        report,
+        brand_name=str(body.get("brand_name") or "the brand"),
+    )
+
+
 @router.post("/llm/ping")
 async def llm_ping(
     body: dict[str, object],
@@ -377,24 +441,111 @@ async def social_stage_post(
     session: AsyncSession = Depends(get_session),
     workspace_id: str = "default",
 ) -> dict[str, object]:
+    """Open Connect/noVNC, stage image+caption in the platform composer (never auto-publish)."""
     if not body.get("approved"):
         raise HTTPException(status_code=400, detail="human approval required")
-    platform = str(body.get("platform") or "").strip()
+    platform = str(body.get("platform") or "").strip().lower()
+    if platform == "twitter":
+        platform = "x"
     caption = str(body.get("caption") or "").strip()
+    if not caption:
+        raise HTTPException(status_code=400, detail="caption is empty")
+    media = body.get("media_png_b64")
+    media_b64 = media if isinstance(media, str) and media.strip() else None
+
     aliases = _platform_aliases(platform)
+    # YouTube Studio often rides Google cookies vaulted under google/youtube.
+    if platform == "youtube":
+        aliases |= {"youtube", "google"}
     vault = await _vaulted_sessions(session, workspace_id=workspace_id, platforms=aliases)
     if not vault:
         raise HTTPException(
-            status_code=400, detail=f"not connected to {platform or 'this platform'}"
+            status_code=400,
+            detail=f"not connected to {platform or 'this platform'} — Connect first, then Post",
         )
+
+    # Prefer live Connect/noVNC so the operator can hit Publish themselves.
+    if await agent_health():
+        seed_cookies: list[dict[str, object]] = []
+        seed_state: dict[str, object] | None = None
+        for blob in vault.values():
+            if not isinstance(blob, dict):
+                continue
+            raw_cookies = blob.get("cookies")
+            if isinstance(raw_cookies, list) and not seed_cookies:
+                seed_cookies = [c for c in raw_cookies if isinstance(c, dict)]
+            raw_state = blob.get("storage_state")
+            if isinstance(raw_state, dict) and seed_state is None:
+                seed_state = raw_state
+        open_url = connect_open_url(platform, has_saved_session=bool(seed_cookies or seed_state))
+        # YouTube is not in PLATFORM_HOME_URLS — open Studio when connected.
+        if platform == "youtube":
+            open_url = "https://studio.youtube.com/"
+        session_id = str(uuid.uuid4())
+        try:
+            agent = await agent_start_session(
+                session_id=session_id,
+                platform=platform,
+                login_url=open_url,
+                cookies=seed_cookies or None,
+                storage_state=seed_state,
+            )
+            staged = await agent_stage_post(
+                session_id=session_id,
+                platform=platform,
+                caption=caption,
+                media_png_b64=media_b64,
+            )
+        except ConnectAgentError as exc:
+            with contextlib.suppress(Exception):
+                await agent_close_session(session_id)
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        viewer = None
+        raw_viewer = agent.get("viewer_url") or staged.get("viewer_url")
+        if isinstance(raw_viewer, str) and raw_viewer.strip():
+            viewer = raw_viewer.strip()
+        configured = public_viewer_url()
+        if configured and (
+            not viewer or "localhost" in viewer.lower() or "127.0.0.1" in viewer.lower()
+        ):
+            viewer = configured
+        put_session(
+            ConnectSession(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                platform=platform,
+                login_url=open_url,
+                status="staged",
+                detail=str(staged.get("detail") or "staged"),
+            )
+        )
+        return {
+            "ok": bool(staged.get("ok", True)),
+            "detail": str(
+                staged.get("detail")
+                or f"staged in {platform} composer — review in noVNC and hit publish yourself"
+            ),
+            "screenshot_jpeg_b64": staged.get("screenshot_jpeg_b64"),
+            "viewer_url": viewer,
+            "session_id": session_id,
+        }
+
+    # Fallback: headless Playwright in ingestion (screenshot only, no live viewer).
     payload = {
         "platform": platform,
         "caption": caption,
-        "media_png_b64": body.get("media_png_b64"),
+        "media_png_b64": media_b64,
         "approved": True,
         "platform_sessions": vault,
     }
-    return await stage_ingestion_post(payload)
+    result = await stage_ingestion_post(payload)
+    result["viewer_url"] = None
+    result["detail"] = (
+        str(result.get("detail") or "staged")
+        + " (Connect agent offline — staged headless; start connect-agent for live noVNC)"
+    )
+    return result
 
 
 @router.get("/pipeline-runs/{run_id}", response_model=PipelineRunRead)
@@ -1104,3 +1255,23 @@ async def download_ingestion_media(media_key: str) -> StreamingResponse:
 
     content_type = upstream.headers.get("content-type", "application/octet-stream")
     return StreamingResponse(stream(), media_type=content_type)
+
+
+@router.post("/notify/email")
+async def notify_email(body: dict[str, object]) -> dict[str, str]:
+    """Send (or sink) a transactional marketer email — Scout done, Intel ready, Studio done."""
+    from app.notify import NotifyEmailRequest, send_notify_email
+
+    to = str(body.get("to") or "").strip()
+    if "@" not in to:
+        raise HTTPException(status_code=400, detail="Valid to email required")
+    req = NotifyEmailRequest(
+        to=to,
+        kind=str(body.get("kind") or "generic")[:40],
+        title=str(body.get("title") or "RivalRadar update")[:200],
+        body=str(body.get("body") or "")[:2000],
+        href=(str(body.get("href")).strip()[:500] if body.get("href") else None),
+    )
+    if not req.body.strip():
+        raise HTTPException(status_code=400, detail="body required")
+    return await send_notify_email(req)

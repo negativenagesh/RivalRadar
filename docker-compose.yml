@@ -1,24 +1,30 @@
 name: rivalradar
 
 x-env: &common-env
-  LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
-  GEMINI_API_KEY: ${GEMINI_API_KEY}
+  LLM_PROVIDER: ${LLM_PROVIDER:-gptoss}
+  # Gemini is optional — only used when an operator pastes a key in the Models chip.
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
   GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.6-flash}
   GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
   # Mission defaults (gpt-oss text + Agnes image) when the operator pasted no keys.
   NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
   NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
-  NVIDIA_TEXT_MODEL: ${NVIDIA_TEXT_MODEL:-openai/gpt-oss-20b}
+  # Mission NVIDIA text: mistral-nemotron (gpt-oss-20b currently hangs on free NIM).
+  NVIDIA_TEXT_MODEL: ${NVIDIA_TEXT_MODEL:-mistralai/mistral-nemotron}
+  NVIDIA_TEXT_FALLBACK_MODEL: ${NVIDIA_TEXT_FALLBACK_MODEL:-}
   NVIDIA_IMAGE_MODEL: ${NVIDIA_IMAGE_MODEL:-black-forest-labs/flux.1-schnell}
   AGNES_API_KEY: ${AGNES_API_KEY:-}
   AGNES_BASE_URL: ${AGNES_BASE_URL:-https://apihub.agnes-ai.com/v1}
-  AGNES_IMAGE_MODEL: ${AGNES_IMAGE_MODEL:-agnes-image-2.5-flash}
+  AGNES_IMAGE_MODEL: ${AGNES_IMAGE_MODEL:-agnes-image-2.0-flash}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
   DEEPSEEK_TEXT_MODEL: ${DEEPSEEK_TEXT_MODEL:-deepseek-flash}
   MISSION_TEXT_MODEL: ${MISSION_TEXT_MODEL:-gptoss}
   MISSION_IMAGE_MODEL: ${MISSION_IMAGE_MODEL:-agnes}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-RivalRadar <onboarding@resend.dev>}
+  NOTIFY_EMAIL_SINK: ${NOTIFY_EMAIL_SINK:-/tmp/rivalradar-notify-emails.log}
 
 services:
   postgres:
@@ -61,6 +67,9 @@ services:
       OBJECT_STORE_ROOT: /data/objects
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       CONNECT_IN_DOCKER: "1"
+      # Local default: Playwright Chromium. Obscura's release is x86_64-only and
+      # crashes on Apple Silicon (ECONNREFUSED :9222). Override with obscura on amd64.
+      BROWSER_ENGINE: ${BROWSER_ENGINE:-chromium}
     ports:
       - "8001:8000"
     shm_size: "1gb"

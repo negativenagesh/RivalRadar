@@ -22,6 +22,7 @@ export type ServerModelDefaults = {
   text_model: "gemini" | "deepseek" | "gptoss" | null;
   image_model: "nano_banana" | "agnes" | "nvidia_flux" | null;
   available: boolean;
+  available_image?: boolean;
   source: string;
 };
 
@@ -62,7 +63,8 @@ async function request<T>(path: string, init?: RequestInit & { operator?: boolea
     // Always send the operator's model preference — with no keys, the server
     // honors it via env keys (gpt-oss / Agnes defaults) when configured.
     headers["X-Text-Model"] = text ?? state.textModel;
-    headers["X-Image-Model"] = image ?? state.imageModel;
+    const forcedImage = (rest.headers as Record<string, string> | undefined)?.["X-Image-Model"];
+    headers["X-Image-Model"] = forcedImage || image || state.imageModel;
   }
   const url = `${GATEWAY_URL}${path}`;
   let response: Response | undefined;
@@ -184,6 +186,8 @@ export function generateCreative(body: CreativeRequest): Promise<CreativeResult>
     method: "POST",
     body: JSON.stringify(body),
     operator: true,
+    // Format Studio frames always paint with Agnes (server AGNES_API_KEY or pasted key).
+    headers: { "X-Image-Model": "agnes" },
   });
 }
 
@@ -197,6 +201,46 @@ export function generateIntelReport(body: {
     method: "POST",
     body: JSON.stringify(body),
     operator: true,
+  });
+}
+
+export type IntelJobStatus = {
+  cache_key: string;
+  status: "miss" | "running" | "done" | "error";
+  report?: IntelReport;
+  error?: string;
+  started?: boolean;
+  updated_at?: number;
+  brand_name?: string;
+};
+
+/** Kick off background Intel Brief (call as soon as Scout finishes). */
+export function startIntelJob(body: {
+  cache_key: string;
+  facts: unknown;
+  brand_name: string;
+  voice_notes?: string;
+  forbidden_claims?: string;
+  force?: boolean;
+}): Promise<IntelJobStatus> {
+  return request<IntelJobStatus>("/intel/jobs", {
+    method: "POST",
+    body: JSON.stringify(body),
+    operator: true,
+  });
+}
+
+export function getIntelJob(cacheKey: string): Promise<IntelJobStatus> {
+  return request<IntelJobStatus>(`/intel/jobs/${encodeURIComponent(cacheKey)}`);
+}
+
+export function putIntelJob(
+  cacheKey: string,
+  body: { report: IntelReport; brand_name?: string },
+): Promise<IntelJobStatus> {
+  return request<IntelJobStatus>(`/intel/jobs/${encodeURIComponent(cacheKey)}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
   });
 }
 
@@ -293,6 +337,8 @@ export type StagePostResult = {
   ok: boolean;
   detail: string;
   screenshot_jpeg_b64: string | null;
+  viewer_url?: string | null;
+  session_id?: string | null;
 };
 
 export function stagePlatformPost(body: {
@@ -376,6 +422,7 @@ export type IntelStreamEvent =
   | { event: "stage"; agent: string; status: "writing" }
   | { event: "agent"; agent: string; status: "done"; ok: boolean }
   | { event: "delta"; agent: string; markdown: string; replace?: boolean }
+  | { event: "heartbeat"; agent?: string }
   | { event: "report"; report: IntelReport }
   | { event: "error"; detail: string };
 
@@ -437,6 +484,10 @@ export async function streamIntelReport(
       const event = { event: eventMatch[1], ...data } as IntelStreamEvent;
       if (event.event === "error") {
         throw new Error(event.detail || "Intel stream error");
+      }
+      if (event.event === "heartbeat") {
+        onEvent?.(event);
+        continue;
       }
       if (event.event === "report") {
         report = event.report;

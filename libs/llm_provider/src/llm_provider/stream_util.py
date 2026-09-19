@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from llm_provider.base import Message
-from llm_provider.chat_util import translate_vendor_error
+from llm_provider.chat_util import translate_transport_error, translate_vendor_error
 
 
 async def stream_chat_deltas(
@@ -21,8 +21,13 @@ async def stream_chat_deltas(
     max_tokens: int,
     vendor: str,
     extra_body: dict[str, Any] | None = None,
+    include_reasoning: bool = False,
 ) -> AsyncIterator[str]:
-    """Yield text deltas from an OpenAI-compat chat.completions stream."""
+    """Yield text deltas from an OpenAI-compat chat.completions stream.
+
+    By default only visible `content` is yielded. Set include_reasoning=True to
+    also surface gpt-oss `reasoning_content` (useful for live UI traces).
+    """
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": cast(
@@ -39,19 +44,32 @@ async def stream_chat_deltas(
         stream = await client.chat.completions.create(**kwargs)
     except APIStatusError as exc:
         raise translate_vendor_error(exc, vendor=vendor) from exc
+    except (APITimeoutError, APIConnectionError) as exc:
+        raise translate_transport_error(exc, vendor=vendor) from exc
 
-    async for chunk in stream:
-        choices = getattr(chunk, "choices", None) or []
-        if not choices:
-            continue
-        delta = getattr(choices[0], "delta", None)
-        if delta is None:
-            continue
-        piece = getattr(delta, "content", None)
-        if isinstance(piece, str) and piece:
-            yield piece
-            continue
-        # gpt-oss may stream into reasoning_content before visible content.
-        reasoning = getattr(delta, "reasoning_content", None)
-        if isinstance(reasoning, str) and reasoning:
-            yield reasoning
+    saw_content = False
+    reasoning_buf: list[str] = []
+    try:
+        async for chunk in stream:
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            piece = getattr(delta, "content", None)
+            if isinstance(piece, str) and piece:
+                saw_content = True
+                yield piece
+                continue
+            reasoning = getattr(delta, "reasoning_content", None)
+            if isinstance(reasoning, str) and reasoning:
+                if include_reasoning:
+                    yield reasoning
+                else:
+                    reasoning_buf.append(reasoning)
+        # gpt-oss sometimes parks the whole draft in reasoning_content.
+        if not saw_content and not include_reasoning and reasoning_buf:
+            yield "".join(reasoning_buf)
+    except (APITimeoutError, APIConnectionError) as exc:
+        raise translate_transport_error(exc, vendor=vendor) from exc

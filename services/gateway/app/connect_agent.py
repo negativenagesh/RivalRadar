@@ -111,3 +111,33 @@ async def agent_close_session(session_id: str) -> None:
             await client.post(f"/sessions/{session_id}/close")
     except httpx.HTTPError:
         return
+
+
+async def agent_stage_post(
+    *,
+    session_id: str,
+    platform: str,
+    caption: str,
+    media_png_b64: str | None = None,
+) -> dict[str, Any]:
+    """Stage caption + image in the live Connect browser (no auto-publish)."""
+    payload: dict[str, Any] = {
+        "platform": platform,
+        "caption": caption,
+    }
+    if media_png_b64:
+        payload["media_png_b64"] = media_png_b64
+    try:
+        async with httpx.AsyncClient(base_url=settings.connect_agent_url, timeout=180.0) as client:
+            response = await client.post(f"/sessions/{session_id}/stage", json=payload)
+    except httpx.HTTPError as exc:
+        raise ConnectAgentError("Connect agent unreachable while staging post") from exc
+    if response.status_code >= 400:
+        raise ConnectAgentError(
+            _detail_from_response(response),
+            status_code=400 if response.status_code == 400 else 502,
+        )
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ConnectAgentError("Connect agent returned invalid stage payload")
+    return data
