@@ -123,9 +123,9 @@ async def test_gptoss_fails_over_to_mistral_on_timeout() -> None:
         temperature: float,
         budget: int,
         reasoning_effort: str | None,
-        timeout: float,
+        wait_s: float,
     ) -> str:
-        del messages, temperature, budget, reasoning_effort, timeout
+        del messages, temperature, budget, reasoning_effort, wait_s
         calls.append(model)
         if "gpt-oss" in model:
             raise LLMProviderError("NVIDIA gpt-oss-20b timed out.", status_code=504)

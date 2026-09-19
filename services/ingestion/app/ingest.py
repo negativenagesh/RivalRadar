@@ -188,7 +188,18 @@ async def _upsert_post_rows(session: AsyncSession, raw_posts: list[RawPost]) -> 
                     existing.image_url = image_url
             # Refresh metrics when a later scout parsed better engagement numbers.
             for field in ("likes", "comments", "shares", "views"):
-                new_val = int(raw.get(field) or 0)  # type: ignore[arg-type]
+                raw_metric = raw.get(field, 0)
+                if isinstance(raw_metric, bool):
+                    new_val = 0
+                elif isinstance(raw_metric, (int, float)):
+                    new_val = int(raw_metric)
+                elif isinstance(raw_metric, str):
+                    try:
+                        new_val = int(raw_metric.strip() or "0")
+                    except ValueError:
+                        new_val = 0
+                else:
+                    new_val = 0
                 old_val = int(getattr(existing, field) or 0)
                 if new_val > old_val:
                     setattr(existing, field, new_val)

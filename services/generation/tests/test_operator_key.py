@@ -122,6 +122,7 @@ async def test_studio_forces_agnes_even_when_flux_requested(
 ) -> None:
     """Format Studio always paints with Agnes regardless of X-Image-Model."""
     from app.creative import CreativeRequest
+
     from llm_provider.agnes import AgnesImageProvider
     from llm_provider.nvidia import NvidiaFluxProvider, NvidiaGptOssProvider
     from llm_provider.routing import RoutingLLMProvider

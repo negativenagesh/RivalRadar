@@ -99,7 +99,7 @@ class NvidiaGptOssProvider:
         temperature: float,
         budget: int,
         reasoning_effort: str | None,
-        timeout: float,
+        wait_s: float,
     ) -> str:
         vendor = _vendor(model)
         content_parts: list[str] = []
@@ -144,7 +144,7 @@ class NvidiaGptOssProvider:
             return text
 
         try:
-            return await asyncio.wait_for(_consume(), timeout=timeout)
+            return await asyncio.wait_for(_consume(), timeout=wait_s)
         except TimeoutError as exc:
             raise translate_transport_error(exc, vendor=vendor) from exc
         except APIStatusError as exc:
@@ -160,10 +160,9 @@ class NvidiaGptOssProvider:
         max_tokens: int = 1024,
         reasoning_effort: str | None = None,
     ) -> str:
-        budget = _token_budget(max_tokens)
         last: LLMProviderError | None = None
         chain = self._model_chain()
-        for idx, (model, timeout) in enumerate(chain):
+        for idx, (model, wait_s) in enumerate(chain):
             try:
                 text = await self._stream_complete(
                     model=model,
@@ -171,7 +170,7 @@ class NvidiaGptOssProvider:
                     temperature=temperature,
                     budget=_token_budget(max_tokens) if _is_gpt_oss(model) else max(max_tokens, 512),
                     reasoning_effort=reasoning_effort,
-                    timeout=timeout,
+                    wait_s=wait_s,
                 )
                 if model != self._model:
                     self._prefer_fallback = True
