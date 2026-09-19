@@ -48,25 +48,99 @@ async def test_deepseek_generate_image_is_explicitly_unsupported() -> None:
 
 
 async def test_gptoss_uses_nvidia_card_settings() -> None:
-    provider = NvidiaGptOssProvider("nv-test")
-    provider._client.chat.completions.create = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="9.11 is larger.", reasoning_content="compare")
-                )
-            ]
-        )
+    provider = NvidiaGptOssProvider(
+        "nv-test",
+        model="openai/gpt-oss-20b",
+        fallback_model="",
     )
-    text = await provider.complete([], temperature=1, max_tokens=16)
+
+    class _Delta:
+        def __init__(self, content: str | None = None, reasoning_content: str | None = None) -> None:
+            self.content = content
+            self.reasoning_content = reasoning_content
+
+    class _Chunk:
+        def __init__(self, content: str | None = None, reasoning_content: str | None = None) -> None:
+            self.choices = [SimpleNamespace(delta=_Delta(content, reasoning_content))]
+
+    async def _stream(**kwargs):  # type: ignore[no-untyped-def]
+        assert kwargs["model"] == "openai/gpt-oss-20b"
+        assert kwargs["stream"] is True
+        assert kwargs["max_tokens"] == 2048
+        assert kwargs["top_p"] == 1
+        assert kwargs["temperature"] == 1
+        assert kwargs["extra_body"]["reasoning_effort"] == "low"
+
+        async def _gen():
+            yield _Chunk(reasoning_content="scratch")
+            yield _Chunk(content="9.11 is larger.")
+
+        return _gen()
+
+    provider._client.chat.completions.create = AsyncMock(side_effect=_stream)  # type: ignore[method-assign]
+    text = await provider.complete([], temperature=1, max_tokens=700)
     assert "9.11" in text
-    called = provider._client.chat.completions.create.await_args
-    assert called is not None
-    kwargs = called.kwargs
-    assert kwargs["model"] == "openai/gpt-oss-20b"
-    assert kwargs["max_tokens"] == 4096
-    assert kwargs["top_p"] == 1
-    assert kwargs["temperature"] == 1
+
+
+async def test_mistral_nemotron_omits_gptoss_top_p() -> None:
+    provider = NvidiaGptOssProvider(
+        "nv-test",
+        model="mistralai/mistral-nemotron",
+        fallback_model="",
+    )
+
+    class _Chunk:
+        def __init__(self, content: str) -> None:
+            self.choices = [SimpleNamespace(delta=SimpleNamespace(content=content, reasoning_content=None))]
+
+    async def _stream(**kwargs):  # type: ignore[no-untyped-def]
+        assert kwargs["model"] == "mistralai/mistral-nemotron"
+        assert "top_p" not in kwargs
+        assert "extra_body" not in kwargs
+        assert kwargs["max_tokens"] == 700
+
+        async def _gen():
+            yield _Chunk('{"caption":"hi"}')
+
+        return _gen()
+
+    provider._client.chat.completions.create = AsyncMock(side_effect=_stream)  # type: ignore[method-assign]
+    assert "caption" in await provider.complete([], max_tokens=700)
+
+
+async def test_gptoss_fails_over_to_mistral_on_timeout() -> None:
+    provider = NvidiaGptOssProvider(
+        "nv-test",
+        model="openai/gpt-oss-20b",
+        fallback_model="mistralai/mistral-nemotron",
+    )
+    calls: list[str] = []
+
+    async def _fake(
+        *,
+        model: str,
+        messages: list,
+        temperature: float,
+        budget: int,
+        reasoning_effort: str | None,
+        timeout: float,
+    ) -> str:
+        del messages, temperature, budget, reasoning_effort, timeout
+        calls.append(model)
+        if "gpt-oss" in model:
+            raise LLMProviderError("NVIDIA gpt-oss-20b timed out.", status_code=504)
+        return '{"caption":"hi","image_brief":"still"}'
+
+    provider._stream_complete = _fake  # type: ignore[method-assign]
+    text = await provider.complete([])
+    assert "caption" in text
+    assert calls == ["openai/gpt-oss-20b", "mistralai/mistral-nemotron"]
+    assert provider._prefer_fallback is True
+    # Sticky: later calls skip the dead primary.
+    text2 = await provider.complete([])
+    assert text2.startswith("{")
+    assert calls[-1] == "mistralai/mistral-nemotron"
+    assert calls.count("openai/gpt-oss-20b") == 1
 
 
 async def test_flux_decodes_b64_json(monkeypatch: pytest.MonkeyPatch) -> None:

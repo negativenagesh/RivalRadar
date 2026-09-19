@@ -1,8 +1,34 @@
 import { describe, expect, it } from "vitest";
 
-import { scoutActionLabel, shotsForTarget, targetLaneStatus } from "./live-scout";
+import { mergeShots, scoutActionLabel, shotsForTarget, targetLaneStatus } from "./live-scout";
 import type { MissionTargetPreview } from "@/lib/mission-store";
 import type { AgentEvent } from "@/lib/types";
+
+describe("mergeShots", () => {
+  it("prefers live frames ahead of older persisted posts", () => {
+    const live = [
+      {
+        id: "live-1",
+        src: "data:image/jpeg;base64,xx",
+        platform: "instagram",
+        label: "new drop",
+        url: "https://www.instagram.com/p/NEW123/",
+        company: "Nova",
+      },
+    ];
+    const persisted = [
+      {
+        id: "post-old",
+        src: "https://example.com/old.jpg",
+        platform: "instagram",
+        label: "old post",
+        url: "https://www.instagram.com/p/OLD456/",
+        company: "Nova",
+      },
+    ];
+    expect(mergeShots(live, persisted).map((s) => s.id)).toEqual(["live-1", "post-old"]);
+  });
+});
 
 describe("scoutActionLabel", () => {
   it("starts idle as Start Scout", () => {

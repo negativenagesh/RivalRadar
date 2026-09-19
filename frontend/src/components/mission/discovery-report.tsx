@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  CalendarPlus,
   Copy,
   Download,
   ExternalLink,
@@ -17,16 +18,15 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { useOperatorModels } from "@/components/operator-models-provider";
+import { pushNotification } from "@/lib/notifications";
 import {
   dropSocialComment,
   generateCreative,
   getIntelJob,
   listConnections,
-  putIntelJob,
   stagePlatformPost,
   startIntelJob,
   streamCommentDraft,
-  streamIntelReport,
   streamPublishPlan,
   type PublishPlan,
   type PublishVariation,
@@ -42,6 +42,11 @@ import {
   readIntelCache,
   writeIntelCache,
 } from "@/lib/intel-cache";
+import {
+  defaultScheduleLocalValue,
+  localValueToIso,
+  scheduleFromStudioAsset,
+} from "@/lib/calendar";
 import {
   appendStudioAssets,
   readStudioAssets,
@@ -190,8 +195,10 @@ export function DiscoveryReport({
   }
   const intel = mergeIntel(facts, geminiIntel);
   const usedFallback = !geminiIntel || geminiIntel.narration === "fallback";
-  const intelBusy = models.readyText && geminiIntel === null && intelFetchError === null;
-  const intelError = !models.readyText ? KEY_WARNING : intelFetchError;
+  const intelBusy =
+    geminiIntel === null &&
+    Object.values(intelStages).some((stage) => stage === "writing");
+  const intelError = intelFetchError;
   const writingAgents = Object.entries(intelStages)
     .filter(([, status]) => status === "writing")
     .map(([agent]) => AGENT_LABELS[agent as keyof typeof AGENT_LABELS] ?? agent);
@@ -206,6 +213,8 @@ export function DiscoveryReport({
   const [studioOuts, setStudioOuts] = useState<CreativeResult[]>([]);
   const [studioLibrary, setStudioLibrary] = useState<SavedStudioAsset[]>([]);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [studioMode, setStudioMode] = useState<"full" | "fast">("full");
+  const [studioPhase, setStudioPhase] = useState<"writing" | "painting" | null>(null);
 
   useEffect(() => {
     setStudioLibrary(readStudioAssets(brand.displayName || "brand"));
@@ -273,19 +282,13 @@ export function DiscoveryReport({
   }, []);
 
   useEffect(() => {
-    if (!models.readyText) return;
+    // Refresh / mount: load cached intel only. Never start or stream a text model
+    // unless the operator clicks Regenerate intel.
     let cancelled = false;
     const brandName = brand.displayName || "the brand";
     const cacheKey = intelCacheKey(factsSig, brandName);
-    const body = {
-      facts,
-      brand_name: brandName,
-      voice_notes: brand.voiceNotes,
-      forbidden_claims: brand.forbiddenClaims,
-    };
 
-    async function loadIntel() {
-      // 1) Instant local cache — refresh must not re-hit generation.
+    async function loadCachedIntel() {
       const local = readIntelCache(cacheKey);
       if (local) {
         if (!cancelled) {
@@ -294,10 +297,8 @@ export function DiscoveryReport({
         }
         return;
       }
-
-      // 2) Server job started when Scout finished — poll until ready.
       try {
-        let job = await getIntelJob(cacheKey);
+        const job = await getIntelJob(cacheKey);
         if (cancelled) return;
         if (job.status === "done" && job.report) {
           writeIntelCache(cacheKey, job.report);
@@ -305,17 +306,8 @@ export function DiscoveryReport({
           setIntelFetchError(null);
           return;
         }
-        if (job.status === "miss" || job.status === "error") {
-          job = await startIntelJob({ cache_key: cacheKey, ...body, force: job.status === "error" });
-          if (cancelled) return;
-          if (job.status === "done" && job.report) {
-            writeIntelCache(cacheKey, job.report);
-            setGeminiIntel(job.report);
-            setIntelFetchError(null);
-            return;
-          }
-        }
         if (job.status === "running") {
+          // Poll an already-running job; do not start a new one.
           setIntelStages({ intel_chief: "writing", play_caller: "writing", platform_scout: "writing" });
           for (let i = 0; i < 120 && !cancelled; i += 1) {
             await new Promise((r) => window.setTimeout(r, 2500));
@@ -329,64 +321,44 @@ export function DiscoveryReport({
               return;
             }
             if (next.status === "error") {
-              throw new Error(next.error || "Intel job failed");
+              if (!cancelled) {
+                setIntelFetchError(next.error || "Intel job failed");
+                setGeminiIntel(null);
+              }
+              return;
             }
           }
         }
+        // miss / idle — wait for Regenerate; show fact brief only.
+        if (!cancelled) {
+          setGeminiIntel(null);
+          setIntelFetchError(null);
+        }
       } catch {
-        // Fall through to live SSE stream.
-      }
-      if (cancelled) return;
-
-      // 3) Live stream fallback (also fills caches).
-      setIntelStages({});
-      setIntelLiveMarkdown("");
-      try {
-        const report = await streamIntelReport(body, (event) => {
-          if (cancelled) return;
-          if (event.event === "stage") {
-            setIntelStages((s) => ({ ...s, [event.agent]: "writing" }));
-          } else if (event.event === "agent") {
-            setIntelStages((s) => ({ ...s, [event.agent]: "done" }));
-          } else if (event.event === "delta" && event.markdown) {
-            setIntelLiveMarkdown((prev) =>
-              event.replace ? event.markdown : `${prev}${event.markdown}`,
-            );
-          }
-        });
-        if (cancelled) return;
-        writeIntelCache(cacheKey, report);
-        void putIntelJob(cacheKey, { report, brand_name: brandName }).catch(() => undefined);
-        setGeminiIntel(report);
-        setIntelLiveMarkdown("");
-        setIntelFetchError(null);
-      } catch (err: unknown) {
-        if (cancelled) return;
-        setGeminiIntel(null);
-        setIntelLiveMarkdown("");
-        setIntelFetchError(
-          err instanceof Error ? err.message : "Intel Chief is offline — facts still stand.",
-        );
+        if (!cancelled) {
+          setGeminiIntel(null);
+          setIntelFetchError(null);
+        }
       }
     }
 
-    void loadIntel();
+    void loadCachedIntel();
     return () => {
       cancelled = true;
     };
   }, [
-    facts,
     factsSig,
-    models.readyText,
     brand.displayName,
-    brand.voiceNotes,
-    brand.forbiddenClaims,
     intelTick,
   ]);
 
   async function runStudio(spice = studioSpice) {
-    if (!models.readyText) {
-      setStudioError(KEY_WARNING);
+    if (!models.readyImage) {
+      setStudioError("Agnes (or another image model) must be available — paste a key or set AGNES_API_KEY.");
+      return;
+    }
+    if (studioMode === "full" && !models.readyText) {
+      setStudioError("Full generate needs a text model — paste a key in Models, or switch to Fast paint.");
       return;
     }
     if (!formatUnlocked(studioFormat, permissions)) {
@@ -402,6 +374,12 @@ export function DiscoveryReport({
     try {
       for (let i = 1; i <= batch; i += 1) {
         setStudioLoadingSlot(i);
+        setStudioPhase(studioMode === "full" ? "writing" : "painting");
+        // Soft progress: after a beat, show painting while the request is in flight.
+        const paintTimer =
+          studioMode === "full"
+            ? window.setTimeout(() => setStudioPhase("painting"), 2500)
+            : null;
         const result = await generateCreative({
           kind: "studio",
           brand_name: brand.displayName || "the brand",
@@ -417,7 +395,9 @@ export function DiscoveryReport({
           facts_json: studioFormat === "meme" ? studioFactsJson : factsJson,
           variant: i,
           variant_count: batch,
+          studio_mode: studioMode,
         });
+        if (paintTimer) window.clearTimeout(paintTimer);
         collected.push(result);
         setStudioOuts([...collected]);
       }
@@ -427,6 +407,12 @@ export function DiscoveryReport({
           platform: studioPlatform,
         });
         setStudioLibrary(next);
+        pushNotification({
+          kind: "studio_done",
+          title: "Studio frames ready",
+          body: `${collected.length} × ${formatLabel(studioFormat)} for ${brand.displayName || "brand"} — open Post to stage.`,
+          href: "/mission",
+        });
       }
     } catch (err) {
       setStudioError(err instanceof Error ? err.message : "Studio generation failed");
@@ -440,6 +426,7 @@ export function DiscoveryReport({
       }
     } finally {
       setStudioLoadingSlot(null);
+      setStudioPhase(null);
       setStudioBusy(false);
     }
   }
@@ -806,8 +793,35 @@ export function DiscoveryReport({
             Up to 3, generated one after another (loading between each).
           </span>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-ui text-xs text-muted-foreground">mode</span>
+          <button
+            type="button"
+            onClick={() => setStudioMode("full")}
+            className={chipClass(studioMode === "full")}
+          >
+            Full generate
+          </button>
+          <button
+            type="button"
+            onClick={() => setStudioMode("fast")}
+            className={chipClass(studioMode === "fast")}
+          >
+            Fast paint
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {studioMode === "full"
+              ? "LLM writes caption + brief, then Agnes paints."
+              : "Template caption + Agnes only (no text model)."}
+          </span>
+        </div>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={studioBusy || !models.readyText} onClick={() => void runStudio()}>
+          <Button
+            disabled={
+              studioBusy || !models.readyImage || (studioMode === "full" && !models.readyText)
+            }
+            onClick={() => void runStudio()}
+          >
             {studioBusy ? <Loader2 className="size-4 animate-spin" /> : <Flame className="size-4" />}
             Generate
             {studioCount > 1 ? ` ×${studioCount}` : ""}
@@ -815,13 +829,21 @@ export function DiscoveryReport({
           {studioOuts.length > 0 && (
             <Button
               variant="outline"
-              disabled={studioBusy || !models.readyText}
+              disabled={
+                studioBusy || !models.readyImage || (studioMode === "full" && !models.readyText)
+              }
               onClick={() => void runStudio(Math.min(5, studioSpice + 1))}
             >
               Regenerate with more spice
             </Button>
           )}
         </div>
+        {studioBusy && studioPhase && (
+          <p className="font-ui text-xs text-primary">
+            {studioPhase === "writing" ? "Writing copy…" : "Painting with Agnes…"}
+            {studioLoadingSlot && studioCount > 1 ? ` · frame ${studioLoadingSlot}/${studioCount}` : ""}
+          </p>
+        )}
         {studioError && (
           <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {studioError}
@@ -904,9 +926,13 @@ export function DiscoveryReport({
                 …
               </p>
               <p className="text-xs text-muted-foreground">
-                {studioFormat === "meme"
-                  ? "Caption first, then the frame — hang tight."
-                  : `Building your ${formatLabel(studioFormat).toLowerCase()} — hang tight.`}
+                {studioPhase === "writing"
+                  ? "Writing copy with the text model…"
+                  : studioPhase === "painting"
+                    ? "Painting with Agnes…"
+                    : studioFormat === "meme"
+                      ? "Caption first, then the frame — hang tight."
+                      : `Building your ${formatLabel(studioFormat).toLowerCase()} — hang tight.`}
               </p>
             </div>
           )}
@@ -1158,6 +1184,8 @@ function PublishPanel({
   const [stagingAll, setStagingAll] = useState(false);
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [staged, setStaged] = useState<Record<number, StagePostResult>>({});
+  const [scheduleLocal, setScheduleLocal] = useState(() => defaultScheduleLocalValue());
+  const [scheduleNote, setScheduleNote] = useState<string | null>(null);
 
   function selectAsset(idx: number): void {
     if (idx === safeAssetIdx) return;
@@ -1460,9 +1488,50 @@ function PublishPanel({
                 Post on {platform}
               </Button>
             </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="space-y-1">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Schedule (remind to stage)
+                </span>
+                <input
+                  type="datetime-local"
+                  value={scheduleLocal}
+                  onChange={(e) => setScheduleLocal(e.target.value)}
+                  className="block rounded-md border border-border/60 bg-background px-2 py-1.5 text-sm"
+                />
+              </label>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!out.text?.trim()}
+                onClick={() => {
+                  try {
+                    const iso = localValueToIso(scheduleLocal);
+                    scheduleFromStudioAsset(out, brandName, iso, platform);
+                    setScheduleNote(
+                      `Saved to Calendar for ${new Date(iso).toLocaleString()} — we remind ~30m before.`,
+                    );
+                    pushNotification({
+                      kind: "generic",
+                      title: "Added to calendar",
+                      body: `${out.format || format} · ${platform} · open Calendar to review.`,
+                      href: "/calendar",
+                      email: false,
+                    });
+                  } catch (cause) {
+                    setError(cause instanceof Error ? cause.message : "Could not schedule");
+                  }
+                }}
+              >
+                <CalendarPlus className="size-3.5" />
+                Schedule
+              </Button>
+              {scheduleNote && <p className="text-xs text-primary">{scheduleNote}</p>}
+            </div>
             <p className="text-xs text-muted-foreground">
               Post uses the selected studio image + its caption (or a variation below) and opens
-              the Connect noVNC tab so you can publish.
+              the Connect noVNC tab so you can publish. Schedule never autoposts — Calendar reminds
+              you to Stage.
             </p>
             {!ready && (
               <p className="text-xs text-amber-600 dark:text-amber-400">

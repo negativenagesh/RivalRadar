@@ -1255,3 +1255,23 @@ async def download_ingestion_media(media_key: str) -> StreamingResponse:
 
     content_type = upstream.headers.get("content-type", "application/octet-stream")
     return StreamingResponse(stream(), media_type=content_type)
+
+
+@router.post("/notify/email")
+async def notify_email(body: dict[str, object]) -> dict[str, str]:
+    """Send (or sink) a transactional marketer email — Scout done, Intel ready, Studio done."""
+    from app.notify import NotifyEmailRequest, send_notify_email
+
+    to = str(body.get("to") or "").strip()
+    if "@" not in to:
+        raise HTTPException(status_code=400, detail="Valid to email required")
+    req = NotifyEmailRequest(
+        to=to,
+        kind=str(body.get("kind") or "generic")[:40],
+        title=str(body.get("title") or "RivalRadar update")[:200],
+        body=str(body.get("body") or "")[:2000],
+        href=(str(body.get("href")).strip()[:500] if body.get("href") else None),
+    )
+    if not req.body.strip():
+        raise HTTPException(status_code=400, detail="body required")
+    return await send_notify_email(req)

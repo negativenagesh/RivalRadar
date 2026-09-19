@@ -63,6 +63,30 @@ def operator_provider(
         raise HTTPException(status_code=400, detail=str(exc) or KEYS_MISSING) from exc
 
 
+def creative_operator_provider(
+    request: CreativeRequest,
+    x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key"),
+    x_deepseek_key: str | None = Header(default=None, alias="X-DeepSeek-Key"),
+    x_nvidia_key: str | None = Header(default=None, alias="X-Nvidia-Key"),
+    x_agnes_key: str | None = Header(default=None, alias="X-Agnes-Key"),
+    x_text_model: str | None = Header(default=None, alias="X-Text-Model"),
+    x_image_model: str | None = Header(default=None, alias="X-Image-Model"),
+) -> LLMProvider:
+    """Format Studio / image creatives always paint with Agnes."""
+    image_model = "agnes" if request.kind in {"studio", "image"} else x_image_model
+    try:
+        return provider_from_operator(
+            gemini_key=x_gemini_key,
+            deepseek_key=x_deepseek_key,
+            nvidia_key=x_nvidia_key,
+            agnes_key=x_agnes_key,
+            text_model=x_text_model,
+            image_model=image_model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or KEYS_MISSING) from exc
+
+
 def _llm_http(exc: LLMProviderError) -> HTTPException:
     headers: dict[str, str] | None = (
         {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
@@ -115,7 +139,7 @@ async def llm_ping(
 @router.post("/creative/generate", response_model=CreativeResponse)
 async def creative_generate(
     request: CreativeRequest,
-    provider: LLMProvider = Depends(operator_provider),
+    provider: LLMProvider = Depends(creative_operator_provider),
 ) -> CreativeResponse:
     import logging
 
@@ -131,9 +155,10 @@ async def creative_generate(
     try:
         result = await generate_creative(request, provider)
         log.info(
-            "creative done kind=%s has_image=%s",
+            "creative done kind=%s has_image=%s image=%s",
             request.kind,
             bool(result.image_data_base64),
+            image_backend,
         )
         return result
     except LLMProviderError as exc:

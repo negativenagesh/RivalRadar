@@ -316,7 +316,8 @@ function shotsFromPosts(
   return out;
 }
 
-function mergeShots(live: Shot[], persisted: Shot[]): Shot[] {
+/** Live frames first so newly extracted posts appear as the scout runs; persisted fills gaps. */
+export function mergeShots(live: Shot[], persisted: Shot[]): Shot[] {
   const seen = new Set<string>();
   const out: Shot[] = [];
   const keyOf = (s: Shot) => (s.url ? s.url.split("?")[0] : s.id);
@@ -331,7 +332,7 @@ function mergeShots(live: Shot[], persisted: Shot[]): Shot[] {
       u.includes("activity:")
     );
   });
-  for (const s of [...persisted, ...livePosts]) {
+  for (const s of [...livePosts, ...persisted]) {
     const key = keyOf(s);
     if (seen.has(key)) continue;
     seen.add(key);

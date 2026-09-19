@@ -1,6 +1,6 @@
 import pytest
 from app.main import app
-from app.routes import operator_provider
+from app.routes import creative_operator_provider, operator_provider
 from httpx import ASGITransport, AsyncClient
 
 from llm_provider import LLMProviderError, get_llm_provider, provider_from_operator
@@ -11,6 +11,7 @@ async def test_mission_llm_requires_a_text_key(monkeypatch: pytest.MonkeyPatch) 
     for name in ("GEMINI_API_KEY", "DEEPSEEK_API_KEY", "NVIDIA_API_KEY", "AGNES_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     app.dependency_overrides.pop(operator_provider, None)
+    app.dependency_overrides.pop(creative_operator_provider, None)
     app.dependency_overrides.pop(get_llm_provider, None)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -70,7 +71,7 @@ async def test_server_defaults_ignore_gemini_env_without_nvidia(
 
 async def test_creative_accepts_deepseek_operator_key() -> None:
     fake = FakeLLMProvider(completion="deep take")
-    app.dependency_overrides[operator_provider] = lambda: fake
+    app.dependency_overrides[creative_operator_provider] = lambda: fake
     transport = ASGITransport(app=app)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -85,7 +86,7 @@ async def test_creative_accepts_deepseek_operator_key() -> None:
                 },
             )
     finally:
-        app.dependency_overrides.pop(operator_provider, None)
+        app.dependency_overrides.pop(creative_operator_provider, None)
     assert response.status_code == 200
     assert "take" in response.json()["text"]
 
@@ -100,20 +101,60 @@ class _RateLimitFake(FakeLLMProvider):
 
 
 async def test_creative_rate_limit_is_429_not_500() -> None:
-    app.dependency_overrides[operator_provider] = lambda: _RateLimitFake()
+    app.dependency_overrides[creative_operator_provider] = lambda: _RateLimitFake()
     transport = ASGITransport(app=app)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
                 "/creative/generate",
-                json={"kind": "studio", "brand_name": "Pixis", "format": "hot_take"},
+                json={"kind": "comment", "brand_name": "Pixis"},
                 headers={"X-Gemini-Key": "AIza-operator"},
             )
     finally:
-        app.dependency_overrides.pop(operator_provider, None)
+        app.dependency_overrides.pop(creative_operator_provider, None)
     assert response.status_code == 429
     assert "rate limit" in response.json()["detail"].lower()
     assert response.headers.get("retry-after") == "35"
+
+
+async def test_studio_forces_agnes_even_when_flux_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Format Studio always paints with Agnes regardless of X-Image-Model."""
+    from app.creative import CreativeRequest
+    from llm_provider.agnes import AgnesImageProvider
+    from llm_provider.nvidia import NvidiaFluxProvider, NvidiaGptOssProvider
+    from llm_provider.routing import RoutingLLMProvider
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("NVIDIA_API_KEY", "nv-server")
+    monkeypatch.setenv("AGNES_API_KEY", "agnes-server")
+
+    studio = creative_operator_provider(
+        CreativeRequest(kind="studio", brand_name="Pixis", format="meme"),
+        x_gemini_key=None,
+        x_deepseek_key=None,
+        x_nvidia_key=None,
+        x_agnes_key=None,
+        x_text_model="gptoss",
+        x_image_model="nvidia_flux",
+    )
+    assert isinstance(studio, RoutingLLMProvider)
+    assert isinstance(studio._text, NvidiaGptOssProvider)
+    assert isinstance(studio._image, AgnesImageProvider)
+
+    # Non-studio kinds still honor the requested image model.
+    comment = creative_operator_provider(
+        CreativeRequest(kind="comment", brand_name="Pixis"),
+        x_gemini_key=None,
+        x_deepseek_key=None,
+        x_nvidia_key=None,
+        x_agnes_key=None,
+        x_text_model="gptoss",
+        x_image_model="nvidia_flux",
+    )
+    assert isinstance(comment._image, NvidiaFluxProvider)
 
 
 async def test_intel_report_streams_stage_agent_and_report_events() -> None:

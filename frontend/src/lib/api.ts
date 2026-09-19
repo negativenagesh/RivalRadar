@@ -22,6 +22,7 @@ export type ServerModelDefaults = {
   text_model: "gemini" | "deepseek" | "gptoss" | null;
   image_model: "nano_banana" | "agnes" | "nvidia_flux" | null;
   available: boolean;
+  available_image?: boolean;
   source: string;
 };
 
@@ -62,7 +63,8 @@ async function request<T>(path: string, init?: RequestInit & { operator?: boolea
     // Always send the operator's model preference — with no keys, the server
     // honors it via env keys (gpt-oss / Agnes defaults) when configured.
     headers["X-Text-Model"] = text ?? state.textModel;
-    headers["X-Image-Model"] = image ?? state.imageModel;
+    const forcedImage = (rest.headers as Record<string, string> | undefined)?.["X-Image-Model"];
+    headers["X-Image-Model"] = forcedImage || image || state.imageModel;
   }
   const url = `${GATEWAY_URL}${path}`;
   let response: Response | undefined;
@@ -184,6 +186,8 @@ export function generateCreative(body: CreativeRequest): Promise<CreativeResult>
     method: "POST",
     body: JSON.stringify(body),
     operator: true,
+    // Format Studio frames always paint with Agnes (server AGNES_API_KEY or pasted key).
+    headers: { "X-Image-Model": "agnes" },
   });
 }
 

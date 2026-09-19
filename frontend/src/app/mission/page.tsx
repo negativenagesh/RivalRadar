@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { useIngestionLive } from "@/hooks/use-ingestion-live";
 import {
   cancelIngestionRun,
+  getIntelJob,
   listConnections,
   listIngestionAccounts,
   listIngestionPosts,
@@ -25,6 +26,11 @@ import {
 import { filterFindingsPosts } from "@/lib/findings-filter";
 import { intelCacheKey, intelFactsSig, writeIntelCache } from "@/lib/intel-cache";
 import { buildIntelFacts } from "@/lib/intel-facts";
+import { pushNotification } from "@/lib/notifications";
+import {
+  postsForActiveScoutSession,
+  scoutBaselineFromPosts,
+} from "@/lib/scout-session-posts";
 import { useOperatorModels } from "@/components/operator-models-provider";
 import {
   DEFAULT_MISSION,
@@ -64,6 +70,8 @@ export default function MissionPage() {
   const [accounts, setAccounts] = useState<CompetitorAccount[]>([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
   const [gateIssue, setGateIssue] = useState<FieldIssue | null>(null);
+  /** Post ids present when Start Scout was clicked — hidden from In-window until next session. */
+  const [scoutBaselineIds, setScoutBaselineIds] = useState<Set<string> | null>(null);
 
   const runId = mission.lastRunId ?? null;
   const live = useIngestionLive(runId);
@@ -128,9 +136,10 @@ export default function MissionPage() {
   useEffect(() => {
     const status = live.run?.status;
     if (status !== "running" && status !== "pending") return;
+    // Poll faster while live so In-window fills as posts are upserted.
     const tick = window.setInterval(() => {
       void refreshFindings();
-    }, 4000);
+    }, 2000);
     return () => window.clearInterval(tick);
   }, [live.run?.status, refreshFindings]);
 
@@ -166,6 +175,11 @@ export default function MissionPage() {
 
   const visiblePosts = useMemo(() => visibleRows.map((row) => row.post), [visibleRows]);
 
+  const scoutSessionPosts = useMemo(
+    () => postsForActiveScoutSession(posts, scoutBaselineIds),
+    [posts, scoutBaselineIds],
+  );
+
   const facts = useMemo(
     () =>
       buildIntelFacts(visibleRows, {
@@ -177,7 +191,29 @@ export default function MissionPage() {
     [visibleRows, mission.brand, mission.dateFrom, mission.dateTo, mission.lookbackDays],
   );
 
-  // Kick Intel Brief as soon as Scout finishes — don't wait for War Room mount.
+  // Notify once when Scout finishes (in-app + optional email). Never on every refresh.
+  useEffect(() => {
+    if (live.run?.status !== "done") return;
+    if (visiblePosts.length < 1) return;
+    const brandName = mission.brand.displayName || "the brand";
+    const runId = live.run.id || "done";
+    const key = `rivalradar.scout_notified.${runId}`;
+    try {
+      if (window.sessionStorage.getItem(key)) return;
+      window.sessionStorage.setItem(key, "1");
+    } catch {
+      // private mode — still notify once per mount via ref below
+    }
+    pushNotification({
+      kind: "scout_done",
+      title: `Scout finished — ${brandName}`,
+      body: `${visiblePosts.length} posts in the window. Open Findings, then War Room.`,
+      href: "/mission",
+      email: true,
+    });
+  }, [live.run?.status, live.run?.id, visiblePosts.length, mission.brand.displayName]);
+
+  // Kick Intel Brief once when Scout first finishes — never on every refresh.
   useEffect(() => {
     if (live.run?.status !== "done") return;
     if (!models.readyText) return;
@@ -185,20 +221,30 @@ export default function MissionPage() {
     const brandName = mission.brand.displayName || "the brand";
     const cacheKey = intelCacheKey(intelFactsSig(facts), brandName);
     let cancelled = false;
-    void startIntelJob({
-      cache_key: cacheKey,
-      facts,
-      brand_name: brandName,
-      voice_notes: mission.brand.voiceNotes,
-      forbidden_claims: mission.brand.forbiddenClaims,
-    })
-      .then((job) => {
+    void (async () => {
+      try {
+        const existing = await getIntelJob(cacheKey);
+        if (cancelled) return;
+        if (existing.status === "done" && existing.report) {
+          writeIntelCache(cacheKey, existing.report);
+          return;
+        }
+        if (existing.status === "running") return;
+        const job = await startIntelJob({
+          cache_key: cacheKey,
+          facts,
+          brand_name: brandName,
+          voice_notes: mission.brand.voiceNotes,
+          forbidden_claims: mission.brand.forbiddenClaims,
+        });
         if (cancelled) return;
         if (job.status === "done" && job.report) {
           writeIntelCache(cacheKey, job.report);
         }
-      })
-      .catch(() => undefined);
+      } catch {
+        /* ignore — War Room Regenerate can retry */
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -307,6 +353,16 @@ export default function MissionPage() {
         }
       }
 
+      // Hide prior In-window tiles immediately; new ids stream in as this run extracts.
+      let existing = posts;
+      try {
+        existing = await listIngestionPosts();
+      } catch {
+        // Fall back to in-memory posts if the list call races.
+      }
+      setScoutBaselineIds(scoutBaselineFromPosts(existing));
+      setPosts([]);
+
       const body = missionToIngestionPayload(mission);
       const created = await startIngestionRun(body);
       live.primeRun(created.run_id, created.status === "running" ? "running" : "pending");
@@ -386,7 +442,7 @@ export default function MissionPage() {
               latestScreenshot={live.latestScreenshot}
               run={live.run}
               error={scoutError}
-              posts={posts}
+              posts={scoutSessionPosts}
               accounts={accounts}
             />
           </div>

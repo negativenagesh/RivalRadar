@@ -240,6 +240,7 @@ def server_model_defaults() -> dict[str, object]:
         "text_model": text_id,
         "image_model": image_id,
         "available": text_id is not None,
+        "available_image": image_id is not None,
         "source": "server-env",
     }
 

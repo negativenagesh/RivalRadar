@@ -2,7 +2,7 @@ from collections.abc import AsyncGenerator
 
 import pytest_asyncio
 from app.main import app
-from app.routes import operator_provider
+from app.routes import creative_operator_provider, operator_provider
 from httpx import ASGITransport, AsyncClient
 
 from llm_provider import get_llm_provider
@@ -16,6 +16,7 @@ async def client() -> AsyncGenerator[AsyncClient]:
     )
     app.dependency_overrides[get_llm_provider] = lambda: fake
     app.dependency_overrides[operator_provider] = lambda: fake
+    app.dependency_overrides[creative_operator_provider] = lambda: fake
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
