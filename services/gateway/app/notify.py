@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import logging
 import os
 from pathlib import Path
@@ -16,8 +17,9 @@ class NotifyEmailRequest(BaseModel):
     to: str = Field(min_length=3, max_length=254)
     kind: str = Field(min_length=2, max_length=40)
     title: str = Field(min_length=1, max_length=200)
-    body: str = Field(min_length=1, max_length=2000)
+    body: str = Field(min_length=1, max_length=12000)
     href: str | None = Field(default=None, max_length=500)
+    html: str | None = Field(default=None, max_length=40000)
 
 
 def _sink_path() -> Path:
@@ -58,6 +60,20 @@ def recent_sunk_emails(*, limit: int = 20) -> list[dict[str, str]]:
     return out
 
 
+def _render_html(req: NotifyEmailRequest) -> str:
+    if req.html and req.html.strip():
+        inner = req.html.strip()
+    else:
+        escaped = html_lib.escape(req.body).replace("\n", "<br>\n")
+        inner = f'<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;font-size:14px;line-height:1.5;color:#111;">{escaped}</div>'
+    link = (
+        f'<p style="margin-top:16px;"><a href="{html_lib.escape(req.href)}">Open in RivalRadar</a></p>'
+        if req.href
+        else ""
+    )
+    return inner + link
+
+
 async def send_notify_email(req: NotifyEmailRequest) -> dict[str, str]:
     """Send via Resend when RESEND_API_KEY is set; otherwise append to a local sink file.
 
@@ -65,10 +81,7 @@ async def send_notify_email(req: NotifyEmailRequest) -> dict[str, str]:
     record for local/dev so the full notify path can be verified end-to-end.
     """
     subject = f"[RivalRadar] {req.title}"
-    html = (
-        f"<p>{req.body}</p>"
-        + (f'<p><a href="{req.href}">Open in RivalRadar</a></p>' if req.href else "")
-    )
+    html = _render_html(req)
     api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
     from_addr = (os.environ.get("NOTIFY_EMAIL_FROM") or "RivalRadar <onboarding@resend.dev>").strip()
 
@@ -86,6 +99,7 @@ async def send_notify_email(req: NotifyEmailRequest) -> dict[str, str]:
                         "to": [str(req.to)],
                         "subject": subject,
                         "html": html,
+                        "text": req.body,
                     },
                 )
             if response.status_code >= 400:
@@ -98,7 +112,7 @@ async def send_notify_email(req: NotifyEmailRequest) -> dict[str, str]:
             return {"status": "error", "detail": str(exc)[:200], "channel": "resend"}
 
     # Dev / no-key sink — still proves the notify path end-to-end.
-    line = f"{req.kind}|{req.to}|{subject}|{req.body}|{req.href or ''}\n"
+    line = f"{req.kind}|{req.to}|{subject}|{req.body.replace(chr(10), ' / ')}|{req.href or ''}\n"
     path = _sink_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

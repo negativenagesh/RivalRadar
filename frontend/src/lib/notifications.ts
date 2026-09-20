@@ -88,6 +88,7 @@ type PendingEmailPayload = {
   title: string;
   body: string;
   href?: string;
+  html?: string;
 };
 
 function gatewayBase(): string {
@@ -104,6 +105,7 @@ function postNotifyEmail(to: string, payload: PendingEmailPayload): void {
       kind: payload.kind,
       title: payload.title,
       body: payload.body,
+      html: payload.html,
       href: payload.href ? `${window.location.origin}${payload.href}` : undefined,
     }),
   }).catch((err: unknown) => {
@@ -159,6 +161,10 @@ export type PushNotificationInput = {
   title: string;
   body: string;
   href?: string;
+  /** Rich plain-text for email (defaults to body). */
+  emailBody?: string;
+  /** Optional HTML for Resend (gateway prefers this over plain body). */
+  emailHtml?: string;
   /** When true (default for scout_done), also POST /notify/email if an address is saved */
   email?: boolean;
 };
@@ -181,8 +187,9 @@ export function pushNotification(input: PushNotificationInput): AppNotification 
     const payload: PendingEmailPayload = {
       kind: input.kind,
       title: input.title,
-      body: input.body,
+      body: input.emailBody || input.body,
       href: input.href,
+      html: input.emailHtml,
     };
     const to = getNotifyEmail();
     if (to) {

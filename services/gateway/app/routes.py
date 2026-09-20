@@ -1294,12 +1294,15 @@ async def notify_email(body: dict[str, object]) -> dict[str, str]:
     to = str(body.get("to") or "").strip()
     if "@" not in to:
         raise HTTPException(status_code=400, detail="Valid to email required")
+    html_raw = body.get("html")
+    html = str(html_raw).strip()[:40000] if html_raw else None
     req = NotifyEmailRequest(
         to=to,
         kind=str(body.get("kind") or "generic")[:40],
         title=str(body.get("title") or "RivalRadar update")[:200],
-        body=str(body.get("body") or "")[:2000],
+        body=str(body.get("body") or "")[:12000],
         href=(str(body.get("href")).strip()[:500] if body.get("href") else None),
+        html=html or None,
     )
     if not req.body.strip():
         raise HTTPException(status_code=400, detail="body required")

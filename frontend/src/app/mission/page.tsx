@@ -27,6 +27,7 @@ import { filterFindingsPosts } from "@/lib/findings-filter";
 import { intelCacheKey, intelFactsSig, writeIntelCache } from "@/lib/intel-cache";
 import { buildIntelFacts } from "@/lib/intel-facts";
 import { pushNotification } from "@/lib/notifications";
+import { formatScoutDoneEmail } from "@/lib/scout-done-email";
 import {
   postsForActiveScoutSession,
   scoutBaselineFromPosts,
@@ -204,14 +205,17 @@ export default function MissionPage() {
     } catch {
       // private mode — still notify once per mount via ref below
     }
+    const emailCopy = formatScoutDoneEmail(facts);
     pushNotification({
       kind: "scout_done",
       title: `Scout finished — ${brandName}`,
-      body: `${visiblePosts.length} posts in the window. Open Findings, then War Room.`,
+      body: emailCopy.shortBody,
+      emailBody: emailCopy.emailBody,
+      emailHtml: emailCopy.emailHtml,
       href: "/mission",
       email: true,
     });
-  }, [live.run?.status, live.run?.id, visiblePosts.length, mission.brand.displayName]);
+  }, [live.run?.status, live.run?.id, visiblePosts.length, mission.brand.displayName, facts]);
 
   // Kick Intel Brief once when Scout first finishes — never on every refresh.
   useEffect(() => {
