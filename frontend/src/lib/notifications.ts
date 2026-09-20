@@ -20,6 +20,8 @@ export type AppNotification = {
 
 const STORAGE_KEY = "rivalradar.notifications";
 const EMAIL_KEY = "rivalradar.notify.email";
+/** Scout-done payload waiting for an email address to be saved in the bell. */
+const PENDING_EMAIL_KEY = "rivalradar.notify.pending";
 const EVENT = "rivalradar:notifications";
 
 function emit(): void {
@@ -81,6 +83,57 @@ export function getNotifyEmail(): string {
   }
 }
 
+type PendingEmailPayload = {
+  kind: NotifyKind;
+  title: string;
+  body: string;
+  href?: string;
+};
+
+function gatewayBase(): string {
+  return process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
+}
+
+function postNotifyEmail(to: string, payload: PendingEmailPayload): void {
+  if (typeof window === "undefined") return;
+  void fetch(`${gatewayBase()}/notify/email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      to,
+      kind: payload.kind,
+      title: payload.title,
+      body: payload.body,
+      href: payload.href ? `${window.location.origin}${payload.href}` : undefined,
+    }),
+  }).catch((err: unknown) => {
+    console.warn("[rivalradar] notify email POST failed", err);
+  });
+}
+
+function readPending(): PendingEmailPayload | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PENDING_EMAIL_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingEmailPayload;
+    if (!parsed?.kind || !parsed?.title || !parsed?.body) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePending(payload: PendingEmailPayload | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (payload) window.localStorage.setItem(PENDING_EMAIL_KEY, JSON.stringify(payload));
+    else window.localStorage.removeItem(PENDING_EMAIL_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function setNotifyEmail(email: string): void {
   if (typeof window === "undefined") return;
   try {
@@ -89,6 +142,14 @@ export function setNotifyEmail(email: string): void {
     else window.localStorage.removeItem(EMAIL_KEY);
   } catch {
     // ignore
+  }
+  const to = email.trim();
+  if (to.includes("@")) {
+    const pending = readPending();
+    if (pending) {
+      postNotifyEmail(to, pending);
+      writePending(null);
+    }
   }
   emit();
 }
@@ -116,20 +177,21 @@ export function pushNotification(input: PushNotificationInput): AppNotification 
 
   const shouldEmail =
     input.email === true || (input.email !== false && input.kind === "scout_done");
-  const to = getNotifyEmail();
-  if (shouldEmail && to && typeof window !== "undefined") {
-    const gateway = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
-    void fetch(`${gateway}/notify/email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        to,
-        kind: input.kind,
-        title: input.title,
-        body: input.body,
-        href: input.href ? `${window.location.origin}${input.href}` : undefined,
-      }),
-    }).catch(() => undefined);
+  if (shouldEmail && typeof window !== "undefined") {
+    const payload: PendingEmailPayload = {
+      kind: input.kind,
+      title: input.title,
+      body: input.body,
+      href: input.href,
+    };
+    const to = getNotifyEmail();
+    if (to) {
+      postNotifyEmail(to, payload);
+      writePending(null);
+    } else {
+      // Scout finished before the marketer saved an address — flush on setNotifyEmail.
+      writePending(payload);
+    }
   }
   return row;
 }

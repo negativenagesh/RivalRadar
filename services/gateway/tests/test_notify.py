@@ -1,4 +1,4 @@
-from app.notify import NotifyEmailRequest, send_notify_email
+from app.notify import NotifyEmailRequest, recent_sunk_emails, send_notify_email
 
 
 async def test_notify_email_sinks_without_resend(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
@@ -15,8 +15,13 @@ async def test_notify_email_sinks_without_resend(tmp_path, monkeypatch):  # type
         )
     )
     assert result["status"] == "sunk"
+    assert result["channel"] == "sink"
+    assert "No RESEND_API_KEY" in result["detail"]
     assert sink.exists()
     text = sink.read_text(encoding="utf-8")
     assert "scout_done" in text
     assert "marketer@example.com" in text
     assert "Scout finished" in text
+    recent = recent_sunk_emails(limit=5)
+    assert recent[0]["to"] == "marketer@example.com"
+    assert recent[0]["kind"] == "scout_done"
