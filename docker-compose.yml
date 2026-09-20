@@ -24,7 +24,7 @@ x-env: &common-env
   MISSION_IMAGE_MODEL: ${MISSION_IMAGE_MODEL:-agnes}
   RESEND_API_KEY: ${RESEND_API_KEY:-}
   NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-RivalRadar <onboarding@resend.dev>}
-  NOTIFY_EMAIL_SINK: ${NOTIFY_EMAIL_SINK:-/tmp/rivalradar-notify-emails.log}
+  NOTIFY_EMAIL_SINK: ${NOTIFY_EMAIL_SINK:-/data/notify/notify-emails.log}
 
 services:
   postgres:
@@ -176,6 +176,8 @@ services:
         condition: service_healthy
     volumes:
       - object_store:/data/objects
+      # Host-visible notify sink when RESEND_API_KEY is unset (see NOTIFY_EMAIL_SINK).
+      - ./data:/data/notify
 
   frontend:
     build:

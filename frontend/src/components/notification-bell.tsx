@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { Bell } from "lucide-react";
 
@@ -20,12 +20,34 @@ function snapshot(): string {
   return JSON.stringify(loadNotifications());
 }
 
+type NotifyStatus = {
+  channel: string;
+  resend_configured: boolean;
+  detail: string;
+};
+
 export function NotificationBell() {
   const raw = useSyncExternalStore(subscribeNotifications, snapshot, () => "[]");
   const rows = JSON.parse(raw) as AppNotification[];
   const unread = unreadCount(rows);
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState(() => getNotifyEmail());
+  const [status, setStatus] = useState<NotifyStatus | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const gateway = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000";
+    let cancelled = false;
+    void fetch(`${gateway}/notify/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: NotifyStatus | null) => {
+        if (!cancelled && data) setStatus(data);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   return (
     <div className="relative">
@@ -61,7 +83,7 @@ export function NotificationBell() {
               Mark all read
             </button>
           </div>
-          <label className="mb-3 block space-y-1">
+          <label className="mb-1 block space-y-1">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Email for Scout done (optional)
             </span>
@@ -74,6 +96,13 @@ export function NotificationBell() {
               className="w-full rounded-md border border-border/60 bg-background px-2 py-1.5 text-sm"
             />
           </label>
+          {status && (
+            <p className="mb-3 text-[10px] leading-snug text-muted-foreground">
+              {status.resend_configured
+                ? "Outbound mail enabled (Resend)."
+                : "Local sink only — set RESEND_API_KEY on the gateway for real inbox delivery."}
+            </p>
+          )}
           <ul className="max-h-72 space-y-2 overflow-y-auto">
             {rows.length === 0 && (
               <li className="text-sm text-muted-foreground">No notifications yet.</li>

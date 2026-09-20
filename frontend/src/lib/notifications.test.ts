@@ -49,4 +49,22 @@ describe("notifications", () => {
     expect(body.to).toBe("growth@pixis.example");
     expect(body.kind).toBe("scout_done");
   });
+
+  it("queues scout_done email until an address is saved", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+    pushNotification({
+      kind: "scout_done",
+      title: "Scout finished — Pixis",
+      body: "Ready",
+      href: "/mission",
+      email: true,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    setNotifyEmail("later@pixis.example");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.to).toBe("later@pixis.example");
+    expect(body.kind).toBe("scout_done");
+  });
 });

@@ -25,8 +25,45 @@ def _sink_path() -> Path:
     return Path(raw)
 
 
+def recent_sunk_emails(*, limit: int = 20) -> list[dict[str, str]]:
+    """Parse the local sink file (no-API-key path) into recent rows."""
+    path = _sink_path()
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, str]] = []
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        parts = line.split("|", 4)
+        if len(parts) < 4:
+            continue
+        kind, to, subject, body = parts[0], parts[1], parts[2], parts[3]
+        href = parts[4] if len(parts) > 4 else ""
+        out.append(
+            {
+                "kind": kind,
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "href": href,
+                "channel": "sink",
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def send_notify_email(req: NotifyEmailRequest) -> dict[str, str]:
-    """Send via Resend when RESEND_API_KEY is set; otherwise append to a local sink file."""
+    """Send via Resend when RESEND_API_KEY is set; otherwise append to a local sink file.
+
+    Without an API key there is no outbound SMTP — the sink file is the delivery
+    record for local/dev so the full notify path can be verified end-to-end.
+    """
     subject = f"[RivalRadar] {req.title}"
     html = (
         f"<p>{req.body}</p>"
@@ -54,7 +91,8 @@ async def send_notify_email(req: NotifyEmailRequest) -> dict[str, str]:
             if response.status_code >= 400:
                 logger.warning("Resend email failed: %s %s", response.status_code, response.text[:300])
                 return {"status": "error", "detail": response.text[:200], "channel": "resend"}
-            return {"status": "sent", "channel": "resend"}
+            logger.info("notify email sent via Resend to %s", req.to)
+            return {"status": "sent", "channel": "resend", "to": str(req.to)}
         except Exception as exc:  # noqa: BLE001
             logger.warning("Resend email error: %s", exc)
             return {"status": "error", "detail": str(exc)[:200], "channel": "resend"}
@@ -69,5 +107,14 @@ async def send_notify_email(req: NotifyEmailRequest) -> dict[str, str]:
     except OSError as exc:
         logger.warning("email sink write failed: %s", exc)
         return {"status": "error", "detail": str(exc)[:200], "channel": "sink"}
-    logger.info("notify email sunk to %s for %s", path, req.to)
-    return {"status": "sunk", "channel": "sink", "path": str(path)}
+    logger.info("notify email sunk to %s for %s (no RESEND_API_KEY — not mailed)", path, req.to)
+    return {
+        "status": "sunk",
+        "channel": "sink",
+        "path": str(path),
+        "to": str(req.to),
+        "detail": (
+            "No RESEND_API_KEY — email was written to the gateway sink file, "
+            "not delivered to an inbox."
+        ),
+    }

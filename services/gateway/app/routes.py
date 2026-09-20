@@ -1257,6 +1257,35 @@ async def download_ingestion_media(media_key: str) -> StreamingResponse:
     return StreamingResponse(stream(), media_type=content_type)
 
 
+@router.get("/notify/status")
+async def notify_status() -> dict[str, object]:
+    """Whether Resend is configured, or emails only land in the local sink file."""
+    import os
+
+    from app.notify import _sink_path
+
+    has_resend = bool((os.environ.get("RESEND_API_KEY") or "").strip())
+    return {
+        "channel": "resend" if has_resend else "sink",
+        "resend_configured": has_resend,
+        "sink_path": str(_sink_path()),
+        "detail": (
+            "Outbound email via Resend."
+            if has_resend
+            else "No RESEND_API_KEY — notify emails are appended to the sink file only."
+        ),
+    }
+
+
+@router.get("/notify/email/recent")
+async def notify_email_recent(limit: int = 20) -> dict[str, object]:
+    """Recent sink-file rows (dev / no-API-key path). Empty when using Resend only."""
+    from app.notify import recent_sunk_emails
+
+    capped = max(1, min(int(limit or 20), 100))
+    return {"emails": recent_sunk_emails(limit=capped)}
+
+
 @router.post("/notify/email")
 async def notify_email(body: dict[str, object]) -> dict[str, str]:
     """Send (or sink) a transactional marketer email — Scout done, Intel ready, Studio done."""
