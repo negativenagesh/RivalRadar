@@ -13,8 +13,18 @@ def get_event_bus() -> AgentEventBus:
 
     Note: FakeRedis is per-process. Live WS on the gateway will not see events
     unless both share a real REDIS_URL (e.g. Upstash). Status polling still works.
+
+    socket_timeout=None so blocking XREAD (live feed) is not killed by the
+    client before the block window elapses.
     """
     raw = (settings.redis_url or "").strip().lower()
     if raw in {"", "memory", "memory://", "none", "off"}:
         return AgentEventBus(FakeRedis(decode_responses=True))
-    return AgentEventBus(from_url(settings.redis_url, decode_responses=True))
+    return AgentEventBus(
+        from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5.0,
+            socket_timeout=None,
+        )
+    )

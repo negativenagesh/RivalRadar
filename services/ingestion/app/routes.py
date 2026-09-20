@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 
 from agent_events import AgentEventBus
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -29,6 +30,7 @@ from app.schemas import (
 )
 from app.stage_post import StagePostError, stage_post
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -128,6 +130,8 @@ async def run_live_feed(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_text(event.model_dump_json())
     except WebSocketDisconnect:
         return
+    except Exception:  # noqa: BLE001
+        logger.exception("live feed failed for run %s", run_id)
     finally:
         if websocket.client_state != WebSocketState.DISCONNECTED:
             with contextlib.suppress(RuntimeError):
