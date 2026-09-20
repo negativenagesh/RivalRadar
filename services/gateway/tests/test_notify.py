@@ -25,3 +25,22 @@ async def test_notify_email_sinks_without_resend(tmp_path, monkeypatch):  # type
     recent = recent_sunk_emails(limit=5)
     assert recent[0]["to"] == "marketer@example.com"
     assert recent[0]["kind"] == "scout_done"
+
+
+async def test_notify_email_prefers_html(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
+    sink = tmp_path / "emails.log"
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.setenv("NOTIFY_EMAIL_SINK", str(sink))
+    result = await send_notify_email(
+        NotifyEmailRequest(
+            to="marketer@example.com",
+            kind="scout_done",
+            title="Scout finished — Pixis",
+            body="plain metrics",
+            html="<p><strong>22 posts</strong> · brand 10</p>",
+            href="http://localhost:3000/mission",
+        )
+    )
+    assert result["status"] == "sunk"
+    assert "plain metrics" in sink.read_text(encoding="utf-8")
+
