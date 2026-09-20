@@ -4,11 +4,14 @@ from collections.abc import AsyncIterator
 from typing import cast
 
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from agent_events.schema import AgentEvent
 
 _STREAM_MAXLEN = 500
 _RUN_TTL_SECONDS = 3600
+_XREAD_BLOCK_MS = 5000
 
 
 def _stream_key(run_id: str) -> str:
@@ -54,7 +57,14 @@ class AgentEventBus:
         key = _stream_key(run_id)
         last_id = "0-0"
         while True:
-            raw_entries = await self._redis.xread({key: last_id}, block=5000, count=50)
+            try:
+                raw_entries = await self._redis.xread(
+                    {key: last_id}, block=_XREAD_BLOCK_MS, count=50
+                )
+            except (TimeoutError, RedisTimeoutError, RedisConnectionError, OSError):
+                # Blocking XREAD can surface socket timeouts under load; keep
+                # the live feed alive instead of killing the WebSocket.
+                continue
             entries = cast(
                 "list[tuple[str, list[tuple[str, dict[str, str]]]]]", raw_entries
             )

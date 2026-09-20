@@ -732,6 +732,12 @@ export function LiveScout({
           Scout stopped. Continue to Findings to review ingested posts, or Start Scout again.
         </p>
       )}
+      {run?.status === "done" && !starting && !killing && (
+        <p className="rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-foreground">
+          Scout finished. Continue to Findings — the event log may stop early if the live feed
+          dropped; status above is authoritative.
+        </p>
+      )}
       {run?.status === "error" && run.error_detail && (
         <p className="rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           Scout failed: {run.error_detail}

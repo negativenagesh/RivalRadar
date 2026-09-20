@@ -606,12 +606,35 @@ class SocialFeedConnector:
                 handle=handle, post_urls=post_urls
             )
         else:
+            visit_urls = post_urls
+            # Instagram grid often returns 40 URLs; visiting all stalls the live
+            # feed for minutes under the platform budget. Cap and report progress.
+            if platform == "instagram" and len(post_urls) > 12:
+                visit_urls = post_urls[:12]
+                await self._emit(
+                    "action",
+                    {
+                        "detail": (
+                            f"instagram_cap visiting={len(visit_urls)} "
+                            f"of {len(post_urls)} (platform budget)"
+                        )
+                    },
+                )
             kept = 0
             skipped_outside = 0
             consecutive_older = 0
-            for post_url in post_urls:
+            for i, post_url in enumerate(visit_urls):
                 if kept >= _MAX_POSTS:
                     break
+                await self._emit(
+                    "action",
+                    {
+                        "detail": (
+                            f"ingest_post_progress platform={platform} "
+                            f"{i + 1}/{len(visit_urls)} kept={kept}"
+                        )
+                    },
+                )
                 try:
                     outcome = await self._ingest_post_bounded(
                         session,

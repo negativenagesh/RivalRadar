@@ -15,6 +15,8 @@ export type ScoutFrame = {
   handle?: string;
 };
 
+const TERMINAL: IngestionRunStatus[] = ["done", "error", "cancelled"];
+
 function slimEvent(event: AgentEvent): AgentEvent {
   if (event.step_type !== "screenshot") return event;
   const rest = { ...event.payload };
@@ -25,6 +27,26 @@ function slimEvent(event: AgentEvent): AgentEvent {
   };
 }
 
+function hasTerminalStatusEvent(events: AgentEvent[]): boolean {
+  return events.some(
+    (e) =>
+      e.step_type === "status" &&
+      TERMINAL.includes(String(e.payload.status ?? "") as IngestionRunStatus),
+  );
+}
+
+function syntheticStatusEvent(runId: string, status: IngestionRunStatus, detail: string): AgentEvent {
+  return {
+    run_id: runId,
+    agent_id: "system",
+    service: "system",
+    step_type: "status",
+    sequence: Date.now(),
+    timestamp: new Date().toISOString(),
+    payload: { status, detail },
+  };
+}
+
 export function useIngestionLive(runId: string | null) {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [frames, setFrames] = useState<ScoutFrame[]>([]);
@@ -32,12 +54,14 @@ export function useIngestionLive(runId: string | null) {
   const [run, setRun] = useState<IngestionRun | null>(null);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const runStatusRef = useRef<IngestionRunStatus | null>(null);
 
   const refreshRun = useCallback(async () => {
     if (!runId) return null;
     try {
       const latest = await getIngestionRun(runId);
       setRun(latest);
+      runStatusRef.current = latest.status;
       return latest;
     } catch {
       return null;
@@ -64,6 +88,7 @@ export function useIngestionLive(runId: string | null) {
           error_detail: detail ?? base.error_detail,
         };
       });
+      runStatusRef.current = status;
     },
     [runId],
   );
@@ -73,6 +98,7 @@ export function useIngestionLive(runId: string | null) {
     setFrames([]);
     setLatestScreenshot(null);
     setConnected(false);
+    runStatusRef.current = status;
     setRun({
       id,
       connector_type: "auto",
@@ -85,12 +111,28 @@ export function useIngestionLive(runId: string | null) {
     });
   }, []);
 
+  const appendTerminalIfNeeded = useCallback((latest: IngestionRun) => {
+    if (!TERMINAL.includes(latest.status)) return;
+    setEvents((prev) => {
+      if (hasTerminalStatusEvent(prev)) return prev;
+      return [
+        ...prev,
+        syntheticStatusEvent(
+          latest.id,
+          latest.status,
+          latest.error_detail ||
+            "run finished (status polled — live event feed had dropped)",
+        ),
+      ];
+    });
+  }, []);
+
   useEffect(() => {
     if (!runId) return;
 
     let cancelled = false;
-    const ws = new WebSocket(ingestionLiveWsUrl(runId));
-    wsRef.current = ws;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
 
     void Promise.resolve().then(() => {
       if (cancelled) return;
@@ -114,54 +156,78 @@ export function useIngestionLive(runId: string | null) {
       );
     });
 
-    ws.onopen = () => {
-      if (!cancelled) setConnected(true);
-    };
-    ws.onclose = () => {
-      if (!cancelled) setConnected(false);
-    };
-    ws.onerror = () => {
-      if (!cancelled) setConnected(false);
-    };
-    ws.onmessage = (msg) => {
+    const connect = () => {
       if (cancelled) return;
-      try {
-        const event = JSON.parse(msg.data as string) as AgentEvent;
-        if (event.step_type === "screenshot" && typeof event.payload.jpeg_b64 === "string") {
-          const b64 = event.payload.jpeg_b64;
-          setLatestScreenshot(b64);
-          setFrames((prev) => [
-            ...prev,
-            {
-              id: `${event.sequence}-${prev.length}`,
-              b64,
-              platform: String(event.payload.platform ?? "scout"),
-              label: String(event.payload.label ?? event.payload.url ?? `frame ${prev.length + 1}`),
-              url: String(event.payload.url ?? ""),
-              handle: typeof event.payload.handle === "string" ? event.payload.handle : undefined,
-              mime: typeof event.payload.mime === "string" ? event.payload.mime : "jpeg",
-            },
-          ]);
+      const ws = new WebSocket(ingestionLiveWsUrl(runId));
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (cancelled) return;
+        attempt = 0;
+        setConnected(true);
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        setConnected(false);
+        const st = runStatusRef.current;
+        if (st === "running" || st === "pending") {
+          attempt += 1;
+          const delay = Math.min(8_000, 500 * 2 ** Math.min(attempt, 4));
+          reconnectTimer = setTimeout(connect, delay);
         }
-        setEvents((prev) => [...prev, slimEvent(event)]);
-        if (event.step_type === "status") {
-          void refreshRun();
+      };
+      ws.onerror = () => {
+        if (!cancelled) setConnected(false);
+      };
+      ws.onmessage = (msg) => {
+        if (cancelled) return;
+        try {
+          const event = JSON.parse(msg.data as string) as AgentEvent;
+          if (event.step_type === "screenshot" && typeof event.payload.jpeg_b64 === "string") {
+            const b64 = event.payload.jpeg_b64;
+            setLatestScreenshot(b64);
+            setFrames((prev) => [
+              ...prev,
+              {
+                id: `${event.sequence}-${prev.length}`,
+                b64,
+                platform: String(event.payload.platform ?? "scout"),
+                label: String(
+                  event.payload.label ?? event.payload.url ?? `frame ${prev.length + 1}`,
+                ),
+                url: String(event.payload.url ?? ""),
+                handle: typeof event.payload.handle === "string" ? event.payload.handle : undefined,
+                mime: typeof event.payload.mime === "string" ? event.payload.mime : "jpeg",
+              },
+            ]);
+          }
+          setEvents((prev) => [...prev, slimEvent(event)]);
+          if (event.step_type === "status") {
+            const st = String(event.payload.status ?? "") as IngestionRunStatus;
+            if (TERMINAL.includes(st) || st === "running" || st === "pending") {
+              runStatusRef.current = st;
+            }
+            void refreshRun();
+          }
+        } catch {
+          /* ignore malformed */
         }
-      } catch {
-        /* ignore malformed */
-      }
+      };
     };
+
+    connect();
 
     const poll = setInterval(() => {
       void refreshRun().then((latest) => {
         if (!latest || cancelled) return;
-        if (latest.status === "done" || latest.status === "error" || latest.status === "cancelled") {
+        if (TERMINAL.includes(latest.status)) {
+          appendTerminalIfNeeded(latest);
           clearInterval(poll);
+          wsRef.current?.close();
         }
       });
-    }, 4000);
+    }, 2500);
 
-    // Defer so we don't setState synchronously inside the effect body (eslint).
     void Promise.resolve().then(() => {
       if (!cancelled) void refreshRun();
     });
@@ -169,10 +235,11 @@ export function useIngestionLive(runId: string | null) {
     return () => {
       cancelled = true;
       clearInterval(poll);
-      ws.close();
-      if (wsRef.current === ws) wsRef.current = null;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+      wsRef.current = null;
     };
-  }, [runId, refreshRun]);
+  }, [runId, refreshRun, appendTerminalIfNeeded]);
 
   const done =
     run?.status === "done" || run?.status === "error" || run?.status === "cancelled";

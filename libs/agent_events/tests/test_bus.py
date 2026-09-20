@@ -41,3 +41,24 @@ async def test_subscribe_stops_on_cancelled_status(bus: AgentEventBus) -> None:
     events = [event async for event in bus.subscribe(run_id)]
 
     assert events[-1].payload == {"status": "cancelled", "detail": "cancelled by operator"}
+
+
+async def test_subscribe_survives_redis_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Blocking XREAD timeouts must not kill the live WebSocket consumer."""
+    bus = AgentEventBus(FakeRedis(decode_responses=True))
+    run_id = "run-timeout"
+    calls = {"n": 0}
+    real_xread = bus._redis.xread
+
+    async def flaky_xread(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TimeoutError("Timeout reading from redis:6379")
+        return await real_xread(*args, **kwargs)
+
+    monkeypatch.setattr(bus._redis, "xread", flaky_xread)
+    await bus.close_run(run_id, status="done", detail="ok")
+
+    events = [event async for event in bus.subscribe(run_id)]
+    assert events[-1].payload["status"] == "done"
+    assert calls["n"] >= 2
