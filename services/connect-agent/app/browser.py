@@ -69,6 +69,29 @@ def _safe_platform_dir(platform: str) -> Path:
     return path
 
 
+# Chromium writes these under user-data-dir. After a container restart the old
+# lock still points at a dead hostname/pid and launch_persistent_context fails.
+_PROFILE_LOCK_NAMES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+
+def release_profile_locks(profile_dir: Path) -> list[str]:
+    """Remove stale Chromium singleton locks so reconnect can reopen the profile.
+
+    Does not delete cookies or the Default/ profile — only process locks.
+    Returns the names that were removed (for tests / logs).
+    """
+    removed: list[str] = []
+    for name in _PROFILE_LOCK_NAMES:
+        path = profile_dir / name
+        try:
+            if path.exists() or path.is_symlink():
+                path.unlink(missing_ok=True)
+                removed.append(name)
+        except OSError as exc:
+            logger.warning("could not remove Chromium lock %s: %s", path, exc)
+    return removed
+
+
 def _sanitize_seed_cookies(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     if not raw:
         return []
@@ -117,9 +140,12 @@ class SessionManager:
         storage_state: dict[str, Any] | None = None,
     ) -> LiveSession:
         async with self._lock:
-            existing = self._sessions.get(session_id)
-            if existing is not None:
-                await self._close_unlocked(existing)
+            # Same profile dir cannot host two Chromiums — close any live
+            # session for this platform (reconnect often uses a new session_id).
+            for sid, existing in list(self._sessions.items()):
+                if existing.platform.lower() == platform.lower() or sid == session_id:
+                    self._sessions.pop(sid, None)
+                    await self._close_unlocked(existing)
             live = LiveSession(session_id=session_id, platform=platform, login_url=login_url)
             self._sessions[session_id] = live
 
@@ -127,15 +153,14 @@ class SessionManager:
         try:
             playwright = await async_playwright().start()
             profile_dir = _safe_platform_dir(platform)
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                headless=False,
-                args=_chromium_args(),
-                viewport={"width": 1280, "height": 900},
-                user_agent=CONNECT_UA,
-                locale="en-US",
-                timezone_id="America/Los_Angeles",
-            )
+            cleared = release_profile_locks(profile_dir)
+            if cleared:
+                logger.info(
+                    "cleared stale Chromium locks for %s: %s",
+                    platform,
+                    ", ".join(cleared),
+                )
+            context = await self._launch_persistent(playwright, profile_dir)
             live.persistent = True
             live.playwright = playwright
             live.browser = context.browser
@@ -183,6 +208,33 @@ class SessionManager:
             await self.close(session_id)
             raise
         return live
+
+    async def _launch_persistent(
+        self, playwright: Playwright, profile_dir: Path
+    ) -> BrowserContext:
+        """Launch headed Chromium on the platform profile; retry once after clearing locks."""
+        launch_kwargs: dict[str, Any] = {
+            "user_data_dir": str(profile_dir),
+            "headless": False,
+            "args": _chromium_args(),
+            "viewport": {"width": 1280, "height": 900},
+            "user_agent": CONNECT_UA,
+            "locale": "en-US",
+            "timezone_id": "America/Los_Angeles",
+        }
+        try:
+            return await playwright.chromium.launch_persistent_context(**launch_kwargs)
+        except Exception as first:  # noqa: BLE001
+            msg = str(first).lower()
+            if "profile appears to be in use" not in msg and "singleton" not in msg:
+                raise
+            logger.warning(
+                "Chromium profile lock race on %s — clearing locks and retrying once",
+                profile_dir,
+            )
+            release_profile_locks(profile_dir)
+            await asyncio.sleep(0.4)
+            return await playwright.chromium.launch_persistent_context(**launch_kwargs)
 
     async def get(self, session_id: str) -> LiveSession | None:
         live = self._sessions.get(session_id)
